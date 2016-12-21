@@ -325,33 +325,39 @@ Logical switch commands:\n\
   ls-list                   print the names of all logical switches\n\
 \n\
 Logical port-chain commands:\n\
-  lsp-chain-add LSWITCH [LSP-CHAIN]     create a logical port-chain named LSP-CHAIN\n\
-  lsp-chain-del LSP-CHAIN               delete LSP-CHAIN but not FLOW-CLASSIFIER\n \
-  lsp-chain-list LSWITCH                print the names of all logical port-chains on LSWITCH\n\
+  lsp-chain-add SWITCH [LSP-CHAIN]         create a logical port-chain [named LSP-CHAIN]\n\
+  lsp-chain-del LSP-CHAIN                  delete LSP-CHAIN, but not FLOW-CLASSIFIER\n\
+  lsp-chain-list [SWITCH]                  print the names of all logical port-chains [on SWITCH]\n\
+  lsp-chain-show SWITCH [LSP-CHAIN]        print details on port-chains on SWITCH\n\
+  lsp-chain-get-flow-classifier LSP-CHAIN  print classifiers associated with LSP-CHAIN\n\
+  lsp-chain-set-flow-classifier LSP-CHAIN CLASSIFIER\n\
+                                           associate classifier CLASSIFIER with LSP-CHAIN\n\
+  lsp-chain-unset-flow-classifier LSP-CHAIN CLASSIFIER\n\
+                                           de-associate classifier CLASSIFIER with LSP-CHAIN\n\
 \n\
 Logical port-pair-groups commands:\n\
-  lsp-pair-group-add LSP-CHAIN LSP-PAIR-GROUP-NAME\n\
-                           create a logical port-pair-group \n\
+  lsp-pair-group-add LSP-CHAIN LSP-PAIR-GROUP-NAME OFFSET\n\
+                           create a logical port-pair-group. Optionally, indicate the order it should be in chain.\n\
   lsp-pair-group-del LSP-PAIR-GROUP-NAME    delete a port-pair-group, does not delete port-pairs\n\
-                                      or flow-classifier\n\
+                                            or flow-classifier\n\
   lsp-pair-group-list LSP-CHAIN   print the names of all logical port-pair-groups\n\
   lsp-pair-group-add-port-pair LSP-PAIR-GROUP LSP-PAIR add a port pair to a port-group\n\
   lsp-pair-group-del-port-pair LSP-PAIR-GROUP LSP-PAIR del a port pair from a port-group\n\
 \n\
 Logical port-pair commands:\n\
-  lsp-pair-add LSWITCH LIN-PORT LOUT-PORT [LSP-PAIR-NAME]\n\
-                                    create a logical port-pair \n\
-  lsp-pair-del LSP-PAIR-NAME    delete a port-pair, does not delete ports\n\
+  lsp-pair-add SWITCH LIN-PORT LOUT-PORT [LSP-PAIR-NAME]\n\
+                                  create a logical port-pair \n\
+  lsp-pair-del LSP-PAIR-NAME      delete a port-pair, does not delete ports\n\
   lsp-pair-list                   print the names of all logical port-pairs\n\
 \n\
 Logical flow-classifier commands:\n\
-  lflow-classifier-add LSP-CHAIN LIN-PORT [LFLOW-CLASSIFIER-NAME]\n\
+  lflow-classifier-add LSP-CHAIN LIN-PORT [CLASSIFIER]\n\
                                                   create a logical flow-classifer \n\
-  lflow-classifier-del LFLOW-CLASSIFIER-NAME      delete a flow-classifier, does not delete ports\n\
-  lflow-classifier-list LSP-CHAIN               print the names of all logical flow-classifiers on a switch\n\
-  lflow-classifier-set-logical-destination-port LFLOW_CLASSIFIER [LDEST_PORT]\n\
+  lflow-classifier-del CLASSIFIER                 delete a flow-classifier, does not delete ports\n\
+  lflow-classifier-list LSP-CHAIN                 print the names of all logical flow-classifiers on a switch\n\
+  lflow-classifier-set-logical-destination-port CLASSIFIER [LDEST_PORT]\n\
                                                   set the name of ldest port \n\
-  lflow-classifier-get-logical-destination-port LFLOW_CLASSIFIER\n\
+  lflow-classifier-get-logical-destination-port CLASSIFIER\n\
                                                   get the name of ldest port \n\
 \n\
 ACL commands:\n\
@@ -818,25 +824,36 @@ nbctl_ls_list(struct ctl_context *ctx)
 static void
 nbctl_lsp_chain_add(struct ctl_context *ctx)
 {
-
     const struct nbrec_logical_switch *lswitch;
 
-    if (ctx->argc < 2) {
-        /* ensure all arguments are present */
-        ctl_fatal("Invalid number of arguments: (%d), to lsp-chain-add.",ctx->argc);
-    }
-
+    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true /*must_exist*/);
     const char *lsp_chain_name = ctx->argc == 3 ? ctx->argv[2] : NULL;
-    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, "--add-duplicate") != NULL;
+    if (may_exist && add_duplicate) {
+        ctl_fatal("--may-exist and --add-duplicate may not be used together");
+    }
 
     if (lsp_chain_name) {
-        const struct nbrec_logical_port_chain *lsp_chain;
-        NBREC_LOGICAL_PORT_CHAIN_FOR_EACH(lsp_chain, ctx->idl) {
-            if (strcmp(lsp_chain->name, lsp_chain_name))
-                ctl_fatal("%s: an lsp_chain with this name already exists",
-                          lsp_chain_name);
+        if (!add_duplicate) {
+            const struct nbrec_logical_port_chain *lsp_chain;
+            NBREC_LOGICAL_PORT_CHAIN_FOR_EACH(lsp_chain, ctx->idl) {
+                if (!strcmp(lsp_chain->name, lsp_chain_name)) {
+                    if (may_exist) {
+                        return;
+                    }
+                    ctl_fatal("%s: an lsp_chain with this name already exists",
+                              lsp_chain_name);
+                }
+            }
         }
+    } else if (may_exist) {
+        ctl_fatal("--may-exist requires specifying a name");
+    } else if (add_duplicate) {
+        ctl_fatal("--add-duplicate requires specifying a name");
     }
+
     struct nbrec_logical_port_chain *lsp_chain;
     lsp_chain = nbrec_logical_port_chain_insert(ctx->txn);
     if (lsp_chain_name) {
@@ -927,24 +944,30 @@ lsp_by_name_or_uuid(struct ctl_context *ctx, const char *id,
 }
 
 static void
-nbctl_lsp_chain_list(struct ctl_context *ctx)
+print_lsp_chain_entry(struct ctl_context *ctx,
+                      const struct nbrec_logical_switch *lswitch,
+                      const char *chain_name_filter,
+                      const bool show_switch_name)
 {
-    const char *id = ctx->argv[1];
-    const struct nbrec_logical_switch *lswitch;
     struct smap lsp_chains;
     size_t i;
-
-    lswitch = ls_by_name_or_uuid(ctx, id, true);
-    if (!lswitch) {
-        return;
-    }
 
     smap_init(&lsp_chains);
     for (i = 0; i < lswitch->n_port_chains; i++) {
         const struct nbrec_logical_port_chain *lsp_chain = lswitch->port_chains[i];
-        smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s)",
-                        UUID_ARGS(&lsp_chain->header_.uuid), lsp_chain->name);
+        if (chain_name_filter && strcmp(chain_name_filter, lsp_chain->name)) {
+            continue;
+        }
+        if (show_switch_name) {
+            smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s:%s)",
+                            UUID_ARGS(&lsp_chain->header_.uuid),
+                            lswitch->name, lsp_chain->name);
+        } else {
+            smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s)",
+                            UUID_ARGS(&lsp_chain->header_.uuid), lsp_chain->name);
+        }
     }
+
     const struct smap_node **nodes = smap_sort(&lsp_chains);
     for (i = 0; i < smap_count(&lsp_chains); i++) {
         const struct smap_node *node = nodes[i];
@@ -952,6 +975,28 @@ nbctl_lsp_chain_list(struct ctl_context *ctx)
     }
     smap_destroy(&lsp_chains);
     free(nodes);
+}
+
+static void
+nbctl_lsp_chain_list(struct ctl_context *ctx)
+{
+    const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
+    const char *chain_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
+    const struct nbrec_logical_switch *lswitch;
+
+    if (id) {
+        lswitch = ls_by_name_or_uuid(ctx, id, true);
+        if (lswitch) {
+            print_lsp_chain_entry(ctx, lswitch, chain_name_filter, false);
+        }
+    } else {
+        NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
+            if (lswitch->n_port_chains == 0) {
+                continue;
+            }
+            print_lsp_chain_entry(ctx, lswitch, chain_name_filter, true);
+        }
+    }
 }
 
 static void
@@ -982,6 +1027,10 @@ print_lsp_chain(const struct nbrec_logical_port_chain *lsp_chain,
     printf("finished port pairs\n");  // FIXME(ff): debug, remove this
 
     const struct nbrec_logical_flow_classifier *lflow_classifier = lsp_chain->flow_classifier;
+    if (!lflow_classifier) {
+        return;
+    }
+
     printf("Getting flow classifier: %s\n", lflow_classifier->name);  // FIXME(ff): debug, remove this
     ds_put_format(&ctx->output, "        lflow_classifier %s\n", lflow_classifier->name);
     if (lflow_classifier->logical_source_port == NULL){
@@ -1007,18 +1056,11 @@ print_lsp_chain(const struct nbrec_logical_port_chain *lsp_chain,
 static void
 nbctl_lsp_chain_show(struct ctl_context *ctx)
 {
-    const struct nbrec_logical_switch *lswitch;
     const struct nbrec_logical_port_chain *lsp_chain;
     printf("\nIn lsp-chain-show\n");  // FIXME(ff): debug, remove this
-    if (ctx->argc < 2) {
-        /* ensure all arguments are present */
-        ctl_fatal("Invalid number of arguments: (%d), to lsp-chain-show.",ctx->argc);
-    }
-    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
-    ds_put_format(&ctx->output, " lswitch "UUID_FMT" (%s)\n",
-                  UUID_ARGS(&lswitch->header_.uuid), lswitch->name);
-    if (ctx->argc == 3) {
-        lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[2]);
+
+    if (ctx->argc == 2) {
+        lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[1]);
         if (lsp_chain) {
             print_lsp_chain(lsp_chain, ctx);
         }
@@ -1062,13 +1104,27 @@ nbctl_lsp_chain_set_flow_classifier(struct ctl_context *ctx)
     //free(new_flow_classifier);
 }
 
+static void
+nbctl_lsp_chain_unset_flow_classifier(struct ctl_context *ctx)
+{
+    ctl_fatal("TODO: Implement me or remove this: %s", ctx->argv[0]);
+}
+
 static void nbctl_lsp_chain_get_flow_classifier(struct ctl_context *ctx)
 {
     const char *id = ctx->argv[1];
     const struct nbrec_logical_port_chain *lsp_chain;
 
     lsp_chain = lsp_chain_by_name_or_uuid(ctx, id);
-    ds_put_format(&ctx->output, "%s\n", lsp_chain->flow_classifier->name);
+    if (!lsp_chain) {
+        ctl_fatal("%s: an chain with this name/uuid does not exist", id);
+        return;
+    }
+    if (!lsp_chain->flow_classifier) {
+        ds_put_format(&ctx->output, "classifier for %s is not set\n", id);
+    } else {
+        ds_put_format(&ctx->output, "%s\n", lsp_chain->flow_classifier->name);
+    }
 }
 /* End of port-chain operations */
 
@@ -1094,8 +1150,15 @@ nbctl_lsp_pair_group_add(struct ctl_context *ctx)
 
     /* create the logical port-pair-group. */
     lsp_pair_group = nbrec_logical_port_pair_group_insert(ctx->txn);
-    if (ctx->argc == 3){
+    if (ctx->argc >= 3){
         nbrec_logical_port_pair_group_set_name(lsp_pair_group, ctx->argv[2]);
+    }
+
+    int64_t sortkey = (int64_t) lsp_chain->n_port_pair_groups + 1;
+    if (ctx->argc >= 4) {
+        sortkey = (int64_t) atoi(ctx->argv[3]);
+    } else {
+        nbrec_logical_port_pair_group_set_sortkey(lsp_pair_group, &sortkey, 1);
     }
 
     /* Insert the logical port into the logical switch. */
@@ -1474,8 +1537,9 @@ nbctl_lflow_classifier_set_logical_destination_port(struct ctl_context *ctx)
 
     lflow_classifier = lflow_classifier_by_name_or_uuid(ctx, id);
 
-    /* Check port exists if given*/
-    if (!strcmp(ctx->argv[2],"") ){
+    /* Check port exists if given name is not an empty string. If empty string is given, that
+       indicates we should be clearing the info. */
+    if (strcmp(ctx->argv[2],"") != 0) {
         lsp = lsp_by_name_or_uuid(ctx, ctx->argv[2], true);
         if (!lsp){
             ctl_fatal("Invalid port %s ", ctx->argv[2]);
@@ -3228,19 +3292,21 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "show", 0, 1, "[SWITCH]", NULL, nbctl_show, NULL, "", RO },
 
     /* lsp-chain commands. */
-    { "lsp-chain-add", 1, 2, "LSWITCH,[LSP-CHAIN]", NULL, nbctl_lsp_chain_add,
-      NULL, "", RW },
+    { "lsp-chain-add", 1, 2, "SWITCH [LSP-CHAIN]", NULL, nbctl_lsp_chain_add,
+      NULL, "--may-exist,--add-duplicate", RW },
     { "lsp-chain-del", 1, 1, "LSP-CHAIN", NULL, nbctl_lsp_chain_del,
       NULL, "--if-exists", RW },
-    { "lsp-chain-list", 1, 1, "LSWITCH", NULL, nbctl_lsp_chain_list, NULL, "", RO },
-    { "lsp-chain-show", 1, 2, "LSWITCH [LSP-CHAIN]", NULL, nbctl_lsp_chain_show, NULL, "", RO },
+    { "lsp-chain-list", 0, 2, "[SWITCH] [LSP-CHAIN]", NULL, nbctl_lsp_chain_list, NULL, "", RO },
+    { "lsp-chain-show", 0, 1, "[LSP-CHAIN]", NULL, nbctl_lsp_chain_show, NULL, "", RO },
     { "lsp-chain-get-flow-classifier", 1, 1, "LSP-CHAIN", NULL,
       nbctl_lsp_chain_get_flow_classifier, NULL, "", RO },
-    { "lsp-chain-set-flow-classifier", 2, 2, "LSP-CHAIN LFLOW-CLASSIFIER", NULL,
+    { "lsp-chain-set-flow-classifier", 2, 2, "LSP-CHAIN CLASSIFIER", NULL,
       nbctl_lsp_chain_set_flow_classifier, NULL, "", RW },
+    { "lsp-chain-unset-flow-classifier", 2, 2, "LSP-CHAIN CLASSIFIER", NULL,
+      nbctl_lsp_chain_unset_flow_classifier, NULL, "", RW },
 
     /* lsp-pair-group commands. */
-    { "lsp-pair-group-add", 1, 2, "LSP-CHAIN [LSP-PAIR-GROUP]",
+    { "lsp-pair-group-add", 1, 3, "LSP-CHAIN [LSP-PAIR-GROUP] [OFFSET]",
       NULL, nbctl_lsp_pair_group_add, NULL, "", RW },
     { "lsp-pair-group-del", 2, 2, "LSP-CHAIN, LSP-PAIR-GROUP", NULL, nbctl_lsp_pair_group_del,
       NULL, "", RW },
@@ -3251,22 +3317,22 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       NULL, nbctl_lsp_pair_group_del_port_pair, NULL, "", RW },
 
     /* lsp-pair commands. */
-    { "lsp-pair-add", 3, 4, "LSWITCH, LSP, LSP [LSP_PAIR_NAME]", NULL, nbctl_lsp_pair_add,
+    { "lsp-pair-add", 3, 4, "SWITCH, LSP, LSP [LSP_PAIR_NAME]", NULL, nbctl_lsp_pair_add,
       NULL, "", RW },
     { "lsp-pair-del", 1, 1, "LSP-PAIR", NULL, nbctl_lsp_pair_del,
       NULL, "", RW },
-    { "lsp-pair-list", 1, 1, "LSWITCH", NULL, nbctl_lsp_pair_list, NULL, "", RO },
+    { "lsp-pair-list", 1, 1, "SWITCH", NULL, nbctl_lsp_pair_list, NULL, "", RO },
 
     /* lflow-classifier commands. */
-    { "lflow-classifier-add", 2, 3, "LSP-CHAIN LSOURCE_PORT [LFLOW-CLASSIFIER-NAME]", NULL,
+    { "lflow-classifier-add", 2, 3, "LSP-CHAIN LSOURCE_PORT [CLASSIFIER]", NULL,
       nbctl_lflow_classifier_add, NULL, "", RW },
-    { "lflow-classifier-del", 1, 1, "LFLOW-CLASSIFIER", NULL,
+    { "lflow-classifier-del", 1, 1, "CLASSIFIER", NULL,
       nbctl_lflow_classifier_del, NULL, "", RW },
     { "lflow-classifier-list", 1, 1, "LSP-CHAIN", NULL, nbctl_lflow_classifier_list,
       NULL, "", RO },
-    { "lflow-classifier-get-logical-destination-port", 1, 1, "LFLOW-CLASSIFIER", NULL,
+    { "lflow-classifier-get-logical-destination-port", 1, 1, "CLASSIFIER", NULL,
       nbctl_lflow_classifier_get_logical_destination_port, NULL, "", RO },
-    { "lflow-classifier-set-logical-destination-port", 2, 2, "LFLOW-CLASSIFIER LDESTINATION_PORT", NULL,
+    { "lflow-classifier-set-logical-destination-port", 2, 2, "CLASSIFIER LDESTINATION_PORT", NULL,
       nbctl_lflow_classifier_set_logical_destination_port, NULL, "", RO },
     /* TODO ADD OTHER FLOW-CLASSIFIER PARAMETERS */
 

@@ -214,7 +214,14 @@
        port pair for this group
      </p>
    </column>
-    <group title="Common Columns">
+    <column name="sortkey">
+      <p>
+        An integer used for ordering instances of <ref table="Logical_Port_Pair_Group"/>
+        in the <ref column="port_pairs" table="Logical_Port_Chain"/> column
+        of <ref table="Logical_Port_Chain"/>.
+      </p>
+    </column>
+   <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
       </column>
