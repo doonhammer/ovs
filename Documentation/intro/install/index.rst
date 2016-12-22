@@ -33,10 +33,6 @@ different environments and using different configurations.
 Installation from Source
 ------------------------
 
-.. TODO(stephenfin): The DPDK-ADVANCED doc is mostly usage material. The
-   install related instructions should be moved to the main doc, while the
-   rest should be moved to howto and topic docs
-
 .. TODO(stephenfin): Based on the title alone, the NetBSD doc should probably
    be merged into the general install doc
 
@@ -49,8 +45,6 @@ Installation from Source
    xenserver
    userspace
    dpdk
-   dpdk-advanced
-   bash-completion
 
 Installation from Packages
 --------------------------
@@ -65,3 +59,12 @@ provided below.
    debian
    fedora
    rhel
+
+Others
+------
+
+.. toctree::
+   :maxdepth: 2
+
+   bash-completion
+   documentation

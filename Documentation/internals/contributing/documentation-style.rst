@@ -35,11 +35,14 @@ documents found in the project tree.
 reStructuredText vs. Sphinx
 ---------------------------
 
-reStructuredText (reST) is the syntax, while Sphinx is a documentation
+`reStructuredText (reST)`__ is the syntax, while `Sphinx`__ is a documentation
 generator.  Sphinx introduces a number of extensions to reST, like the
 ``:ref:`` role, which can and should be used in documentation, but these will
 not work correctly on GitHub. As such, these extensions should not be used in
 any documentation in the root level, such as the ``README``.
+
+__ http://docutils.sourceforge.net/rst.html
+__ http://www.sphinx-doc.org/
 
 reST Conventions
 ----------------
@@ -58,8 +61,9 @@ Many of the basic documentation guidelines match those of the
 - Limit lines at 79 characters.
 
   .. note::
-    An exception to this rule is text within code-block elements that cannot be
-    wrapped and links within references.
+
+     An exception to this rule is text within code-block elements that cannot
+     be wrapped and links within references.
 
 - Use spaces for indenation.
 
@@ -83,24 +87,25 @@ File Names
 - Use lowercase filenames.
 
   .. note::
-    An exception to this rule is any documents found in the root-level of the
-    project.
+
+     An exception to this rule is any documents found in the root-level of the
+     project.
 
 Titles
 ~~~~~~
 
 - Use the following headers levels.
 
-  | =======  Heading 0 (reserved for the title in a document)
-  | -------  Heading 1
-  | ~~~~~~~  Heading 2
-  | +++++++  Heading 3
-  | '''''''  Heading 4
+  | ``=======``  Heading 0 (reserved for the title in a document)
+  | ``-------``  Heading 1
+  | ``~~~~~~~``  Heading 2
+  | ``+++++++``  Heading 3
+  | ``'''''''``  Heading 4
 
   .. note::
 
-    Avoid using lower heading levels by rewriting and reorganizing the
-    information.
+     Avoid using lower heading levels by rewriting and reorganizing the
+     information.
 
 - Under- and overlines should be of the same length as that of the heading
   text.
@@ -111,7 +116,8 @@ Code
 ~~~~
 
 - Use ``::``, the ``code`` role or the ``code-block:: <syntax>`` role to prefix
-  code.
+  code. The ``code-block:: <syntax>`` format is preferred as this provides
+  syntax highlighting for non-Python languages, such as Bash or PowerShell.
 
 - Prefix commands with ``$``.
 
@@ -125,7 +131,7 @@ Admonitions
 
       .. note::
 
-        This is a sample callout for some useful tip or trick.
+         This is a sample callout for some useful tip or trick.
 
   Example admonitions include: ``warning``, ``important``, ``note``, ``tip`` or
   ``seealso``.
@@ -226,7 +232,8 @@ Cross-referencing
       Here is a link to the :doc:`/README.rst`
 
   .. note::
-    This is a Sphinx extension. Do not use this in any top-level documents.
+
+     This is a Sphinx extension. Do not use this in any top-level documents.
 
 - To cross-reference an arbitrary location in a doc, use the ``ref`` role.::
 
@@ -243,13 +250,22 @@ Cross-referencing
       Here is a cross-reference to :ref:`sample-crossref`.
 
   .. note::
-    This is a Sphinx extension. Do not use this in any top-level documents.
+
+     This is a Sphinx extension. Do not use this in any top-level documents.
 
 Figures and Other Media
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-- All images should be in ASCII format and included in code-blocks to preserve
-  formatting.
+- All images should be in PNG format and compressed where possible. For PNG
+  files, use OptiPNG and AdvanceCOMP's ``advpng``:
+
+  .. code-block:: shell
+
+     $ optipng -o7 -zm1-9 -i0 -strip all <path_to_png>
+     $ advpng -z4 <path_to_png>
+
+- Any ASCII text "images" should be included in code-blocks to preserve
+  formatting
 
 - Include other reStructuredText verbatim in a current document
 
@@ -276,7 +292,7 @@ vSwitch documentation. These guidelines are based on the `IBM Style Guide
 
   Commonly used terms like CPU or RAM are allowed.
 
-  .. list-table:: Example
+  .. list-table::
      :header-rows: 1
 
      * - Do not use
@@ -290,7 +306,7 @@ vSwitch documentation. These guidelines are based on the `IBM Style Guide
 
   The subject should do the verb's action, rather than be acted upon.
 
-  .. list-table:: Example
+  .. list-table::
      :header-rows: 1
 
      * - Do not use
@@ -300,7 +316,7 @@ vSwitch documentation. These guidelines are based on the `IBM Style Guide
 
 - Write in the present tense
 
-  .. list-table:: Example
+  .. list-table::
      :header-rows: 1
 
      * - Do not use
@@ -310,7 +326,7 @@ vSwitch documentation. These guidelines are based on the `IBM Style Guide
 
 - Write in second person
 
-  .. list-table:: Example
+  .. list-table::
      :header-rows: 1
 
      * - Do not use
@@ -324,9 +340,29 @@ vSwitch documentation. These guidelines are based on the `IBM Style Guide
 
   Avoid "please" and "thank you"
 
+Helpful Tools
+-------------
+
+There are a number of tools, online and offline, which can be used to preview
+documents are you edit them:
+
+- `rst.ninjs.org <http://rst.ninjs.org/>`__
+
+  An online rST editor/previewer
+
+- `ReText <https://github.com/retext-project/retext>`__
+
+  A simple but powerful editor for Markdown and reStructuredText. ReText is
+  written in Python.
+
+- `restview <https://mg.pov.lt/restview/>`__
+
+  A viewer for ReStructuredText documents that renders them on the fly.
+
 Useful Links
 ------------
 
-* `Quick reStructuredText
+- `Quick reStructuredText
   <http://docutils.sourceforge.net/docs/user/rst/quickref.html>`__
-* `Sphinx Documentation <http://sphinx.readthedocs.org/en/latest/rest.html>`__
+
+- `Sphinx Documentation <http://sphinx.readthedocs.org/en/latest/rest.html>`__

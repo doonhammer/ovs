@@ -40,8 +40,10 @@ that way.
    openflow
    bonding
    ovsdb-replication
-   dpdk
+   dpdk/index
    windows
+   language-bindings
+   testing
 
 .. toctree::
    :maxdepth: 2

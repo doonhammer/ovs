@@ -38,8 +38,13 @@ topics covered herein, refer to :doc:`/topics/index`.
    libvirt
    ssl
    lisp
-   native-tunneling
+   tunneling
+   userspace-tunneling
+   vlan
+   qos
    vtep
+   sflow
+   dpdk
 
 .. toctree::
    :maxdepth: 1
