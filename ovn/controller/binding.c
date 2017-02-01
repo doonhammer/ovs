@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -227,6 +227,17 @@ set_noop_qos(struct controller_ctx *ctx, struct sset *egress_ifaces)
 }
 
 static void
+set_qos_type(struct netdev *netdev, const char *type)
+{
+    int error = netdev_set_qos(netdev, type, NULL);
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, "%s: could not set qdisc type \"%s\" (%s)",
+                     netdev_get_name(netdev), type, ovs_strerror(error));
+    }
+}
+
+static void
 setup_qos(const char *egress_iface, struct hmap *queue_map)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
@@ -244,22 +255,43 @@ setup_qos(const char *egress_iface, struct hmap *queue_map)
         return;
     }
 
-    /* Check and configure qdisc. */
+    /* Check current qdisc. */
     const char *qdisc_type;
     struct smap qdisc_details;
 
     smap_init(&qdisc_details);
     if (netdev_get_qos(netdev_phy, &qdisc_type, &qdisc_details) != 0 ||
         qdisc_type[0] == '\0') {
+        smap_destroy(&qdisc_details);
         /* Qos is not supported. */
         return;
     }
-    if (strcmp(qdisc_type, OVN_QOS_TYPE)) {
-        error = netdev_set_qos(netdev_phy, OVN_QOS_TYPE, &qdisc_details);
-        if (error) {
-            VLOG_WARN_RL(&rl, "%s: could not configure QoS (%s)",
-                         egress_iface, ovs_strerror(error));
+    smap_destroy(&qdisc_details);
+
+    /* If we're not actually being requested to do any QoS:
+     *
+     *     - If the current qdisc type is OVN_QOS_TYPE, then we clear the qdisc
+     *       type to "".  Otherwise, it's possible that our own leftover qdisc
+     *       settings could cause strange behavior on egress.  Also, QoS is
+     *       expensive and may waste CPU time even if it's not really in use.
+     *
+     *       OVN isn't the only software that can configure qdiscs, and
+     *       physical interfaces are shared resources, so there is some risk in
+     *       this strategy: we could disrupt some other program's QoS.
+     *       Probably, to entirely avoid this possibility we would need to add
+     *       a configuration setting.
+     *
+     *     - Otherwise leave the qdisc alone. */
+    if (hmap_is_empty(queue_map)) {
+        if (!strcmp(qdisc_type, OVN_QOS_TYPE)) {
+            set_qos_type(netdev_phy, "");
         }
+        return;
+    }
+
+    /* Configure qdisc. */
+    if (strcmp(qdisc_type, OVN_QOS_TYPE)) {
+        set_qos_type(netdev_phy, OVN_QOS_TYPE);
     }
 
     /* Check and delete if needed. */
