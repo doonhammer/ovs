@@ -165,8 +165,10 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         OPT_LOCAL,
         OPT_COMMANDS,
         OPT_OPTIONS,
+        OPT_BOOTSTRAP_CA_CERT,
         VLOG_OPTION_ENUMS,
-        TABLE_OPTION_ENUMS
+        TABLE_OPTION_ENUMS,
+        SSL_OPTION_ENUMS,
     };
     static const struct option global_long_options[] = {
         {"db", required_argument, NULL, OPT_DB},
@@ -182,6 +184,7 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         {"version", no_argument, NULL, 'V'},
         VLOG_LONG_OPTIONS,
         STREAM_SSL_LONG_OPTIONS,
+        {"bootstrap-ca-cert", required_argument, NULL, OPT_BOOTSTRAP_CA_CERT},
         TABLE_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
@@ -205,7 +208,6 @@ parse_options(int argc, char *argv[], struct shash *local_options)
     allocated_options = ARRAY_SIZE(global_long_options);
     n_options = n_global_long_options;
     ctl_add_cmd_options(&options, &n_options, &allocated_options, OPT_LOCAL);
-    table_style.format = TF_LIST;
 
     for (;;) {
         int idx;
@@ -285,6 +287,10 @@ parse_options(int argc, char *argv[], struct shash *local_options)
         VLOG_OPTION_HANDLERS
         TABLE_OPTION_HANDLERS(&table_style)
         STREAM_SSL_OPTION_HANDLERS
+
+        case OPT_BOOTSTRAP_CA_CERT:
+            stream_ssl_set_ca_cert_file(optarg, true);
+            break;
 
         case '?':
             exit(EXIT_FAILURE);
@@ -3334,7 +3340,7 @@ nbctl_lr_route_list(struct ctl_context *ctx)
     free(ipv4_routes);
     free(ipv6_routes);
 }
-
+#ifdef JED
 static const struct ctl_table_class tables[] = {
     {&nbrec_table_nb_global,
      {{&nbrec_table_nb_global, NULL, NULL},
@@ -3391,6 +3397,28 @@ static const struct ctl_table_class tables[] = {
       {NULL, NULL, NULL}}},
 
     {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
+};
+#endif
+static const struct ctl_table_class tables[NBREC_N_TABLES] = {
+    [NBREC_TABLE_LOGICAL_SWITCH].row_ids[0]
+    = {&nbrec_table_logical_switch, &nbrec_logical_switch_col_name, NULL},
+
+    [NBREC_TABLE_LOGICAL_SWITCH_PORT].row_ids[0]
+    = {&nbrec_table_logical_switch_port, &nbrec_logical_switch_port_col_name,
+       NULL},
+
+    [NBREC_TABLE_LOGICAL_ROUTER].row_ids[0]
+    = {&nbrec_table_logical_router, &nbrec_logical_router_col_name, NULL},
+
+    [NBREC_TABLE_LOGICAL_ROUTER_PORT].row_ids[0]
+    = {&nbrec_table_logical_router_port, &nbrec_logical_router_port_col_name,
+       NULL},
+
+    [NBREC_TABLE_ADDRESS_SET].row_ids[0]
+    = {&nbrec_table_address_set, &nbrec_address_set_col_name, NULL},
+
+    [NBREC_TABLE_SSL].row_ids[0]
+    = {&nbrec_table_nb_global, NULL, &nbrec_nb_global_col_ssl},
 };
 
 static void
@@ -3770,6 +3798,6 @@ static const struct ctl_command_syntax nbctl_commands[] = {
 static void
 nbctl_cmd_init(void)
 {
-    ctl_init(tables, NULL, nbctl_exit);
+    ctl_init(nbrec_table_classes, tables, NULL, nbctl_exit);
     ctl_register_commands(nbctl_commands);
 }
