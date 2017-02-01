@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -827,8 +827,11 @@ netdev_dummy_set_in6(struct netdev *netdev_, struct in6_addr *in6,
     return 0;
 }
 
+#define DUMMY_MAX_QUEUES_PER_PORT 1024
+
 static int
-netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args)
+netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args,
+                        char **errp OVS_UNUSED)
 {
     struct netdev_dummy *netdev = netdev_dummy_cast(netdev_);
     const char *pcap;
@@ -868,8 +871,23 @@ netdev_dummy_set_config(struct netdev *netdev_, const struct smap *args)
         goto exit;
     }
 
-    new_n_rxq = MAX(smap_get_int(args, "n_rxq", 1), 1);
-    new_n_txq = MAX(smap_get_int(args, "n_txq", 1), 1);
+    new_n_rxq = MAX(smap_get_int(args, "n_rxq", NR_QUEUE), 1);
+    new_n_txq = MAX(smap_get_int(args, "n_txq", NR_QUEUE), 1);
+
+    if (new_n_rxq > DUMMY_MAX_QUEUES_PER_PORT ||
+        new_n_txq > DUMMY_MAX_QUEUES_PER_PORT) {
+        VLOG_WARN("The one or both of interface %s queues"
+                  "(rxq: %d, txq: %d) exceed %d. Sets it %d.\n",
+                  netdev_get_name(netdev_),
+                  new_n_rxq,
+                  new_n_txq,
+                  DUMMY_MAX_QUEUES_PER_PORT,
+                  DUMMY_MAX_QUEUES_PER_PORT);
+
+        new_n_rxq = MIN(DUMMY_MAX_QUEUES_PER_PORT, new_n_rxq);
+        new_n_txq = MIN(DUMMY_MAX_QUEUES_PER_PORT, new_n_txq);
+    }
+
     new_numa_id = smap_get_int(args, "numa_id", 0);
     if (new_n_rxq != netdev->requested_n_rxq
         || new_n_txq != netdev->requested_n_txq
@@ -1043,13 +1061,13 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
 {
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
     int error = 0;
-    int i;
 
-    for (i = 0; i < batch->count; i++) {
-        const void *buffer = dp_packet_data(batch->packets[i]);
-        size_t size = dp_packet_size(batch->packets[i]);
+    struct dp_packet *packet;
+    DP_PACKET_BATCH_FOR_EACH(packet, batch) {
+        const void *buffer = dp_packet_data(packet);
+        size_t size = dp_packet_size(packet);
 
-        size -= dp_packet_get_cutlen(batch->packets[i]);
+        size -= dp_packet_get_cutlen(packet);
 
         if (size < ETH_HEADER_LEN) {
             error = EMSGSIZE;
@@ -1415,17 +1433,21 @@ pkt_list_delete(struct ovs_list *l)
 }
 
 static struct dp_packet *
-eth_from_packet_or_flow(const char *s)
+eth_from_packet(const char *s)
+{
+    struct dp_packet *packet;
+    eth_from_hex(s, &packet);
+    return packet;
+}
+
+static struct dp_packet *
+eth_from_flow(const char *s)
 {
     enum odp_key_fitness fitness;
     struct dp_packet *packet;
     struct ofpbuf odp_key;
     struct flow flow;
     int error;
-
-    if (!eth_from_hex(s, &packet)) {
-        return packet;
-    }
 
     /* Convert string to datapath key.
      *
@@ -1522,10 +1544,24 @@ netdev_dummy_receive(struct unixctl_conn *conn,
     for (i = k; i < argc; i++) {
         struct dp_packet *packet;
 
-        packet = eth_from_packet_or_flow(argv[i]);
+        /* Try to parse 'argv[i]' as packet in hex. */
+        packet = eth_from_packet(argv[i]);
+
         if (!packet) {
-            unixctl_command_reply_error(conn, "bad packet syntax");
-            goto exit;
+            /* Try parse 'argv[i]' as odp flow. */
+            packet = eth_from_flow(argv[i]);
+
+            if (!packet) {
+                unixctl_command_reply_error(conn, "bad packet or flow syntax");
+                goto exit;
+            }
+
+            /* Parse optional --len argument immediately follows a 'flow'.  */
+            if (argc >= i + 2 && !strcmp(argv[i + 1], "--len")) {
+                int packet_size = strtol(argv[i + 2], NULL, 10);
+                dp_packet_set_size(packet, packet_size);
+                i+=2;
+            }
         }
 
         netdev_dummy_queue_packet(dummy_dev, packet, rx_qid);
@@ -1739,7 +1775,7 @@ void
 netdev_dummy_register(enum dummy_level level)
 {
     unixctl_command_register("netdev-dummy/receive",
-                             "name [--qid queue_id] packet|flow...",
+                             "name [--qid queue_id] packet|flow [--len packet_len]",
                              2, INT_MAX, netdev_dummy_receive, NULL);
     unixctl_command_register("netdev-dummy/set-admin-state",
                              "[netdev] up|down", 1, 2,

@@ -35,6 +35,7 @@
 #include "netdev-native-tnl.h"
 #include "netdev-provider.h"
 #include "netdev-vport-private.h"
+#include "openvswitch/dynamic-string.h"
 #include "ovs-router.h"
 #include "packets.h"
 #include "poll-loop.h"
@@ -259,10 +260,12 @@ tunnel_check_status_change__(struct netdev_vport *netdev)
     bool status = false;
     struct in6_addr *route;
     struct in6_addr gw;
+    uint32_t mark;
 
     iface[0] = '\0';
     route = &netdev->tnl_cfg.ipv6_dst;
-    if (ovs_router_lookup(route, iface, NULL, &gw)) {
+    mark = netdev->tnl_cfg.egress_pkt_mark;
+    if (ovs_router_lookup(mark, route, iface, NULL, &gw)) {
         struct netdev *egress_netdev;
 
         if (!netdev_open(iface, NULL, &egress_netdev)) {
@@ -397,15 +400,17 @@ parse_tunnel_ip(const char *value, bool accept_mcast, bool *flow,
 }
 
 static int
-set_tunnel_config(struct netdev *dev_, const struct smap *args)
+set_tunnel_config(struct netdev *dev_, const struct smap *args, char **errp)
 {
     struct netdev_vport *dev = netdev_vport_cast(dev_);
     const char *name = netdev_get_name(dev_);
     const char *type = netdev_get_type(dev_);
+    struct ds errors = DS_EMPTY_INITIALIZER;
     bool needs_dst_port, has_csum;
     uint16_t dst_proto = 0, src_proto = 0;
     struct netdev_tunnel_config tnl_cfg;
     struct smap_node *node;
+    int err;
 
     has_csum = strstr(type, "gre") || strstr(type, "geneve") ||
                strstr(type, "stt") || strstr(type, "vxlan");
@@ -433,25 +438,24 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
 
     SMAP_FOR_EACH (node, args) {
         if (!strcmp(node->key, "remote_ip")) {
-            int err;
             err = parse_tunnel_ip(node->value, false, &tnl_cfg.ip_dst_flow,
                                   &tnl_cfg.ipv6_dst, &dst_proto);
             switch (err) {
             case ENOENT:
-                VLOG_WARN("%s: bad %s 'remote_ip'", name, type);
+                ds_put_format(&errors, "%s: bad %s 'remote_ip'\n", name, type);
                 break;
             case EINVAL:
-                VLOG_WARN("%s: multicast remote_ip=%s not allowed",
-                          name, node->value);
-                return EINVAL;
+                ds_put_format(&errors,
+                              "%s: multicast remote_ip=%s not allowed\n",
+                              name, node->value);
+                goto out;
             }
         } else if (!strcmp(node->key, "local_ip")) {
-            int err;
             err = parse_tunnel_ip(node->value, true, &tnl_cfg.ip_src_flow,
                                   &tnl_cfg.ipv6_src, &src_proto);
             switch (err) {
             case ENOENT:
-                VLOG_WARN("%s: bad %s 'local_ip'", name, type);
+                ds_put_format(&errors, "%s: bad %s 'local_ip'\n", name, type);
                 break;
             }
         } else if (!strcmp(node->key, "tos")) {
@@ -464,7 +468,8 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
                 if (*endptr == '\0' && tos == (tos & IP_DSCP_MASK)) {
                     tnl_cfg.tos = tos;
                 } else {
-                    VLOG_WARN("%s: invalid TOS %s", name, node->value);
+                    ds_put_format(&errors, "%s: invalid TOS %s\n", name,
+                                  node->value);
                 }
             }
         } else if (!strcmp(node->key, "ttl")) {
@@ -498,32 +503,45 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
                 if (!strcmp(type, "vxlan") && !strcmp(ext, "gbp")) {
                     tnl_cfg.exts |= (1 << OVS_VXLAN_EXT_GBP);
                 } else {
-                    VLOG_WARN("%s: unknown extension '%s'", name, ext);
+                    ds_put_format(&errors, "%s: unknown extension '%s'\n",
+                                  name, ext);
                 }
 
                 ext = strtok_r(NULL, ",", &save_ptr);
             }
 
             free(str);
+        } else if (!strcmp(node->key, "egress_pkt_mark")) {
+            tnl_cfg.egress_pkt_mark = strtoul(node->value, NULL, 10);
+            tnl_cfg.set_egress_pkt_mark = true;
         } else {
-            VLOG_WARN("%s: unknown %s argument '%s'", name, type, node->key);
+            ds_put_format(&errors, "%s: unknown %s argument '%s'\n",
+                          name, type, node->key);
         }
     }
 
     if (!ipv6_addr_is_set(&tnl_cfg.ipv6_dst) && !tnl_cfg.ip_dst_flow) {
-        VLOG_ERR("%s: %s type requires valid 'remote_ip' argument",
-                 name, type);
-        return EINVAL;
+        ds_put_format(&errors,
+                      "%s: %s type requires valid 'remote_ip' argument\n",
+                      name, type);
+        err = EINVAL;
+        goto out;
     }
     if (tnl_cfg.ip_src_flow && !tnl_cfg.ip_dst_flow) {
-        VLOG_ERR("%s: %s type requires 'remote_ip=flow' with 'local_ip=flow'",
-                 name, type);
-        return EINVAL;
+        ds_put_format(&errors,
+                      "%s: %s type requires 'remote_ip=flow' "
+                      "with 'local_ip=flow'\n",
+                      name, type);
+        err = EINVAL;
+        goto out;
     }
     if (src_proto && dst_proto && src_proto != dst_proto) {
-        VLOG_ERR("%s: 'remote_ip' and 'local_ip' has to be of the same address family",
-                 name);
-        return EINVAL;
+        ds_put_format(&errors,
+                      "%s: 'remote_ip' and 'local_ip' "
+                      "has to be of the same address family\n",
+                      name);
+        err = EINVAL;
+        goto out;
     }
     if (!tnl_cfg.ttl) {
         tnl_cfg.ttl = DEFAULT_TTL;
@@ -545,7 +563,20 @@ set_tunnel_config(struct netdev *dev_, const struct smap *args)
     }
     ovs_mutex_unlock(&dev->mutex);
 
-    return 0;
+    err = 0;
+
+out:
+    if (errors.length) {
+        ds_chomp(&errors, '\n');
+        VLOG_WARN("%s", ds_cstr(&errors));
+        if (err) {
+            *errp = ds_steal_cstr(&errors);
+        }
+    }
+
+    ds_destroy(&errors);
+
+    return err;
 }
 
 static int
@@ -623,6 +654,10 @@ get_tunnel_config(const struct netdev *dev, struct smap *args)
         smap_add(args, "df_default", "false");
     }
 
+    if (tnl_cfg.set_egress_pkt_mark) {
+        smap_add_format(args, "egress_pkt_mark",
+                        "%"PRIu32, tnl_cfg.egress_pkt_mark);
+    }
     return 0;
 }
 
@@ -693,7 +728,7 @@ get_patch_config(const struct netdev *dev_, struct smap *args)
 }
 
 static int
-set_patch_config(struct netdev *dev_, const struct smap *args)
+set_patch_config(struct netdev *dev_, const struct smap *args, char **errp)
 {
     struct netdev_vport *dev = netdev_vport_cast(dev_);
     const char *name = netdev_get_name(dev_);
@@ -701,17 +736,19 @@ set_patch_config(struct netdev *dev_, const struct smap *args)
 
     peer = smap_get(args, "peer");
     if (!peer) {
-        VLOG_ERR("%s: patch type requires valid 'peer' argument", name);
+        VLOG_ERR_BUF(errp, "%s: patch type requires valid 'peer' argument",
+                     name);
         return EINVAL;
     }
 
     if (smap_count(args) > 1) {
-        VLOG_ERR("%s: patch type takes only a 'peer' argument", name);
+        VLOG_ERR_BUF(errp, "%s: patch type takes only a 'peer' argument",
+                     name);
         return EINVAL;
     }
 
     if (!strcmp(name, peer)) {
-        VLOG_ERR("%s: patch peer must not be self", name);
+        VLOG_ERR_BUF(errp, "%s: patch peer must not be self", name);
         return EINVAL;
     }
 

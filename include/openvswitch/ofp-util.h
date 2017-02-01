@@ -481,8 +481,8 @@ struct ofputil_packet_in_private {
     struct uuid bridge;
 
     /* NXCPT_STACK. */
-    union mf_subvalue *stack;
-    size_t n_stack;
+    uint8_t *stack;
+    size_t stack_size;
 
     /* NXCPT_MIRRORS. */
     uint32_t mirrors;
@@ -1083,7 +1083,7 @@ struct ofputil_flow_update {
     uint8_t table_id;
     uint16_t priority;
     ovs_be64 cookie;
-    struct match *match;
+    struct match match;
     const struct ofpact *ofpacts;
     size_t ofpacts_len;
 
@@ -1095,7 +1095,8 @@ int ofputil_decode_flow_update(struct ofputil_flow_update *,
                                struct ofpbuf *msg, struct ofpbuf *ofpacts);
 void ofputil_start_flow_update(struct ovs_list *replies);
 void ofputil_append_flow_update(const struct ofputil_flow_update *,
-                                struct ovs_list *replies);
+                                struct ovs_list *replies,
+                                const struct tun_table *);
 
 /* Abstract nx_flow_monitor_cancel. */
 uint32_t ofputil_decode_flow_monitor_cancel(const struct ofp_header *);

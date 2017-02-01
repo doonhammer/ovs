@@ -33,6 +33,7 @@
 #include "flow.h"
 #include "unaligned.h"
 #include "util.h"
+#include "csum.h"
 
 /* Masked copy of an ethernet address. 'src' is already properly masked. */
 static void
@@ -68,23 +69,68 @@ odp_set_ipv4(struct dp_packet *packet, const struct ovs_key_ipv4 *key,
              const struct ovs_key_ipv4 *mask)
 {
     struct ip_header *nh = dp_packet_l3(packet);
+    ovs_be32 ip_src_nh;
+    ovs_be32 ip_dst_nh;
+    ovs_be32 new_ip_src;
+    ovs_be32 new_ip_dst;
+    uint8_t new_tos;
+    uint8_t new_ttl;
 
-    packet_set_ipv4(
-        packet,
-        key->ipv4_src | (get_16aligned_be32(&nh->ip_src) & ~mask->ipv4_src),
-        key->ipv4_dst | (get_16aligned_be32(&nh->ip_dst) & ~mask->ipv4_dst),
-        key->ipv4_tos | (nh->ip_tos & ~mask->ipv4_tos),
-        key->ipv4_ttl | (nh->ip_ttl & ~mask->ipv4_ttl));
-}
+    if (mask->ipv4_src) {
+        ip_src_nh = get_16aligned_be32(&nh->ip_src);
+        new_ip_src = key->ipv4_src | (ip_src_nh & ~mask->ipv4_src);
 
-static const ovs_be32 *
-mask_ipv6_addr(const ovs_16aligned_be32 *old, const ovs_be32 *addr,
-               const ovs_be32 *mask, ovs_be32 *masked)
-{
-    for (int i = 0; i < 4; i++) {
-        masked[i] = addr[i] | (get_16aligned_be32(&old[i]) & ~mask[i]);
+        if (ip_src_nh != new_ip_src) {
+            packet_set_ipv4_addr(packet, &nh->ip_src, new_ip_src);
+        }
     }
 
+    if (mask->ipv4_dst) {
+        ip_dst_nh = get_16aligned_be32(&nh->ip_dst);
+        new_ip_dst = key->ipv4_dst | (ip_dst_nh & ~mask->ipv4_dst);
+
+        if (ip_dst_nh != new_ip_dst) {
+            packet_set_ipv4_addr(packet, &nh->ip_dst, new_ip_dst);
+        }
+    }
+
+    if (mask->ipv4_tos) {
+        new_tos = key->ipv4_tos | (nh->ip_tos & ~mask->ipv4_tos);
+
+        if (nh->ip_tos != new_tos) {
+            nh->ip_csum = recalc_csum16(nh->ip_csum,
+                                        htons((uint16_t) nh->ip_tos),
+                                        htons((uint16_t) new_tos));
+            nh->ip_tos = new_tos;
+        }
+    }
+
+    if (OVS_LIKELY(mask->ipv4_ttl)) {
+        new_ttl = key->ipv4_ttl | (nh->ip_ttl & ~mask->ipv4_ttl);
+
+        if (OVS_LIKELY(nh->ip_ttl != new_ttl)) {
+            nh->ip_csum = recalc_csum16(nh->ip_csum, htons(nh->ip_ttl << 8),
+                                        htons(new_ttl << 8));
+            nh->ip_ttl = new_ttl;
+        }
+    }
+}
+
+static struct in6_addr *
+mask_ipv6_addr(const ovs_16aligned_be32 *old, const struct in6_addr *addr,
+               const struct in6_addr *mask, struct in6_addr *masked)
+{
+#ifdef s6_addr32
+    for (int i = 0; i < 4; i++) {
+        masked->s6_addr32[i] = addr->s6_addr32[i]
+            | (get_16aligned_be32(&old[i]) & ~mask->s6_addr32[i]);
+    }
+#else
+    const uint8_t *old8 = (const uint8_t *)old;
+    for (int i = 0; i < 16; i++) {
+        masked->s6_addr[i] = addr->s6_addr[i] | (old8[i] & ~mask->s6_addr[i]);
+    }
+#endif
     return masked;
 }
 
@@ -93,14 +139,16 @@ odp_set_ipv6(struct dp_packet *packet, const struct ovs_key_ipv6 *key,
              const struct ovs_key_ipv6 *mask)
 {
     struct ovs_16aligned_ip6_hdr *nh = dp_packet_l3(packet);
-    ovs_be32 sbuf[4], dbuf[4];
+    struct in6_addr sbuf, dbuf;
     uint8_t old_tc = ntohl(get_16aligned_be32(&nh->ip6_flow)) >> 20;
     ovs_be32 old_fl = get_16aligned_be32(&nh->ip6_flow) & htonl(0xfffff);
 
     packet_set_ipv6(
         packet,
-        mask_ipv6_addr(nh->ip6_src.be32, key->ipv6_src, mask->ipv6_src, sbuf),
-        mask_ipv6_addr(nh->ip6_dst.be32, key->ipv6_dst, mask->ipv6_dst, dbuf),
+        mask_ipv6_addr(nh->ip6_src.be32, &key->ipv6_src, &mask->ipv6_src,
+                       &sbuf),
+        mask_ipv6_addr(nh->ip6_dst.be32, &key->ipv6_dst, &mask->ipv6_dst,
+                       &dbuf),
         key->ipv6_tclass | (old_tc & ~mask->ipv6_tclass),
         key->ipv6_label | (old_fl & ~mask->ipv6_label),
         key->ipv6_hlimit | (nh->ip6_hlim & ~mask->ipv6_hlimit));
@@ -189,7 +237,7 @@ odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
 
     if (OVS_LIKELY(ns && nd_opt)) {
         int bytes_remain = dp_packet_l4_size(packet) - sizeof(*ns);
-        ovs_be32 tgt_buf[4];
+        struct in6_addr tgt_buf;
         struct eth_addr sll_buf = eth_addr_zero;
         struct eth_addr tll_buf = eth_addr_zero;
 
@@ -215,8 +263,8 @@ odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
         }
 
         packet_set_nd(packet,
-                      mask_ipv6_addr(ns->target.be32,
-                                     key->nd_target, mask->nd_target, tgt_buf),
+                      mask_ipv6_addr(ns->target.be32, &key->nd_target,
+                                     &mask->nd_target, &tgt_buf),
                       sll_buf,
                       tll_buf);
     }
@@ -256,7 +304,7 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
 
     case OVS_KEY_ATTR_IPV6:
         ipv6_key = nl_attr_get_unspec(a, sizeof(struct ovs_key_ipv6));
-        packet_set_ipv6(packet, ipv6_key->ipv6_src, ipv6_key->ipv6_dst,
+        packet_set_ipv6(packet, &ipv6_key->ipv6_src, &ipv6_key->ipv6_dst,
                         ipv6_key->ipv6_tclass, ipv6_key->ipv6_label,
                         ipv6_key->ipv6_hlimit);
         break;
@@ -313,7 +361,7 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         if (OVS_LIKELY(dp_packet_get_nd_payload(packet))) {
             const struct ovs_key_nd *nd_key
                    = nl_attr_get_unspec(a, sizeof(struct ovs_key_nd));
-            packet_set_nd(packet, nd_key->nd_target, nd_key->nd_sll,
+            packet_set_nd(packet, &nd_key->nd_target, nd_key->nd_sll,
                           nd_key->nd_tll);
         }
         break;
@@ -475,9 +523,29 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
         }
     }
 
-    packet_batch_init_packet(&pb, packet);
+    dp_packet_batch_init_packet(&pb, packet);
     odp_execute_actions(dp, &pb, steal, nl_attr_get(subactions),
                         nl_attr_get_size(subactions), dp_execute_action);
+}
+
+static void
+odp_execute_clone(void *dp, struct dp_packet *packet, bool steal,
+                   const struct nlattr *actions,
+                   odp_execute_cb dp_execute_action)
+{
+    struct dp_packet_batch pb;
+
+    if (!steal) {
+        /* The 'actions' may modify the packet, but the modification
+         * should not propagate beyond this clone action. Make a copy
+         * the packet in case we don't own the packet, so that the
+         * 'actions' are only applied to the clone.  'odp_execute_actions'
+         * will free the clone.  */
+        packet = dp_packet_clone(packet);
+    }
+    dp_packet_batch_init_packet(&pb, packet);
+    odp_execute_actions(dp, &pb, true, nl_attr_get(actions),
+                        nl_attr_get_size(actions), dp_execute_action);
 }
 
 static bool
@@ -504,6 +572,7 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_PUSH_MPLS:
     case OVS_ACTION_ATTR_POP_MPLS:
     case OVS_ACTION_ATTR_TRUNC:
+    case OVS_ACTION_ATTR_CLONE:
         return false;
 
     case OVS_ACTION_ATTR_UNSPEC:
@@ -519,11 +588,9 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     const struct nlattr *actions, size_t actions_len,
                     odp_execute_cb dp_execute_action)
 {
-    struct dp_packet **packets = batch->packets;
-    int cnt = batch->count;
+    struct dp_packet *packet;
     const struct nlattr *a;
     unsigned int left;
-    int i;
 
     NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
         int type = nl_attr_type(a);
@@ -558,11 +625,10 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                 struct flow flow;
                 uint32_t hash;
 
-                for (i = 0; i < cnt; i++) {
-                    flow_extract(packets[i], &flow);
+                DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                    flow_extract(packet, &flow);
                     hash = flow_hash_5tuple(&flow, hash_act->hash_basis);
-
-                    packets[i]->md.dp_hash = hash;
+                    packet->md.dp_hash = hash;
                 }
             } else {
                 /* Assert on unknown hash algorithm.  */
@@ -574,48 +640,48 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         case OVS_ACTION_ATTR_PUSH_VLAN: {
             const struct ovs_action_push_vlan *vlan = nl_attr_get(a);
 
-            for (i = 0; i < cnt; i++) {
-                eth_push_vlan(packets[i], vlan->vlan_tpid, vlan->vlan_tci);
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                eth_push_vlan(packet, vlan->vlan_tpid, vlan->vlan_tci);
             }
             break;
         }
 
         case OVS_ACTION_ATTR_POP_VLAN:
-            for (i = 0; i < cnt; i++) {
-                eth_pop_vlan(packets[i]);
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                eth_pop_vlan(packet);
             }
             break;
 
         case OVS_ACTION_ATTR_PUSH_MPLS: {
             const struct ovs_action_push_mpls *mpls = nl_attr_get(a);
 
-            for (i = 0; i < cnt; i++) {
-                push_mpls(packets[i], mpls->mpls_ethertype, mpls->mpls_lse);
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                push_mpls(packet, mpls->mpls_ethertype, mpls->mpls_lse);
             }
             break;
          }
 
         case OVS_ACTION_ATTR_POP_MPLS:
-            for (i = 0; i < cnt; i++) {
-                pop_mpls(packets[i], nl_attr_get_be16(a));
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                pop_mpls(packet, nl_attr_get_be16(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SET:
-            for (i = 0; i < cnt; i++) {
-                odp_execute_set_action(packets[i], nl_attr_get(a));
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                odp_execute_set_action(packet, nl_attr_get(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SET_MASKED:
-            for (i = 0; i < cnt; i++) {
-                odp_execute_masked_set_action(packets[i], nl_attr_get(a));
+            DP_PACKET_BATCH_FOR_EACH(packet, batch) {
+                odp_execute_masked_set_action(packet, nl_attr_get(a));
             }
             break;
 
         case OVS_ACTION_ATTR_SAMPLE:
-            for (i = 0; i < cnt; i++) {
-                odp_execute_sample(dp, packets[i], steal && last_action, a,
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                odp_execute_sample(dp, packet, steal && last_action, a,
                                    dp_execute_action);
             }
 
@@ -631,11 +697,24 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                         nl_attr_get_unspec(a, sizeof *trunc);
 
             batch->trunc = true;
-            for (i = 0; i < cnt; i++) {
-                dp_packet_set_cutlen(packets[i], trunc->max_len);
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                dp_packet_set_cutlen(packet, trunc->max_len);
             }
             break;
         }
+
+        case OVS_ACTION_ATTR_CLONE:
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                odp_execute_clone(dp, packet, steal && last_action, a,
+                                  dp_execute_action);
+            }
+
+            if (last_action) {
+                /* We do not need to free the packets. odp_execute_clone() has
+                 * stolen them.  */
+                return;
+            }
+            break;
 
         case OVS_ACTION_ATTR_OUTPUT:
         case OVS_ACTION_ATTR_TUNNEL_PUSH:
@@ -649,9 +728,5 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         }
     }
 
-    if (steal) {
-        for (i = 0; i < cnt; i++) {
-            dp_packet_delete(packets[i]);
-        }
-    }
+    dp_packet_delete_batch(batch, steal);
 }

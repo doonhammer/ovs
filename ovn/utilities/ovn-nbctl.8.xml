@@ -76,14 +76,17 @@
 
     <h1>Logical Switch ACL Commands</h1>
     <dl>
-      <dt>[<code>--log</code>] <code>acl-add</code> <var>switch</var> <var>direction</var> <var>priority</var> <var>match</var> <var>action</var></dt>
+      <dt>[<code>--log</code>] [<code>--may-exist</code>] <code>acl-add</code> <var>switch</var> <var>direction</var> <var>priority</var> <var>match</var> <var>action</var></dt>
       <dd>
         Adds the specified ACL to <var>switch</var>.
         <var>direction</var> must be either <code>from-lport</code> or
         <code>to-lport</code>.  <var>priority</var> must be between
-        <code>1</code> and <code>65534</code>, inclusive.  If
+        <code>0</code> and <code>32767</code>, inclusive.  If
         <code>--log</code> is specified, packet logging is enabled for the
         ACL.  A full description of the fields are in <code>ovn-nb</code>(5).
+        If <code>--may-exist</code> is specified, adding a duplicated ACL
+        succeeds but the ACL is not really created. Without <code>--may-exist</code>,
+        adding a duplicated ACL results in error.
       </dd>
 
       <dt><code>acl-del</code> <var>switch</var> [<var>direction</var> [<var>priority</var> <var>match</var>]]</dt>
@@ -125,7 +128,9 @@
         <p>
           Creates on <var>switch</var> a logical switch port named
           <var>port</var> that is a child of <var>parent</var> that is
-          identified with VLAN ID <var>tag_request</var>.  If
+          identified with VLAN ID <var>tag_request</var>,
+          which must be between <code>0</code> and
+          <code>4095</code>, inclusive. If
           <var>tag_request</var> is <code>0</code>, <code>ovn-northd</code>
           generates a tag that is unique in the scope of <var>parent</var>.
           This is useful in cases such as virtualized container environments
@@ -194,6 +199,15 @@
             globally unique MAC address and choose an unused IPv4 address with
             the logical port's subnet and store them in the port's
             <code>dynamic_addresses</code> column.
+          </dd>
+
+          <dt><code>router</code></dt>
+          <dd>
+            Accepted only when the <code>type</code> of the logical switch
+            port is <code>router</code>.  This indicates that the Ethernet,
+            IPv4, and IPv6 addresses for this logical switch port should be
+            obtained from the connected logical router port, as specified by
+            <code>router-port</code> in <code>lsp-set-options</code>.
           </dd>
         </dl>
 
@@ -433,7 +447,7 @@
     <h1>NAT Commands</h1>
 
     <dl>
-      <dt>[<code>--may-exist</code>] <code>lr-nat-add</code> <var>router</var> <var>type</var> <var>external_ip</var> <var>logical_ip</var></dt>
+      <dt>[<code>--may-exist</code>] <code>lr-nat-add</code> <var>router</var> <var>type</var> <var>external_ip</var> <var>logical_ip</var> [<var>logical_port</var> <var>external_mac</var>]</dt>
       <dd>
         <p>
           Adds the specified NAT to <var>router</var>.
@@ -442,6 +456,13 @@
           The <var>external_ip</var> is an IPv4 address.
           The <var>logical_ip</var> is an IPv4 network (e.g 192.168.1.0/24)
           or an IPv4 address.
+          The <var>logical_port</var> and <var>external_mac</var> are only
+          accepted when <var>router</var> is a distributed router (rather
+          than a gateway router) and <var>type</var> is
+          <code>dnat_and_snat</code>.
+          The <var>logical_port</var> is the name of an existing logical
+          switch port where the <var>logical_ip</var> resides.
+          The <var>external_mac</var> is an Ethernet address.
         </p>
         <p>
           When <var>type</var> is <code>dnat</code>, the externally
@@ -464,8 +485,22 @@
           the IP address in <var>external_ip</var>.
         </p>
         <p>
-          It is an error if a NAT already exists,
-          unless <code>--may-exist</code> is specified.
+          When the <var>logical_port</var> and <var>external_mac</var>
+          are specified, the NAT rule will be programmed on the chassis
+          where the <var>logical_port</var> resides.  This includes
+          ARP replies for the <var>external_ip</var>, which return the
+          value of <var>external_mac</var>.  All packets transmitted
+          with source IP address equal to <var>external_ip</var> will
+          be sent using the <var>external_mac</var>.
+        </p>
+        <p>
+          It is an error if a NAT already exists with the same values
+          of <var>router</var>, <var>type</var>, <var>external_ip</var>,
+          and <var>logical_ip</var>, unless <code>--may-exist</code> is
+          specified.  When <code>--may-exist</code>,
+          <var>logical_port</var>, and <var>external_mac</var> are all
+          specified, the existing values of <var>logical_port</var> and
+          <var>external_mac</var> are overwritten.
         </p>
       </dd>
 
@@ -818,6 +853,7 @@
       database.
     </p>
     <xi:include href="lib/ssl.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+    <xi:include href="lib/ssl-bootstrap.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h2>Other Options</h2>
 

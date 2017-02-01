@@ -602,7 +602,7 @@ bool
 dpif_port_exists(const struct dpif *dpif, const char *devname)
 {
     int error = dpif->dpif_class->port_query_by_name(dpif, devname, NULL);
-    if (error != 0 && error != ENOENT && error != ENODEV) {
+    if (error != 0 && error != ENODEV) {
         VLOG_WARN_RL(&error_rl, "%s: failed to query port %s: %s",
                      dpif_name(dpif), devname, ovs_strerror(error));
     }
@@ -631,6 +631,8 @@ dpif_port_set_config(struct dpif *dpif, odp_port_t port_no,
  * initializes '*port' appropriately; on failure, returns a positive errno
  * value.
  *
+ * Retuns ENODEV if the port doesn't exist.
+ *
  * The caller owns the data in 'port' and must free it with
  * dpif_port_destroy() when it is no longer needed. */
 int
@@ -653,6 +655,8 @@ dpif_port_query_by_number(const struct dpif *dpif, odp_port_t port_no,
  * initializes '*port' appropriately; on failure, returns a positive errno
  * value.
  *
+ * Retuns ENODEV if the port doesn't exist.
+ *
  * The caller owns the data in 'port' and must free it with
  * dpif_port_destroy() when it is no longer needed. */
 int
@@ -666,12 +670,11 @@ dpif_port_query_by_name(const struct dpif *dpif, const char *devname,
     } else {
         memset(port, 0, sizeof *port);
 
-        /* For ENOENT or ENODEV we use DBG level because the caller is probably
+        /* For ENODEV we use DBG level because the caller is probably
          * interested in whether 'dpif' actually has a port 'devname', so that
          * it's not an issue worth logging if it doesn't.  Other errors are
          * uncommon and more likely to indicate a real problem. */
-        VLOG_RL(&error_rl,
-                error == ENOENT || error == ENODEV ? VLL_DBG : VLL_WARN,
+        VLOG_RL(&error_rl, error == ENODEV ? VLL_DBG : VLL_WARN,
                 "%s: failed to query port %s: %s",
                 dpif_name(dpif), devname, ovs_strerror(error));
     }
@@ -904,7 +907,7 @@ dpif_probe_feature(struct dpif *dpif, const char *name,
      * previous run are still present in the datapath. */
     error = dpif_flow_put(dpif, DPIF_FP_CREATE | DPIF_FP_MODIFY | DPIF_FP_PROBE,
                           key->data, key->size, NULL, 0, NULL, 0,
-                          ufid, PMD_ID_NULL, NULL);
+                          ufid, NON_PMD_CORE_ID, NULL);
     if (error) {
         if (error != EINVAL) {
             VLOG_WARN("%s: %s flow probe failed (%s)",
@@ -915,7 +918,7 @@ dpif_probe_feature(struct dpif *dpif, const char *name,
 
     ofpbuf_use_stack(&reply, &stub, sizeof stub);
     error = dpif_flow_get(dpif, key->data, key->size, ufid,
-                          PMD_ID_NULL, &reply, &flow);
+                          NON_PMD_CORE_ID, &reply, &flow);
     if (!error
         && (!ufid || (flow.ufid_present
                       && ovs_u128_equals(*ufid, flow.ufid)))) {
@@ -923,7 +926,7 @@ dpif_probe_feature(struct dpif *dpif, const char *name,
     }
 
     error = dpif_flow_del(dpif, key->data, key->size, ufid,
-                          PMD_ID_NULL, NULL);
+                          NON_PMD_CORE_ID, NULL);
     if (error) {
         VLOG_WARN("%s: failed to delete %s feature probe flow",
                   dpif_name(dpif), name);
@@ -1104,12 +1107,11 @@ struct dpif_execute_helper_aux {
  * meaningful. */
 static void
 dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
-                       const struct nlattr *action, bool may_steal OVS_UNUSED)
+                       const struct nlattr *action, bool may_steal)
 {
     struct dpif_execute_helper_aux *aux = aux_;
     int type = nl_attr_type(action);
     struct dp_packet *packet = packets_->packets[0];
-    struct dp_packet *trunc_packet = NULL, *orig_packet;
 
     ovs_assert(packets_->count == 1);
 
@@ -1124,8 +1126,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
         struct ofpbuf execute_actions;
         uint64_t stub[256 / 8];
         struct pkt_metadata *md = &packet->md;
-        bool dst_set, clone = false;
-        uint32_t cutlen = dp_packet_get_cutlen(packet);
+        bool dst_set;
 
         dst_set = flow_tnl_dst_is_set(&md->tunnel);
         if (dst_set) {
@@ -1143,20 +1144,17 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
             execute.actions_len = NLA_ALIGN(action->nla_len);
         }
 
-        orig_packet = packet;
-
-        if (cutlen > 0 && (type == OVS_ACTION_ATTR_OUTPUT ||
-            type == OVS_ACTION_ATTR_TUNNEL_PUSH ||
-            type == OVS_ACTION_ATTR_TUNNEL_POP ||
-            type == OVS_ACTION_ATTR_USERSPACE)) {
+        struct dp_packet *clone = NULL;
+        uint32_t cutlen = dp_packet_get_cutlen(packet);
+        if (cutlen && (type == OVS_ACTION_ATTR_OUTPUT
+                        || type == OVS_ACTION_ATTR_TUNNEL_PUSH
+                        || type == OVS_ACTION_ATTR_TUNNEL_POP
+                        || type == OVS_ACTION_ATTR_USERSPACE)) {
+            dp_packet_reset_cutlen(packet);
             if (!may_steal) {
-                trunc_packet = dp_packet_clone(packet);
-                packet = trunc_packet;
-                clone = true;
+                packet = clone = dp_packet_clone(packet);
             }
-
             dp_packet_set_size(packet, dp_packet_size(packet) - cutlen);
-            dp_packet_reset_cutlen(orig_packet);
         }
 
         execute.packet = packet;
@@ -1167,12 +1165,10 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
         aux->error = dpif_execute(aux->dpif, &execute);
         log_execute_message(aux->dpif, &execute, true, aux->error);
 
+        dp_packet_delete(clone);
+
         if (dst_set) {
             ofpbuf_uninit(&execute_actions);
-        }
-
-        if (clone) {
-            dp_packet_delete(trunc_packet);
         }
         break;
     }
@@ -1186,6 +1182,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_SET_MASKED:
     case OVS_ACTION_ATTR_SAMPLE:
     case OVS_ACTION_ATTR_TRUNC:
+    case OVS_ACTION_ATTR_CLONE:
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
@@ -1205,7 +1202,7 @@ dpif_execute_with_help(struct dpif *dpif, struct dpif_execute *execute)
 
     COVERAGE_INC(dpif_execute_with_help);
 
-    packet_batch_init_packet(&pb, execute->packet);
+    dp_packet_batch_init_packet(&pb, execute->packet);
     odp_execute_actions(&aux, &pb, false, execute->actions,
                         execute->actions_len, dpif_execute_helper_cb);
     return aux.error;

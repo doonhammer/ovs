@@ -1,4 +1,5 @@
-# Copyright (c) 2015 Nicira, Inc.
+#!/usr/bin/env python
+# Copyright (c) 2015, 2016 Nicira, Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,9 +16,13 @@
 import argparse
 import socket
 
-from BaseHTTPServer import HTTPServer
-from SimpleHTTPServer import SimpleHTTPRequestHandler
-from SocketServer import TCPServer
+try:  # Python 2.7
+    from BaseHTTPServer import HTTPServer
+    from SimpleHTTPServer import SimpleHTTPRequestHandler
+    from SocketServer import TCPServer
+except:
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
+    from socketserver import TCPServer
 
 
 class TCPServerV6(HTTPServer):
@@ -48,24 +53,42 @@ def get_ftpd():
     return server
 
 
+def get_tftpd():
+    try:
+        from tftpy import TftpServer, TftpShared
+
+        class OVSTFTPServer(TftpServer):
+            def __init__(self, listen, handler=None):
+                (ip, port) = listen
+                self.ip = ip
+                self.port = port
+                TftpServer.__init__(self, tftproot='./')
+
+            def serve_forever(self):
+                self.listen(self.ip, self.port)
+        server = [OVSTFTPServer, None, TftpShared.DEF_TFTP_PORT]
+    except (ImportError, SyntaxError):
+        server = None
+        pass
+    return server
+
+
 def main():
     SERVERS = {
         'http': [TCPServer, SimpleHTTPRequestHandler, 80],
         'http6': [TCPServerV6, SimpleHTTPRequestHandler, 80],
+        'ftp': get_ftpd(),
+        'tftp': get_tftpd(),
     }
 
-    ftpd = get_ftpd()
-    if ftpd is not None:
-        SERVERS['ftp'] = ftpd
-
-    protocols = [srv for srv in SERVERS]
+    protocols = [srv for srv in SERVERS if SERVERS[srv] is not None]
     parser = argparse.ArgumentParser(
-            description='Run basic application servers.')
+        description='Run basic application servers.')
     parser.add_argument('proto', default='http', nargs='?',
-            help='protocol to serve (%s)' % protocols)
+                        help='protocol to serve (%s)' % protocols)
     args = parser.parse_args()
 
-    if args.proto not in SERVERS:
+    if args.proto not in protocols:
         parser.print_help()
         exit(1)
 

@@ -15,9 +15,9 @@ init:
 
     Invoke-WebRequest $source -OutFile $destination
 
-    $source = "https://slproweb.com/download/Win32OpenSSL-1_0_2j.exe"
+    $source = "https://slproweb.com/download/Win32OpenSSL-1_0_2k.exe"
 
-    $destination = "C:\ovs-build-downloads\Win32OpenSSL-1_0_2j.exe"
+    $destination = "C:\ovs-build-downloads\Win32OpenSSL-1_0_2k.exe"
 
     Invoke-WebRequest $source -OutFile $destination
 
@@ -27,13 +27,13 @@ init:
 
     cd C:\ovs-build-downloads
 
-    .\Win32OpenSSL-1_0_2j.exe /silent /verysilent /sp- /suppressmsgboxes
+    .\Win32OpenSSL-1_0_2k.exe /silent /verysilent /sp- /suppressmsgboxes
 
     Start-Sleep -s 30
 
     cd C:\openvswitch
 
-    python -m pip install six --disable-pip-version-check
+    python -m pip install six pypiwin32 --disable-pip-version-check
 
 build_script:
 - '"C:\Program Files (x86)\Microsoft Visual Studio 12.0\Common7\Tools\VsDevCmd"'

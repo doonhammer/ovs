@@ -954,7 +954,7 @@ ofproto_port_set_stp(struct ofproto *ofproto, ofp_port_t ofp_port,
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure STP on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure STP on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return ENODEV;
     }
@@ -976,7 +976,7 @@ ofproto_port_get_stp_status(struct ofproto *ofproto, ofp_port_t ofp_port,
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
         VLOG_WARN_RL(&rl, "%s: cannot get STP status on nonexistent "
-                     "port %"PRIu16, ofproto->name, ofp_port);
+                     "port %"PRIu32, ofproto->name, ofp_port);
         return ENODEV;
     }
 
@@ -997,7 +997,7 @@ ofproto_port_get_stp_stats(struct ofproto *ofproto, ofp_port_t ofp_port,
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
         VLOG_WARN_RL(&rl, "%s: cannot get STP stats on nonexistent "
-                     "port %"PRIu16, ofproto->name, ofp_port);
+                     "port %"PRIu32, ofproto->name, ofp_port);
         return ENODEV;
     }
 
@@ -1052,7 +1052,7 @@ ofproto_port_set_rstp(struct ofproto *ofproto, ofp_port_t ofp_port,
 {
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure RSTP on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure RSTP on nonexistent port %"PRIu32,
                 ofproto->name, ofp_port);
         return ENODEV;
     }
@@ -1076,7 +1076,7 @@ ofproto_port_get_rstp_status(struct ofproto *ofproto, ofp_port_t ofp_port,
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
         VLOG_WARN_RL(&rl, "%s: cannot get RSTP status on nonexistent "
-                "port %"PRIu16, ofproto->name, ofp_port);
+                "port %"PRIu32, ofproto->name, ofp_port);
         return ENODEV;
     }
 
@@ -1104,7 +1104,7 @@ ofproto_port_set_queues(struct ofproto *ofproto, ofp_port_t ofp_port,
     struct ofport *ofport = ofproto_get_port(ofproto, ofp_port);
 
     if (!ofport) {
-        VLOG_WARN("%s: cannot set queues on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot set queues on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return ENODEV;
     }
@@ -1125,7 +1125,7 @@ ofproto_port_set_lldp(struct ofproto *ofproto,
 
     ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure LLDP on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure LLDP on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return;
     }
@@ -1133,7 +1133,7 @@ ofproto_port_set_lldp(struct ofproto *ofproto,
              ? ofproto->ofproto_class->set_lldp(ofport, cfg)
              : EOPNOTSUPP);
     if (error) {
-        VLOG_WARN("%s: lldp configuration on port %"PRIu16" (%s) failed (%s)",
+        VLOG_WARN("%s: lldp configuration on port %"PRIu32" (%s) failed (%s)",
                   ofproto->name, ofp_port, netdev_get_name(ofport->netdev),
                   ovs_strerror(error));
     }
@@ -1218,7 +1218,7 @@ ofproto_port_set_cfm(struct ofproto *ofproto, ofp_port_t ofp_port,
 
     ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure CFM on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure CFM on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return;
     }
@@ -1230,7 +1230,7 @@ ofproto_port_set_cfm(struct ofproto *ofproto, ofp_port_t ofp_port,
              ? ofproto->ofproto_class->set_cfm(ofport, s)
              : EOPNOTSUPP);
     if (error) {
-        VLOG_WARN("%s: CFM configuration on port %"PRIu16" (%s) failed (%s)",
+        VLOG_WARN("%s: CFM configuration on port %"PRIu32" (%s) failed (%s)",
                   ofproto->name, ofp_port, netdev_get_name(ofport->netdev),
                   ovs_strerror(error));
     }
@@ -1247,7 +1247,7 @@ ofproto_port_set_bfd(struct ofproto *ofproto, ofp_port_t ofp_port,
 
     ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure bfd on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure bfd on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return;
     }
@@ -1256,7 +1256,7 @@ ofproto_port_set_bfd(struct ofproto *ofproto, ofp_port_t ofp_port,
              ? ofproto->ofproto_class->set_bfd(ofport, cfg)
              : EOPNOTSUPP);
     if (error) {
-        VLOG_WARN("%s: bfd configuration on port %"PRIu16" (%s) failed (%s)",
+        VLOG_WARN("%s: bfd configuration on port %"PRIu32" (%s) failed (%s)",
                   ofproto->name, ofp_port, netdev_get_name(ofport->netdev),
                   ovs_strerror(error));
     }
@@ -2069,7 +2069,7 @@ ofproto_port_set_config(struct ofproto *ofproto, ofp_port_t ofp_port,
 
     ofport = ofproto_get_port(ofproto, ofp_port);
     if (!ofport) {
-        VLOG_WARN("%s: cannot configure datapath on nonexistent port %"PRIu16,
+        VLOG_WARN("%s: cannot configure datapath on nonexistent port %"PRIu32,
                   ofproto->name, ofp_port);
         return;
     }
@@ -2078,7 +2078,7 @@ ofproto_port_set_config(struct ofproto *ofproto, ofp_port_t ofp_port,
              ? ofproto->ofproto_class->port_set_config(ofport, cfg)
              : EOPNOTSUPP);
     if (error) {
-        VLOG_WARN("%s: datapath configuration on port %"PRIu16
+        VLOG_WARN("%s: datapath configuration on port %"PRIu32
                   " (%s) failed (%s)",
                   ofproto->name, ofp_port, netdev_get_name(ofport->netdev),
                   ovs_strerror(error));
@@ -2311,7 +2311,7 @@ ofport_open(struct ofproto *ofproto,
 
     error = netdev_open(ofproto_port->name, ofproto_port->type, &netdev);
     if (error) {
-        VLOG_WARN_RL(&rl, "%s: ignoring port %s (%"PRIu16") because netdev %s "
+        VLOG_WARN_RL(&rl, "%s: ignoring port %s (%"PRIu32") because netdev %s "
                      "cannot be opened (%s)",
                      ofproto->name,
                      ofproto_port->name, ofproto_port->ofp_port,
@@ -5885,12 +5885,12 @@ handle_barrier_request(struct ofconn *ofconn, const struct ofp_header *oh)
 static void
 ofproto_compose_flow_refresh_update(const struct rule *rule,
                                     enum nx_flow_monitor_flags flags,
-                                    struct ovs_list *msgs)
+                                    struct ovs_list *msgs,
+                                    const struct tun_table *tun_table)
     OVS_REQUIRES(ofproto_mutex)
 {
     const struct rule_actions *actions;
     struct ofputil_flow_update fu;
-    struct match match;
 
     fu.event = (flags & (NXFMF_INITIAL | NXFMF_ADD)
                 ? NXFME_ADDED : NXFME_MODIFIED);
@@ -5901,8 +5901,7 @@ ofproto_compose_flow_refresh_update(const struct rule *rule,
     ovs_mutex_unlock(&rule->mutex);
     fu.table_id = rule->table_id;
     fu.cookie = rule->flow_cookie;
-    minimatch_expand(&rule->cr.match, &match);
-    fu.match = &match;
+    minimatch_expand(&rule->cr.match, &fu.match);
     fu.priority = rule->cr.priority;
 
     actions = flags & NXFMF_ACTIONS ? rule_get_actions(rule) : NULL;
@@ -5912,7 +5911,7 @@ ofproto_compose_flow_refresh_update(const struct rule *rule,
     if (ovs_list_is_empty(msgs)) {
         ofputil_start_flow_update(msgs);
     }
-    ofputil_append_flow_update(&fu, msgs);
+    ofputil_append_flow_update(&fu, msgs, tun_table);
 }
 
 void
@@ -5926,7 +5925,8 @@ ofmonitor_compose_refresh_updates(struct rule_collection *rules,
         enum nx_flow_monitor_flags flags = rule->monitor_flags;
         rule->monitor_flags = 0;
 
-        ofproto_compose_flow_refresh_update(rule, flags, msgs);
+        ofproto_compose_flow_refresh_update(rule, flags, msgs,
+                ofproto_get_tun_tab(rule->ofproto));
     }
 }
 

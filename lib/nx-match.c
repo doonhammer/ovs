@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1704,25 +1704,52 @@ nxm_stack_pop_check(const struct ofpact_stack *pop,
     return mf_check_dst(&pop->subfield, flow);
 }
 
-/* nxm_execute_stack_push(), nxm_execute_stack_pop(). */
-static void
-nx_stack_push(struct ofpbuf *stack, union mf_subvalue *v)
+/* nxm_execute_stack_push(), nxm_execute_stack_pop().
+ *
+ * A stack is an ofpbuf with 'data' pointing to the bottom of the stack and
+ * 'size' indexing the top of the stack.  Each value of some byte length is
+ * stored to the stack immediately followed by the length of the value as an
+ * unsigned byte.  This way a POP operation can first read the length byte, and
+ * then the appropriate number of bytes from the stack.  This also means that
+ * it is only possible to traverse the stack from top to bottom.  It is
+ * possible, however, to push values also to the bottom of the stack, which is
+ * useful when a stack has been serialized to a wire format in reverse order
+ * (topmost value first).
+ */
+
+/* Push value 'v' of length 'bytes' to the top of 'stack'. */
+void
+nx_stack_push(struct ofpbuf *stack, const void *v, uint8_t bytes)
 {
-    ofpbuf_put(stack, v, sizeof *v);
+    ofpbuf_put(stack, v, bytes);
+    ofpbuf_put(stack, &bytes, sizeof bytes);
 }
 
-static union mf_subvalue *
-nx_stack_pop(struct ofpbuf *stack)
+/* Push value 'v' of length 'bytes' to the bottom of 'stack'. */
+void
+nx_stack_push_bottom(struct ofpbuf *stack, const void *v, uint8_t bytes)
 {
-    union mf_subvalue *v = NULL;
+    ofpbuf_push(stack, &bytes, sizeof bytes);
+    ofpbuf_push(stack, v, bytes);
+}
 
-    if (stack->size) {
-
-        stack->size -= sizeof *v;
-        v = (union mf_subvalue *) ofpbuf_tail(stack);
+/* Pop the topmost value from 'stack', returning a pointer to the value in the
+ * stack and the length of the value in '*bytes'.  In case of underflow a NULL
+ * is returned and length is returned as zero via '*bytes'. */
+void *
+nx_stack_pop(struct ofpbuf *stack, uint8_t *bytes)
+{
+    if (!stack->size) {
+        *bytes = 0;
+        return NULL;
     }
 
-    return v;
+    stack->size -= sizeof *bytes;
+    memcpy(bytes, ofpbuf_tail(stack), sizeof *bytes);
+
+    ovs_assert(stack->size >= *bytes);
+    stack->size -= *bytes;
+    return ofpbuf_tail(stack);
 }
 
 void
@@ -1730,39 +1757,41 @@ nxm_execute_stack_push(const struct ofpact_stack *push,
                        const struct flow *flow, struct flow_wildcards *wc,
                        struct ofpbuf *stack)
 {
-    union mf_subvalue mask_value;
     union mf_subvalue dst_value;
 
-    memset(&mask_value, 0xff, sizeof mask_value);
-    mf_write_subfield_flow(&push->subfield, &mask_value, &wc->masks);
+    mf_write_subfield_flow(&push->subfield,
+                           (union mf_subvalue *)&exact_match_mask,
+                           &wc->masks);
 
     mf_read_subfield(&push->subfield, flow, &dst_value);
-    nx_stack_push(stack, &dst_value);
+    uint8_t bytes = DIV_ROUND_UP(push->subfield.n_bits, 8);
+    nx_stack_push(stack, &dst_value.u8[sizeof dst_value - bytes], bytes);
 }
 
-void
+bool
 nxm_execute_stack_pop(const struct ofpact_stack *pop,
                       struct flow *flow, struct flow_wildcards *wc,
                       struct ofpbuf *stack)
 {
-    union mf_subvalue *src_value;
+    uint8_t src_bytes;
+    const void *src = nx_stack_pop(stack, &src_bytes);
+    if (src) {
+        union mf_subvalue src_value;
+        uint8_t dst_bytes = DIV_ROUND_UP(pop->subfield.n_bits, 8);
 
-    src_value = nx_stack_pop(stack);
-
-    /* Only pop if stack is not empty. Otherwise, give warning. */
-    if (src_value) {
-        union mf_subvalue mask_value;
-
-        memset(&mask_value, 0xff, sizeof mask_value);
-        mf_write_subfield_flow(&pop->subfield, &mask_value, &wc->masks);
-        mf_write_subfield_flow(&pop->subfield, src_value, flow);
-    } else {
-        if (!VLOG_DROP_WARN(&rl)) {
-            char *flow_str = flow_to_string(flow);
-            VLOG_WARN_RL(&rl, "Failed to pop from an empty stack. On flow\n"
-                           " %s", flow_str);
-            free(flow_str);
+        if (src_bytes < dst_bytes) {
+            memset(&src_value.u8[sizeof src_value - dst_bytes], 0,
+                   dst_bytes - src_bytes);
         }
+        memcpy(&src_value.u8[sizeof src_value - src_bytes], src, src_bytes);
+        mf_write_subfield_flow(&pop->subfield,
+                               (union mf_subvalue *)&exact_match_mask,
+                               &wc->masks);
+        mf_write_subfield_flow(&pop->subfield, &src_value, flow);
+        return true;
+    } else {
+        /* Attempted to pop from an empty stack. */
+        return false;
     }
 }
 
@@ -1812,7 +1841,7 @@ mf_parse_subfield_name(const char *name, int name_len, bool *wild)
 char * OVS_WARN_UNUSED_RESULT
 mf_parse_subfield__(struct mf_subfield *sf, const char **sp)
 {
-    const struct mf_field *field;
+    const struct mf_field *field = NULL;
     const struct nxm_field *f;
     const char *name;
     int start, end;
@@ -1822,30 +1851,31 @@ mf_parse_subfield__(struct mf_subfield *sf, const char **sp)
 
     s = *sp;
     name = s;
-    name_len = strcspn(s, "[");
-    if (s[name_len] != '[') {
-        return xasprintf("%s: missing [ looking for field name", *sp);
-    }
+    name_len = strcspn(s, "[-");
 
     f = mf_parse_subfield_name(name, name_len, &wild);
-    if (!f) {
+    field = f ? mf_from_id(f->id) : mf_from_name_len(name, name_len);
+    if (!field) {
         return xasprintf("%s: unknown field `%.*s'", *sp, name_len, s);
     }
-    field = mf_from_id(f->id);
 
     s += name_len;
-    if (ovs_scan(s, "[%d..%d]", &start, &end)) {
-        /* Nothing to do. */
-    } else if (ovs_scan(s, "[%d]", &start)) {
-        end = start;
-    } else if (!strncmp(s, "[]", 2)) {
-        start = 0;
-        end = field->n_bits - 1;
-    } else {
-        return xasprintf("%s: syntax error expecting [] or [<bit>] or "
-                         "[<start>..<end>]", *sp);
+    /* Assume full field. */
+    start = 0;
+    end = field->n_bits - 1;
+    if (*s == '[') {
+        if (!strncmp(s, "[]", 2)) {
+            /* Nothing to do. */
+        } else if (ovs_scan(s, "[%d..%d]", &start, &end)) {
+            /* Nothing to do. */
+        } else if (ovs_scan(s, "[%d]", &start)) {
+            end = start;
+        } else {
+            return xasprintf("%s: syntax error expecting [] or [<bit>] or "
+                             "[<start>..<end>]", *sp);
+        }
+        s = strchr(s, ']') + 1;
     }
-    s = strchr(s, ']') + 1;
 
     if (start > end) {
         return xasprintf("%s: starting bit %d is after ending bit %d",

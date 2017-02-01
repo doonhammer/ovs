@@ -15,6 +15,7 @@ addons:
       - llvm-dev
       - libjemalloc1
       - libjemalloc-dev
+      - python-sphinx
 
 before_install: ./.travis/${TRAVIS_OS_NAME}-prepare.sh
 
@@ -49,4 +50,4 @@ script: ./.travis/${TRAVIS_OS_NAME}-build.sh $OPTS
 notifications:
   email:
     recipients:
-      - build@openvswitch.org
+      - ovs-build@openvswitch.org

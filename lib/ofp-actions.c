@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Nicira, Inc.
+ * Copyright (c) 2008-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -328,6 +328,9 @@ enum ofp_raw_action_type {
     /* NX1.0+(42): struct ext_action_header, ... */
     NXAST_RAW_CLONE,
 
+    /* NX1.0+(43): void. */
+    NXAST_RAW_CT_CLEAR,
+
 /* ## ------------------ ## */
 /* ## Debugging actions. ## */
 /* ## ------------------ ## */
@@ -449,6 +452,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_EXIT:
     case OFPACT_SAMPLE:
     case OFPACT_UNROLL_XLATE:
+    case OFPACT_CT_CLEAR:
     case OFPACT_DEBUG_RECIRC:
     case OFPACT_METER:
     case OFPACT_CLEAR_ACTIONS:
@@ -609,25 +613,30 @@ static char * OVS_WARN_UNUSED_RESULT
 parse_OUTPUT(const char *arg, struct ofpbuf *ofpacts,
              enum ofputil_protocol *usable_protocols OVS_UNUSED)
 {
-    if (strchr(arg, '[')) {
-        struct ofpact_output_reg *output_reg;
-
-        output_reg = ofpact_put_OUTPUT_REG(ofpacts);
-        output_reg->max_len = UINT16_MAX;
-        return mf_parse_subfield(&output_reg->src, arg);
-    } else if (strstr(arg, "port") && strstr(arg, "max_len")) {
+    if (strstr(arg, "port") && strstr(arg, "max_len")) {
         struct ofpact_output_trunc *output_trunc;
 
         output_trunc = ofpact_put_OUTPUT_TRUNC(ofpacts);
         return parse_truncate_subfield(output_trunc, arg);
     } else {
-        struct ofpact_output *output;
+        struct mf_subfield src;
+        char *error = mf_parse_subfield(&src, arg);
+        if (!error) {
+            struct ofpact_output_reg *output_reg;
 
-        output = ofpact_put_OUTPUT(ofpacts);
-        if (!ofputil_port_from_string(arg, &output->port)) {
-            return xasprintf("%s: output to unknown port", arg);
+            output_reg = ofpact_put_OUTPUT_REG(ofpacts);
+            output_reg->max_len = UINT16_MAX;
+            output_reg->src = src;
+        } else {
+            free(error);
+            struct ofpact_output *output;
+
+            output = ofpact_put_OUTPUT(ofpacts);
+            if (!ofputil_port_from_string(arg, &output->port)) {
+                return xasprintf("%s: output to unknown port", arg);
+            }
+            output->max_len = output->port == OFPP_CONTROLLER ? UINT16_MAX : 0;
         }
-        output->max_len = output->port == OFPP_CONTROLLER ? UINT16_MAX : 0;
         return NULL;
     }
 }
@@ -636,7 +645,7 @@ static void
 format_OUTPUT(const struct ofpact_output *a, struct ds *s)
 {
     if (ofp_to_u16(a->port) < ofp_to_u16(OFPP_MAX)) {
-        ds_put_format(s, "%soutput:%s%"PRIu16,
+        ds_put_format(s, "%soutput:%s%"PRIu32,
                       colors.special, colors.end, a->port);
     } else {
         ofputil_format_port(a->port, s);
@@ -2375,28 +2384,7 @@ parse_REG_MOVE(const char *arg, struct ofpbuf *ofpacts,
                enum ofputil_protocol *usable_protocols OVS_UNUSED)
 {
     struct ofpact_reg_move *move = ofpact_put_REG_MOVE(ofpacts);
-    const char *full_arg = arg;
-    char *error;
-
-    error = mf_parse_subfield__(&move->src, &arg);
-    if (error) {
-        return error;
-    }
-    if (strncmp(arg, "->", 2)) {
-        return xasprintf("%s: missing `->' following source", full_arg);
-    }
-    arg += 2;
-    error = mf_parse_subfield(&move->dst, arg);
-    if (error) {
-        return error;
-    }
-
-    if (move->src.n_bits != move->dst.n_bits) {
-        return xasprintf("%s: source field is %d bits wide but destination is "
-                         "%d bits wide", full_arg,
-                         move->src.n_bits, move->dst.n_bits);
-    }
-    return NULL;
+    return nxm_parse_reg_move(move, arg);
 }
 
 static void
@@ -5089,7 +5077,7 @@ format_SAMPLE(const struct ofpact_sample *a, struct ds *s)
                   colors.param, colors.end, a->obs_domain_id,
                   colors.param, colors.end, a->obs_point_id);
     if (a->sampling_port != OFPP_NONE) {
-        ds_put_format(s, ",%ssampling_port=%s%"PRIu16,
+        ds_put_format(s, ",%ssampling_port=%s%"PRIu32,
                       colors.param, colors.end, a->sampling_port);
     }
     if (a->direction == NX_ACTION_SAMPLE_INGRESS) {
@@ -5454,10 +5442,19 @@ parse_CT(char *arg, struct ofpbuf *ofpacts,
 static void
 format_alg(int port, struct ds *s)
 {
-    if (port == IPPORT_FTP) {
+    switch(port) {
+    case IPPORT_FTP:
         ds_put_format(s, "%salg=%sftp,", colors.param, colors.end);
-    } else if (port) {
+        break;
+    case IPPORT_TFTP:
+        ds_put_format(s, "%salg=%stftp,", colors.param, colors.end);
+        break;
+    case 0:
+        /* Don't print. */
+        break;
+    default:
         ds_put_format(s, "%salg=%s%d,", colors.param, colors.end, port);
+        break;
     }
 }
 
@@ -5502,6 +5499,36 @@ format_CT(const struct ofpact_conntrack *a, struct ds *s)
     ds_put_format(s, "%s)%s", colors.paren, colors.end);
 }
 
+/* ct_clear action. */
+
+static enum ofperr
+decode_NXAST_RAW_CT_CLEAR(struct ofpbuf *out)
+{
+    ofpact_put_CT_CLEAR(out);
+    return 0;
+}
+
+static void
+encode_CT_CLEAR(const struct ofpact_null *null OVS_UNUSED,
+                enum ofp_version ofp_version OVS_UNUSED,
+                struct ofpbuf *out)
+{
+    put_NXAST_CT_CLEAR(out);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_CT_CLEAR(char *arg OVS_UNUSED, struct ofpbuf *ofpacts,
+               enum ofputil_protocol *usable_protocols OVS_UNUSED)
+{
+    ofpact_put_CT_CLEAR(ofpacts);
+    return NULL;
+}
+
+static void
+format_CT_CLEAR(const struct ofpact_null *a OVS_UNUSED, struct ds *s)
+{
+    ds_put_format(s, "%sct_clear%s", colors.value, colors.end);
+}
 /* NAT action. */
 
 /* Which optional fields are present? */
@@ -5906,7 +5933,7 @@ parse_OUTPUT_TRUNC(const char *arg, struct ofpbuf *ofpacts OVS_UNUSED,
 static void
 format_OUTPUT_TRUNC(const struct ofpact_output_trunc *a, struct ds *s)
 {
-     ds_put_format(s, "%soutput%s(port=%"PRIu16",max_len=%"PRIu32")",
+     ds_put_format(s, "%soutput%s(port=%"PRIu32",max_len=%"PRIu32")",
                    colors.special, colors.end, a->port, a->max_len);
 }
 
@@ -6287,6 +6314,7 @@ ofpact_is_set_or_move_action(const struct ofpact *a)
     case OFPACT_BUNDLE:
     case OFPACT_CLEAR_ACTIONS:
     case OFPACT_CT:
+    case OFPACT_CT_CLEAR:
     case OFPACT_CLONE:
     case OFPACT_NAT:
     case OFPACT_CONTROLLER:
@@ -6367,6 +6395,7 @@ ofpact_is_allowed_in_actions_set(const struct ofpact *a)
     case OFPACT_CLONE:
     case OFPACT_CONTROLLER:
     case OFPACT_CT:
+    case OFPACT_CT_CLEAR:
     case OFPACT_NAT:
     case OFPACT_ENQUEUE:
     case OFPACT_EXIT:
@@ -6601,6 +6630,7 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type)
     case OFPACT_SAMPLE:
     case OFPACT_DEBUG_RECIRC:
     case OFPACT_CT:
+    case OFPACT_CT_CLEAR:
     case OFPACT_NAT:
     default:
         return OVSINST_OFPIT11_APPLY_ACTIONS;
@@ -7170,7 +7200,8 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
 
         if (!dl_type_is_ip_any(flow->dl_type)
             || (flow->ct_state & CS_INVALID && oc->flags & NX_CT_F_COMMIT)
-            || (oc->alg == IPPORT_FTP && flow->nw_proto != IPPROTO_TCP)) {
+            || (oc->alg == IPPORT_FTP && flow->nw_proto != IPPROTO_TCP)
+            || (oc->alg == IPPORT_TFTP && flow->nw_proto != IPPROTO_UDP)) {
             /* We can't downgrade to OF1.0 and expect inconsistent CT actions
              * be silently discarded.  Instead, datapath flow install fails, so
              * it is better to flag inconsistent CT actions as hard errors. */
@@ -7185,6 +7216,9 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
                              flow, max_ports, table_id, n_tables,
                              usable_protocols);
     }
+
+    case OFPACT_CT_CLEAR:
+        return 0;
 
     case OFPACT_NAT: {
         struct ofpact_nat *on = ofpact_get_NAT(a);
@@ -7727,6 +7761,7 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
     case OFPACT_GROUP:
     case OFPACT_DEBUG_RECIRC:
     case OFPACT_CT:
+    case OFPACT_CT_CLEAR:
     case OFPACT_NAT:
     default:
         return false;

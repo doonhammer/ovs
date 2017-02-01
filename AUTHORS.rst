@@ -39,6 +39,7 @@ Alexei Starovoitov              ast@plumgrid.com
 Alexey I. Froloff               raorn@raorn.name
 Alex Wang                       ee07b291@gmail.com
 Alfredo Finelli                 alf@computationes.de
+Alin Balutoiu                   abalutoiu@cloudbasesolutions.com
 Alin Serdean                    aserdean@cloudbasesolutions.com
 Ambika Arora                    ambika.arora@tcs.com
 Amit Bose                       bose@noironetworks.com
@@ -189,6 +190,7 @@ Luca Giraudo                    lgiraudo@nicira.com
 Lucian Petrut                   lpetrut@cloudbasesolutions.com
 Luigi Rizzo                     rizzo@iet.unipi.it
 Luis E. P.                      l31g@hotmail.com
+Lukasz Rzasik                   lukasz.rzasik@gmail.com
 Madhu Challa                    challa@noironetworks.com
 Mario Cabrera                   mario.cabrera@hpe.com
 Mark D. Gray                    mark.d.gray@intel.com
@@ -241,6 +243,7 @@ Rishi Bamba                     rishi.bamba@tcs.com
 Rob Adams                       readams@readams.net
 Robert Åkerblom-Andersson       Robert.nr1@gmail.com
 Rob Hoes                        rob.hoes@citrix.com
+Roi Dayan                       roid@mellanox.com
 Romain Lenglet                  romain.lenglet@berabera.info
 Russell Bryant                  russell@ovn.org
 RYAN D. MOATS                   rmoats@us.ibm.com
@@ -256,6 +259,7 @@ Saurabh Shrivastava             saurabh.shrivastava@nuagenetworks.net
 Scott Lowe                      scott.lowe@scottlowe.org
 Scott Mann                      sdmnix@gmail.com
 Selvamuthukumar                 smkumar@merunetworks.com
+Sha Zhang                       zhangsha.zhang@huawei.com
 Shad Ansari                     shad.ansari@hpe.com
 Shan Wei                        davidshan@tencent.com
 Shashank Ram                    rams@vmware.com
@@ -283,6 +287,7 @@ Thomas Lacroix                  thomas.lacroix@citrix.com
 Timo Puha                       timox.puha@intel.com
 Todd Deshane                    deshantm@gmail.com
 Tom Everman                     teverman@google.com
+Torgny Lindberg                 torgny.lindberg@ericsson.com
 Tsvi Slonim                     tsvi@toroki.com
 Tuan Nguyen                     tuan.nguyen@veriksystems.com
 Tyler Coumbes                   coumbes@gmail.com
@@ -309,6 +314,8 @@ nickcooper-zhangtonghao         nickcooper-zhangtonghao@opencloud.tech
 wisd0me                         ak47izatool@gmail.com
 xushengping                     shengping.xu@huawei.com
 yinpeijun                       yinpeijun@huawei.com
+zangchuanqiang                  zangchuanqiang@huawei.com
+zhaojingjing                    zhao.jingjing1@zte.com.cn
 =============================== ===============================================
 
 The following additional people are mentioned in commit logs as having
@@ -365,6 +372,7 @@ Derek Cormier                   derek.cormier@lab.ntt.co.jp
 Dhaval Badiani                  dbadiani@vmware.com
 DK Moon                         dkmoon@nicira.com
 Ding Zhi                        zhi.ding@6wind.com
+Dong Jun                        dongj@dtdream.com
 Dustin Spinhirne                dspinhirne@vmware.com
 Edwin Chiu                      echiu@vmware.com
 Eivind Bulie Haanaes
@@ -424,6 +432,7 @@ Konstantin Khorenko             khorenko@openvz.org
 Kris zhang                      zhang.kris@gmail.com
 Krishna Miriyala                krishna@nicira.com
 Krishna Mohan Elluru            elluru.kri.mohan@hpe.com
+László Sürü                     laszlo.suru@ericsson.com
 Len Gao                         leng@vmware.com
 Logan Rosen                     logatronico@gmail.com
 Luca Falavigna                  dktrkranz@debian.org

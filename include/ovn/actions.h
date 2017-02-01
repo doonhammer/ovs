@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,11 +55,13 @@ struct simap;
     OVNACT(MOVE,          ovnact_move)              \
     OVNACT(EXCHANGE,      ovnact_move)              \
     OVNACT(DEC_TTL,       ovnact_null)              \
-    OVNACT(CT_NEXT,       ovnact_next)              \
+    OVNACT(CT_NEXT,       ovnact_ct_next)           \
     OVNACT(CT_COMMIT,     ovnact_ct_commit)         \
     OVNACT(CT_DNAT,       ovnact_ct_nat)            \
     OVNACT(CT_SNAT,       ovnact_ct_nat)            \
     OVNACT(CT_LB,         ovnact_ct_lb)             \
+    OVNACT(CT_CLEAR,      ovnact_null)              \
+    OVNACT(CLONE,         ovnact_nest)              \
     OVNACT(ARP,           ovnact_nest)              \
     OVNACT(ND_NA,         ovnact_nest)              \
     OVNACT(GET_ARP,       ovnact_get_mac_bind)      \
@@ -139,10 +141,26 @@ struct ovnact_null {
     struct ovnact ovnact;
 };
 
-/* OVNACT_NEXT, OVNACT_CT_NEXT. */
+/* Logical pipeline in which a set of actions is executed. */
+enum ovnact_pipeline {
+    OVNACT_P_INGRESS,
+    OVNACT_P_EGRESS,
+};
+
+/* OVNACT_NEXT. */
 struct ovnact_next {
     struct ovnact ovnact;
-    uint8_t ltable;             /* Logical table ID of next table. */
+
+    /* Arguments. */
+    uint8_t ltable;                /* Logical table ID of next table. */
+    enum ovnact_pipeline pipeline; /* Pipeline of next table. */
+
+    /* Information about the flow that the action is in.  This does not affect
+     * behavior, since the implementation of "next" doesn't depend on the
+     * source table or pipeline.  It does affect how ovnacts_format() prints
+     * the action. */
+    uint8_t src_ltable;                /* Logical table ID of source table. */
+    enum ovnact_pipeline src_pipeline; /* Pipeline of source table. */
 };
 
 /* OVNACT_LOAD. */
@@ -157,6 +175,12 @@ struct ovnact_move {
     struct ovnact ovnact;
     struct expr_field lhs;
     struct expr_field rhs;
+};
+
+/* OVNACT_CT_NEXT. */
+struct ovnact_ct_next {
+    struct ovnact ovnact;
+    uint8_t ltable;                /* Logical table ID of next table. */
 };
 
 /* OVNACT_CT_COMMIT. */
@@ -186,7 +210,7 @@ struct ovnact_ct_lb {
     uint8_t ltable;             /* Logical table ID of next table. */
 };
 
-/* OVNACT_ARP, OVNACT_ND_NA. */
+/* OVNACT_ARP, OVNACT_ND_NA, OVNACT_CLONE. */
 struct ovnact_nest {
     struct ovnact ovnact;
     struct ovnact *nested;
@@ -381,22 +405,26 @@ struct ovnact_parse_params {
     /* hmap of 'struct dhcp_opts_map'  to support 'put_dhcpv6_opts' action */
     const struct hmap *dhcpv6_opts;
 
-    /* OVN maps each logical flow table (ltable), one-to-one, onto a physical
-     * OpenFlow flow table (ptable).  A number of parameters describe this
-     * mapping and data related to flow tables:
+    /* Each OVN flow exists in a logical table within a logical pipeline.
+     * These parameters express this context for a set of OVN actions being
+     * parsed:
      *
-     *     - 'first_ptable' and 'n_tables' define the range of OpenFlow tables
-     *        to which the logical "next" action should be able to jump.
-     *        Logical table 0 maps to OpenFlow table 'first_ptable', logical
-     *        table 1 to 'first_ptable + 1', and so on.  If 'n_tables' is 0
-     *        then "next" is disallowed entirely.
+     *     - 'n_tables' is the number of tables in the logical ingress and
+     *        egress pipelines, that is, "next" may specify a table less than
+     *        or equal to 'n_tables'.  If 'n_tables' is 0 then "next" is
+     *        disallowed entirely.
      *
-     *     - 'cur_ltable' is an offset from 'first_ptable' (e.g. 0 <=
-     *       cur_ltable < n_tables) of the logical flow that contains the
-     *       actions.  If cur_ltable + 1 < n_tables, then this defines the
-     *       default table that "next" will jump to. */
-    uint8_t n_tables;           /* Number of flow tables. */
-    uint8_t cur_ltable;         /* 0 <= cur_ltable < n_tables. */
+     *     - 'cur_ltable' is the logical table of the current flow, within
+     *       'pipeline'.  If cur_ltable + 1 < n_tables, then this defines the
+     *       default table that "next" will jump to.
+     *
+     *     - 'pipeline' is the logical pipeline.  It is the default pipeline to
+     *       which 'next' will jump.  If 'pipeline' is OVNACT_P_EGRESS, then
+     *       'next' will also be able to jump into the ingress pipeline, but
+     *       the reverse is not true. */
+    enum ovnact_pipeline pipeline; /* Logical pipeline. */
+    uint8_t n_tables;              /* Number of logical flow tables. */
+    uint8_t cur_ltable;            /* 0 <= cur_ltable < n_tables. */
 };
 
 bool ovnacts_parse(struct lexer *, const struct ovnact_parse_params *,
@@ -417,6 +445,9 @@ struct ovnact_encode_params {
     /* 'true' if the flow is for a switch. */
     bool is_switch;
 
+    /* 'true' if the flow is for a gateway router. */
+    bool is_gateway_router;
+
     /* A map from a port name to its connection tracking zone. */
     const struct simap *ct_zones;
 
@@ -427,20 +458,23 @@ struct ovnact_encode_params {
      * OpenFlow flow table (ptable).  A number of parameters describe this
      * mapping and data related to flow tables:
      *
-     *     - 'first_ptable' and 'n_tables' define the range of OpenFlow tables
-     *        to which the logical "next" action should be able to jump.
-     *        Logical table 0 maps to OpenFlow table 'first_ptable', logical
-     *        table 1 to 'first_ptable + 1', and so on.  If 'n_tables' is 0
-     *        then "next" is disallowed entirely.
+     *     - 'pipeline' is the logical pipeline in which the actions are
+     *       executing.
      *
-     *     - 'cur_ltable' is an offset from 'first_ptable' (e.g. 0 <=
-     *       cur_ltable < n_ptables) of the logical flow that contains the
-     *       actions.  If cur_ltable + 1 < n_tables, then this defines the
-     *       default table that "next" will jump to.
+     *     - 'ingress_ptable' is the OpenFlow table that corresponds to OVN
+     *       ingress table 0.
+     *
+     *     - 'egress_ptable' is the OpenFlow table that corresponds to OVN
+     *       egress table 0.
      *
      *     - 'output_ptable' should be the OpenFlow table to which the logical
-     *       "output" action will resubmit. */
-    uint8_t first_ptable;       /* First OpenFlow table. */
+     *       "output" action will resubmit.
+     *
+     *     - 'mac_bind_ptable' should be the OpenFlow table used to track MAC
+     *       bindings. */
+    enum ovnact_pipeline pipeline; /* Logical pipeline. */
+    uint8_t ingress_ptable;     /* First OpenFlow ingress table. */
+    uint8_t egress_ptable;      /* First OpenFlow egress table. */
     uint8_t output_ptable;      /* OpenFlow table for 'output' to resubmit. */
     uint8_t mac_bind_ptable;    /* OpenFlow table for 'get_arp'/'get_nd' to
                                    resubmit. */

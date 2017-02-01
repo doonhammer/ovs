@@ -1,4 +1,4 @@
-# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+# Copyright (C) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -15,7 +15,7 @@ lib_libopenvswitch_la_LIBADD += ${PTHREAD_LIBS}
 endif
 
 lib_libopenvswitch_la_LDFLAGS = \
-        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+        $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/lib/libopenvswitch.sym \
         $(AM_LDFLAGS)
 
@@ -328,7 +328,7 @@ CLEANFILES += $(nodist_lib_libopenvswitch_la_SOURCES)
 
 lib_LTLIBRARIES += lib/libsflow.la
 lib_libsflow_la_LDFLAGS = \
-        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+        $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/lib/libsflow.sym \
         $(AM_LDFLAGS)
 lib_libsflow_la_SOURCES = \
@@ -429,8 +429,8 @@ lib_libopenvswitch_la_SOURCES += lib/stream-nossl.c
 endif
 
 pkgconfig_DATA += \
-	$(srcdir)/lib/libopenvswitch.pc \
-	$(srcdir)/lib/libsflow.pc
+	lib/libopenvswitch.pc \
+	lib/libsflow.pc
 
 EXTRA_DIST += \
 	lib/dh1024.pem \
@@ -441,6 +441,7 @@ EXTRA_DIST += \
 	lib/dirs.c.in \
 	lib/db-ctl-base.xml \
 	lib/ssl.xml \
+	lib/ssl-bootstrap.xml \
 	lib/vlog.xml
 
 MAN_FRAGMENTS += \
@@ -494,10 +495,12 @@ lib/dirs.c: lib/dirs.c.in Makefile
 	mv lib/dirs.c.tmp lib/dirs.c
 
 lib/meta-flow.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h
-	$(AM_V_GEN)$(run_python) $^ --meta-flow > $@.tmp && mv $@.tmp $@
+	$(AM_V_GEN)$(run_python) $< meta-flow $(srcdir)/include/openvswitch/meta-flow.h > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
 lib/meta-flow.lo: lib/meta-flow.inc
-lib/nx-match.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h
-	$(AM_V_GEN)$(run_python) $^ --nx-match > $@.tmp && mv $@.tmp $@
+lib/nx-match.inc: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h 
+	$(AM_V_GEN)$(run_python) $< nx-match $(srcdir)/include/openvswitch/meta-flow.h > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
 lib/nx-match.lo: lib/nx-match.inc
 CLEANFILES += lib/meta-flow.inc lib/nx-match.inc
 EXTRA_DIST += build-aux/extract-ofp-fields
@@ -534,3 +537,13 @@ lib-install-data-local:
 	$(MKDIR_P) $(DESTDIR)$(LOGDIR)
 	$(MKDIR_P) $(DESTDIR)$(DBDIR)
 	$(MKDIR_P) $(DESTDIR)$(sysconfdir)/openvswitch
+
+man_MANS += lib/ovs-fields.7
+CLEANFILES += lib/ovs-fields.7
+lib/ovs-fields.7: $(srcdir)/build-aux/extract-ofp-fields include/openvswitch/meta-flow.h lib/meta-flow.xml
+	$(AM_V_GEN)PYTHONIOENCODING=utf8 $(run_python) $< \
+            --ovs-version=$(VERSION) ovs-fields \
+	    $(srcdir)/include/openvswitch/meta-flow.h \
+            $(srcdir)/lib/meta-flow.xml > $@.tmp
+	$(AM_V_at)mv $@.tmp $@
+EXTRA_DIST += lib/meta-flow.xml

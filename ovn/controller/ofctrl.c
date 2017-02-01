@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include "bitmap.h"
 #include "byte-order.h"
 #include "dirs.h"
+#include "dp-packet.h"
 #include "flow.h"
 #include "hash.h"
 #include "lflow.h"
@@ -57,6 +58,7 @@ struct ovn_flow {
     /* Data. */
     struct ofpact *ofpacts;
     size_t ofpacts_len;
+    uint64_t cookie;
 };
 
 static uint32_t ovn_flow_hash(const struct ovn_flow *);
@@ -68,6 +70,9 @@ static void ovn_flow_destroy(struct ovn_flow *);
 
 /* OpenFlow connection to the switch. */
 static struct rconn *swconn;
+
+/* Symbol table for OVN expressions. */
+static struct shash symtab;
 
 /* Last seen sequence number for 'swconn'.  When this differs from
  * rconn_get_connection_seqno(rconn), 'swconn' has reconnected. */
@@ -151,6 +156,7 @@ ofctrl_init(struct group_table *group_table)
     tx_counter = rconn_packet_counter_create();
     hmap_init(&installed_flows);
     ovs_list_init(&flow_updates);
+    ovn_init_symtab(&symtab);
     groups = group_table;
 }
 
@@ -543,6 +549,7 @@ ofctrl_destroy(void)
     rconn_destroy(swconn);
     ovn_flow_table_destroy(&installed_flows);
     rconn_packet_counter_destroy(tx_counter);
+    shash_destroy(&symtab);
 }
 
 int64_t
@@ -592,8 +599,8 @@ ofctrl_recv(const struct ofp_header *oh, enum ofptype type)
 /* Flow table interfaces to the rest of ovn-controller. */
 
 /* Adds a flow to 'desired_flows' with the specified 'match' and 'actions' to
- * the OpenFlow table numbered 'table_id' with the given 'priority'.  The
- * caller retains ownership of 'match' and 'actions'.
+ * the OpenFlow table numbered 'table_id' with the given 'priority' and
+ * OpenFlow 'cookie'.  The caller retains ownership of 'match' and 'actions'.
  *
  * This just assembles the desired flow table in memory.  Nothing is actually
  * sent to the switch until a later call to ofctrl_run().
@@ -601,8 +608,9 @@ ofctrl_recv(const struct ofp_header *oh, enum ofptype type)
  * The caller should initialize its own hmap to hold the flows. */
 void
 ofctrl_add_flow(struct hmap *desired_flows,
-                uint8_t table_id, uint16_t priority,
-                const struct match *match, const struct ofpbuf *actions)
+                uint8_t table_id, uint16_t priority, uint64_t cookie,
+                const struct match *match,
+                const struct ofpbuf *actions)
 {
     struct ovn_flow *f = xmalloc(sizeof *f);
     f->table_id = table_id;
@@ -611,6 +619,7 @@ ofctrl_add_flow(struct hmap *desired_flows,
     f->ofpacts = xmemdup(actions->data, actions->size);
     f->ofpacts_len = actions->size;
     f->hmap_node.hash = ovn_flow_hash(f);
+    f->cookie = cookie;
 
     if (ovn_flow_lookup(desired_flows, f)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
@@ -935,6 +944,7 @@ ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
             .table_id = d->table_id,
             .ofpacts = d->ofpacts,
             .ofpacts_len = d->ofpacts_len,
+            .new_cookie = htonll(d->cookie),
             .command = OFPFC_ADD,
         };
         add_flow_mod(&fm, &msgs);
@@ -1062,4 +1072,97 @@ ofctrl_put(struct hmap *flow_table, struct shash *pending_ct_zones,
         /* We were completely up-to-date before and still are. */
         cur_cfg = nb_cfg;
     }
+}
+
+/* Looks up the logical port with the name 'port_name' in 'br_int_'.  If
+ * found, returns true and sets '*portp' to the OpenFlow port number
+ * assigned to the port.  Otherwise, returns false. */
+static bool
+ofctrl_lookup_port(const void *br_int_, const char *port_name,
+                   unsigned int *portp)
+{
+    const struct ovsrec_bridge *br_int = br_int_;
+
+    for (int i = 0; i < br_int->n_ports; i++) {
+        const struct ovsrec_port *port_rec = br_int->ports[i];
+        for (int j = 0; j < port_rec->n_interfaces; j++) {
+            const struct ovsrec_interface *iface_rec = port_rec->interfaces[j];
+            const char *iface_id = smap_get(&iface_rec->external_ids,
+                                            "iface-id");
+
+            if (iface_id && !strcmp(iface_id, port_name)) {
+                if (!iface_rec->n_ofport) {
+                    continue;
+                }
+
+                int64_t ofport = iface_rec->ofport[0];
+                if (ofport < 1 || ofport > ofp_to_u16(OFPP_MAX)) {
+                    continue;
+                }
+                *portp = ofport;
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/* Generates a packet described by 'flow_s' in the syntax of an OVN
+ * logical expression and injects it into 'br_int'.  The flow
+ * description must contain an ingress logical port that is present on
+ * 'br_int'.
+ *
+ * Returns NULL if successful, otherwise an error message that the caller
+ * must free(). */
+char *
+ofctrl_inject_pkt(const struct ovsrec_bridge *br_int, const char *flow_s,
+                  const struct shash *addr_sets)
+{
+    int version = rconn_get_version(swconn);
+    if (version < 0) {
+        return xstrdup("OpenFlow channel not ready.");
+    }
+
+    struct flow uflow;
+    char *error = expr_parse_microflow(flow_s, &symtab, addr_sets,
+                                       ofctrl_lookup_port, br_int, &uflow);
+    if (error) {
+        return error;
+    }
+
+    /* The physical OpenFlow port was stored in the logical ingress
+     * port, so put it in the correct location for a flow structure. */
+    uflow.in_port.ofp_port = u16_to_ofp(uflow.regs[MFF_LOG_INPORT - MFF_REG0]);
+    uflow.regs[MFF_LOG_INPORT - MFF_REG0] = 0;
+
+    if (!uflow.in_port.ofp_port) {
+        return xstrdup("ingress port not found on hypervisor.");
+    }
+
+    uint64_t packet_stub[128 / 8];
+    struct dp_packet packet;
+    dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+    flow_compose(&packet, &uflow);
+
+    uint64_t ofpacts_stub[1024 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_IN_PORT;
+    resubmit->table_id = 0;
+
+    struct ofputil_packet_out po = {
+        .packet = dp_packet_data(&packet),
+        .packet_len = dp_packet_size(&packet),
+        .buffer_id = UINT32_MAX,
+        .in_port = uflow.in_port.ofp_port,
+        .ofpacts = ofpacts.data,
+        .ofpacts_len = ofpacts.size,
+    };
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    queue_msg(ofputil_encode_packet_out(&po, proto));
+    dp_packet_uninit(&packet);
+    ofpbuf_uninit(&ofpacts);
+
+    return NULL;
 }

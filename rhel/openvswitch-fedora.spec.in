@@ -355,7 +355,10 @@ ln -sf %{_datadir}/openvswitch/scripts/ovndb-servers.ocf /usr/lib/ocf/resource.d
 %endif
 
 %postun ovn-common
-rm -rf /usr/lib/ocf/resource.d/ovn
+if [ $1 -eq 0 ] ; then
+    # Package removal, not upgrade
+    rm -rf /usr/lib/ocf/resource.d/ovn
+fi
 
 %postun ovn-central
 %if 0%{?systemd_postun_with_restart:1}
@@ -469,6 +472,7 @@ fi
 %{_mandir}/man1/ovsdb-tool.1*
 %{_mandir}/man5/ovs-vswitchd.conf.db.5*
 %{_mandir}/man5/vtep.5*
+%{_mandir}/man7/ovs-fields.7*
 %{_mandir}/man8/vtep-ctl.8*
 %{_mandir}/man8/ovs-appctl.8*
 %{_mandir}/man8/ovs-bugtool.8*

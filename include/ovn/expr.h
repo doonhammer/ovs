@@ -292,6 +292,15 @@ enum expr_type {
     EXPR_T_AND,                 /* Logical AND of 2 or more subexpressions. */
     EXPR_T_OR,                  /* Logical OR of 2 or more subexpressions. */
     EXPR_T_BOOLEAN,             /* True or false constant. */
+    EXPR_T_CONDITION,           /* Conditional to be evaluated in the
+                                 * controller during expr_simplify(),
+                                 * prior to constructing OpenFlow matches. */
+};
+
+/* Expression condition type. */
+enum expr_cond_type {
+    EXPR_COND_CHASSIS_RESIDENT, /* Check if specified logical port name is
+                                 * resident on the controller chassis. */
 };
 
 /* Relational operator. */
@@ -349,6 +358,14 @@ struct expr {
 
         /* EXPR_T_BOOLEAN. */
         bool boolean;
+
+        /* EXPR_T_CONDITION. */
+        struct {
+            enum expr_cond_type type;
+            bool not;
+            /* XXX Should arguments for conditions be generic? */
+            char *string;
+        } cond;
     };
 };
 
@@ -365,9 +382,9 @@ expr_from_node(const struct ovs_list *node)
 void expr_format(const struct expr *, struct ds *);
 void expr_print(const struct expr *);
 struct expr *expr_parse(struct lexer *, const struct shash *symtab,
-                        const struct shash *macros);
+                        const struct shash *addr_sets);
 struct expr *expr_parse_string(const char *, const struct shash *symtab,
-                               const struct shash *macros,
+                               const struct shash *addr_sets,
                                char **errorp);
 
 struct expr *expr_clone(struct expr *);
@@ -375,7 +392,10 @@ void expr_destroy(struct expr *);
 
 struct expr *expr_annotate(struct expr *, const struct shash *symtab,
                            char **errorp);
-struct expr *expr_simplify(struct expr *);
+struct expr *expr_simplify(struct expr *,
+                           bool (*is_chassis_resident)(const void *c_aux,
+                                                       const char *port_name),
+                           const void *c_aux);
 struct expr *expr_normalize(struct expr *);
 
 bool expr_honors_invariants(const struct expr *);
@@ -383,7 +403,7 @@ bool expr_is_simplified(const struct expr *);
 bool expr_is_normalized(const struct expr *);
 
 char *expr_parse_microflow(const char *, const struct shash *symtab,
-                           const struct shash *macros,
+                           const struct shash *addr_sets,
                            bool (*lookup_port)(const void *aux,
                                                const char *port_name,
                                                unsigned int *portp),
@@ -466,19 +486,19 @@ void expr_constant_set_format(const struct expr_constant_set *, struct ds *);
 void expr_constant_set_destroy(struct expr_constant_set *cs);
 
 
-/* Address sets, aka "macros".
+/* Address sets.
  *
  * Instead of referring to a set of value as:
  *    {addr1, addr2, ..., addrN}
  * You can register a set of values and refer to them as:
  *    $name
- * The macros should all have integer/masked-integer values.
+ * The address set entries should all have integer/masked-integer values.
  * The values that don't qualify are ignored.
  */
 
-void expr_macros_add(struct shash *macros, const char *name,
-                     const char * const *values, size_t n_values);
-void expr_macros_remove(struct shash *macros, const char *name);
-void expr_macros_destroy(struct shash *macros);
+void expr_addr_sets_add(struct shash *addr_sets, const char *name,
+                        const char * const *values, size_t n_values);
+void expr_addr_sets_remove(struct shash *addr_sets, const char *name);
+void expr_addr_sets_destroy(struct shash *addr_sets);
 
 #endif /* ovn/expr.h */

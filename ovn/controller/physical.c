@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -218,7 +218,7 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
 
     /* Resubmit to table 34. */
     put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
-    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
+    ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100, 0,
                     &match, ofpacts_p);
 
     /* Table 34, Priority 100.
@@ -233,7 +233,7 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
                          0, MLF_ALLOW_LOOPBACK);
     match_set_reg(&match, MFF_LOG_INPORT - MFF_REG0, port_key);
     match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
-    ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 100,
+    ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 100, 0,
                     &match, ofpacts_p);
 
     /* Table 64, Priority 100.
@@ -257,7 +257,8 @@ put_local_common_flows(uint32_t dp_key, uint32_t port_key,
     put_load(0, MFF_IN_PORT, 0, 16, ofpacts_p);
     put_resubmit(OFTABLE_LOG_TO_PHY, ofpacts_p);
     put_stack(MFF_IN_PORT, ofpact_put_STACK_POP(ofpacts_p));
-    ofctrl_add_flow(flow_table, OFTABLE_SAVE_INPORT, 100, &match, ofpacts_p);
+    ofctrl_add_flow(flow_table, OFTABLE_SAVE_INPORT, 100, 0,
+                    &match, ofpacts_p);
 }
 
 static void
@@ -330,6 +331,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
 
         size_t clone_ofs = ofpacts_p->size;
         struct ofpact_nest *clone = ofpact_put_CLONE(ofpacts_p);
+        ofpact_put_CT_CLEAR(ofpacts_p);
         put_load(0, MFF_LOG_DNAT_ZONE, 0, 32, ofpacts_p);
         put_load(0, MFF_LOG_SNAT_ZONE, 0, 32, ofpacts_p);
         put_load(0, MFF_LOG_CT_ZONE, 0, 32, ofpacts_p);
@@ -346,7 +348,70 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
         ofpacts_p->header = clone;
         ofpact_finish_CLONE(ofpacts_p, &clone);
 
-        ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 100,
+        ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 100, 0,
+                        &match, ofpacts_p);
+        return;
+    }
+
+    if (!strcmp(binding->type, "chassisredirect")
+        && binding->chassis == chassis) {
+
+        /* Table 33, priority 100.
+         * =======================
+         *
+         * Implements output to local hypervisor.  Each flow matches a
+         * logical output port on the local hypervisor, and resubmits to
+         * table 34.  For ports of type "chassisredirect", the logical
+         * output port is changed from the "chassisredirect" port to the
+         * underlying distributed port. */
+
+        match_init_catchall(&match);
+        ofpbuf_clear(ofpacts_p);
+        match_set_metadata(&match, htonll(dp_key));
+        match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, port_key);
+
+        const char *distributed_port = smap_get(&binding->options,
+                                                "distributed-port");
+        const struct sbrec_port_binding *distributed_binding
+            = lport_lookup_by_name(lports, distributed_port);
+
+        if (!distributed_binding) {
+            /* Packet will be dropped. */
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl, "No port binding record for distributed "
+                         "port %s referred by chassisredirect port %s",
+                         distributed_port,
+                         binding->logical_port);
+        } else if (binding->datapath !=
+                   distributed_binding->datapath) {
+            /* Packet will be dropped. */
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                         "chassisredirect port %s refers to "
+                         "distributed port %s in wrong datapath",
+                         binding->logical_port,
+                         distributed_port);
+        } else {
+            put_load(distributed_binding->tunnel_key,
+                     MFF_LOG_OUTPORT, 0, 32, ofpacts_p);
+
+            struct zone_ids zone_ids = get_zone_ids(distributed_binding,
+                                                    ct_zones);
+            if (zone_ids.ct) {
+                put_load(zone_ids.ct, MFF_LOG_CT_ZONE, 0, 32, ofpacts_p);
+            }
+            if (zone_ids.dnat) {
+                put_load(zone_ids.dnat, MFF_LOG_DNAT_ZONE, 0, 32, ofpacts_p);
+            }
+            if (zone_ids.snat) {
+                put_load(zone_ids.snat, MFF_LOG_SNAT_ZONE, 0, 32, ofpacts_p);
+            }
+
+            /* Resubmit to table 34. */
+            put_resubmit(OFTABLE_CHECK_LOOPBACK, ofpacts_p);
+        }
+
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100, 0,
                         &match, ofpacts_p);
         return;
     }
@@ -471,7 +536,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
         /* Resubmit to first logical ingress pipeline table. */
         put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, ofpacts_p);
         ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG,
-                        tag ? 150 : 100, &match, ofpacts_p);
+                        tag ? 150 : 100, 0, &match, ofpacts_p);
 
         if (!tag && (!strcmp(binding->type, "localnet")
                      || !strcmp(binding->type, "l2gateway"))) {
@@ -481,7 +546,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
              * action. */
             ofpbuf_pull(ofpacts_p, ofpacts_orig_size);
             match_set_dl_tci_masked(&match, 0, htons(VLAN_CFI));
-            ofctrl_add_flow(flow_table, 0, 100, &match, ofpacts_p);
+            ofctrl_add_flow(flow_table, 0, 100, 0, &match, ofpacts_p);
         }
 
         /* Table 65, Priority 100.
@@ -508,7 +573,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
              * switch will also contain the tag. */
             ofpact_put_STRIP_VLAN(ofpacts_p);
         }
-        ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 100,
+        ofctrl_add_flow(flow_table, OFTABLE_LOG_TO_PHY, 100, 0,
                         &match, ofpacts_p);
     } else if (!tun) {
         /* Remote port connected by localnet port */
@@ -531,7 +596,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
 
         /* Resubmit to table 33. */
         put_resubmit(OFTABLE_LOCAL_OUTPUT, ofpacts_p);
-        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100, 0,
                         &match, ofpacts_p);
     } else {
         /* Remote port connected by tunnel */
@@ -555,7 +620,7 @@ consider_port_binding(enum mf_field_id mff_ovn_geneve,
 
         /* Output to tunnel. */
         ofpact_put_OUTPUT(ofpacts_p)->port = ofport;
-        ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
+        ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100, 0,
                         &match, ofpacts_p);
     }
 }
@@ -643,7 +708,7 @@ consider_mc_group(enum mf_field_id mff_ovn_geneve,
          * group as the logical output port. */
         put_load(mc->tunnel_key, MFF_LOG_OUTPORT, 0, 32, ofpacts_p);
 
-        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100,
+        ofctrl_add_flow(flow_table, OFTABLE_LOCAL_OUTPUT, 100, 0,
                         &match, ofpacts_p);
     }
 
@@ -681,7 +746,7 @@ consider_mc_group(enum mf_field_id mff_ovn_geneve,
             if (local_ports) {
                 put_resubmit(OFTABLE_LOCAL_OUTPUT, remote_ofpacts_p);
             }
-            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100,
+            ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 100, 0,
                             &match, remote_ofpacts_p);
         }
     }
@@ -882,7 +947,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
 
         put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
 
-        ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, &match, &ofpacts);
+        ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
+                        &ofpacts);
     }
 
     /* Add flows for VXLAN encapsulations.  Due to the limited amount of
@@ -914,7 +980,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
             put_load(1, MFF_LOG_FLAGS, MLF_RCV_FROM_VXLAN_BIT, 1, &ofpacts);
             put_resubmit(OFTABLE_LOG_INGRESS_PIPELINE, &ofpacts);
 
-            ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, &match,
+            ofctrl_add_flow(flow_table, OFTABLE_PHY_TO_LOG, 100, 0, &match,
                             &ofpacts);
         }
     }
@@ -935,7 +1001,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
 
     /* Resubmit to table 33. */
     put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
-    ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 150, &match, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 150, 0,
+                    &match, &ofpacts);
 
     /* Table 32, Priority 0.
      * =======================
@@ -945,7 +1012,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
     match_init_catchall(&match);
     ofpbuf_clear(&ofpacts);
     put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
-    ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 0, &match, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 0, 0, &match, &ofpacts);
 
     /* Table 34, Priority 0.
      * =======================
@@ -959,7 +1026,8 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
         put_load(0, MFF_REG0 + i, 0, 32, &ofpacts);
     }
     put_resubmit(OFTABLE_LOG_EGRESS_PIPELINE, &ofpacts);
-    ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 0, &match, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_CHECK_LOOPBACK, 0, 0, &match,
+                    &ofpacts);
 
     /* Table 64, Priority 0.
      * =======================
@@ -969,7 +1037,7 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
     match_init_catchall(&match);
     ofpbuf_clear(&ofpacts);
     put_resubmit(OFTABLE_LOG_TO_PHY, &ofpacts);
-    ofctrl_add_flow(flow_table, OFTABLE_SAVE_INPORT, 0, &match, &ofpacts);
+    ofctrl_add_flow(flow_table, OFTABLE_SAVE_INPORT, 0, 0, &match, &ofpacts);
 
     ofpbuf_uninit(&ofpacts);
 

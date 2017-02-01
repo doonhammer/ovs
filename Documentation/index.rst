@@ -41,6 +41,8 @@ The Open vSwitch documentation is organised into multiple sections:
   OVN internals and operation
 - :doc:`How-to guides </howto/index>` are recipes or use-cases for OVS and OVN.
   They are more advanced than the tutorials.
+- :doc:`Frequently Asked Questions </faq/index>` provide general insight into
+  a variety of topics related to configuration and operation of OVS and OVN.
 
 First Steps
 -----------
@@ -59,7 +61,6 @@ vSwitch? Start here.
   :doc:`intro/install/dpdk`
 
 - **Tutorials:** :doc:`tutorials/ovs-advanced` |
-  :doc:`tutorials/ovn-basics`
 
 Deeper Dive
 -----------
@@ -70,8 +71,7 @@ Deeper Dive
   :doc:`topics/porting`
 
 - **DPDK** :doc:`howto/dpdk` |
-  :doc:`topics/dpdk/vhost-user` |
-  :doc:`topics/dpdk/ivshmem`
+  :doc:`topics/dpdk/vhost-user`
 
 - **Windows** :doc:`topics/windows`
 

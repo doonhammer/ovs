@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -233,6 +233,11 @@ expr_not(struct expr *expr)
     case EXPR_T_BOOLEAN:
         expr->boolean = !expr->boolean;
         break;
+
+    case EXPR_T_CONDITION:
+        expr->cond.not = !expr->cond.not;
+        break;
+
     default:
         OVS_NOT_REACHED();
     }
@@ -288,6 +293,9 @@ expr_fix(struct expr *expr)
         return expr_fix_andor(expr, true);
 
     case EXPR_T_BOOLEAN:
+        return expr;
+
+    case EXPR_T_CONDITION:
         return expr;
 
     default:
@@ -394,6 +402,21 @@ expr_format_andor(const struct expr *e, const char *op, struct ds *s)
     }
 }
 
+static void
+expr_format_condition(const struct expr *e, struct ds *s)
+{
+    if (e->cond.not) {
+        ds_put_char(s, '!');
+    }
+    switch (e->cond.type) {
+    case EXPR_COND_CHASSIS_RESIDENT:
+        ds_put_format(s, "is_chassis_resident(");
+        json_string_escape(e->cond.string, s);
+        ds_put_char(s, ')');
+        break;
+    }
+}
+
 /* Appends a string form of 'e' to 's'.  The string form is acceptable for
  * parsing back into an equivalent expression. */
 void
@@ -415,6 +438,10 @@ expr_format(const struct expr *e, struct ds *s)
     case EXPR_T_BOOLEAN:
         ds_put_char(s, e->boolean ? '1' : '0');
         break;
+
+    case EXPR_T_CONDITION:
+        expr_format_condition(e, s);
+        break;
     }
 }
 
@@ -434,10 +461,10 @@ expr_print(const struct expr *e)
 
 /* Context maintained during expr_parse(). */
 struct expr_context {
-    struct lexer *lexer;        /* Lexer for pulling more tokens. */
-    const struct shash *symtab; /* Symbol table. */
-    const struct shash *macros; /* Table of macros. */
-    bool not;                   /* True inside odd number of NOT operators. */
+    struct lexer *lexer;           /* Lexer for pulling more tokens. */
+    const struct shash *symtab;    /* Symbol table. */
+    const struct shash *addr_sets; /* Address set table. */
+    bool not;                    /* True inside odd number of NOT operators. */
 };
 
 struct expr *expr_parse__(struct expr_context *);
@@ -692,14 +719,14 @@ assign_constant_set_type(struct expr_context *ctx,
 }
 
 static bool
-parse_macros(struct expr_context *ctx, struct expr_constant_set *cs,
-             size_t *allocated_values)
+parse_addr_sets(struct expr_context *ctx, struct expr_constant_set *cs,
+                size_t *allocated_values)
 {
-    struct expr_constant_set *addr_set
-        = (ctx->macros
-           ? shash_find_data(ctx->macros, ctx->lexer->token.s)
+    struct expr_constant_set *addr_sets
+        = (ctx->addr_sets
+           ? shash_find_data(ctx->addr_sets, ctx->lexer->token.s)
            : NULL);
-    if (!addr_set) {
+    if (!addr_sets) {
         lexer_syntax_error(ctx->lexer, "expecting address set name");
         return false;
     }
@@ -708,13 +735,13 @@ parse_macros(struct expr_context *ctx, struct expr_constant_set *cs,
         return false;
     }
 
-    size_t n_values = cs->n_values + addr_set->n_values;
+    size_t n_values = cs->n_values + addr_sets->n_values;
     if (n_values >= *allocated_values) {
         cs->values = xrealloc(cs->values, n_values * sizeof *cs->values);
         *allocated_values = n_values;
     }
-    for (size_t i = 0; i < addr_set->n_values; i++) {
-        cs->values[cs->n_values++] = addr_set->values[i];
+    for (size_t i = 0; i < addr_sets->n_values; i++) {
+        cs->values[cs->n_values++] = addr_sets->values[i];
     }
 
     return true;
@@ -752,7 +779,7 @@ parse_constant(struct expr_context *ctx, struct expr_constant_set *cs,
         lexer_get(ctx->lexer);
         return true;
     } else if (ctx->lexer->token.type == LEX_T_MACRO) {
-        if (!parse_macros(ctx, cs, allocated_values)) {
+        if (!parse_addr_sets(ctx, cs, allocated_values)) {
             return false;
         }
         lexer_get(ctx->lexer);
@@ -908,14 +935,14 @@ expr_constant_set_destroy(struct expr_constant_set *cs)
     }
 }
 
-/* Adds a macro named 'name' to 'macros', replacing any existing macro with the
- * given name. */
+/* Adds an address set named 'name' to 'addr_sets', replacing any existing
+ * address set entry with the given name. */
 void
-expr_macros_add(struct shash *macros, const char *name,
-                const char *const *values, size_t n_values)
+expr_addr_sets_add(struct shash *addr_sets, const char *name,
+                   const char *const *values, size_t n_values)
 {
     /* Replace any existing entry for this name. */
-    expr_macros_remove(macros, name);
+    expr_addr_sets_remove(addr_sets, name);
 
     struct expr_constant_set *cs = xzalloc(sizeof *cs);
     cs->type = EXPR_C_INTEGER;
@@ -923,7 +950,7 @@ expr_macros_add(struct shash *macros, const char *name,
     cs->n_values = 0;
     cs->values = xmalloc(n_values * sizeof *cs->values);
     for (size_t i = 0; i < n_values; i++) {
-        /* Use the lexer to convert each macro into the proper
+        /* Use the lexer to convert each address set into the proper
          * integer format. */
         struct lexer lex;
         lexer_init(&lex, values[i]);
@@ -944,32 +971,55 @@ expr_macros_add(struct shash *macros, const char *name,
         lexer_destroy(&lex);
     }
 
-    shash_add(macros, name, cs);
+    shash_add(addr_sets, name, cs);
 }
 
 void
-expr_macros_remove(struct shash *macros, const char *name)
+expr_addr_sets_remove(struct shash *addr_sets, const char *name)
 {
-    struct expr_constant_set *cs = shash_find_and_delete(macros, name);
+    struct expr_constant_set *cs = shash_find_and_delete(addr_sets, name);
     if (cs) {
         expr_constant_set_destroy(cs);
         free(cs);
     }
 }
 
-/* Destroy all contents of 'macros'. */
+/* Destroy all contents of 'addr_sets'. */
 void
-expr_macros_destroy(struct shash *macros)
+expr_addr_sets_destroy(struct shash *addr_sets)
 {
     struct shash_node *node, *next;
 
-    SHASH_FOR_EACH_SAFE (node, next, macros) {
+    SHASH_FOR_EACH_SAFE (node, next, addr_sets) {
         struct expr_constant_set *cs = node->data;
 
-        shash_delete(macros, node);
+        shash_delete(addr_sets, node);
         expr_constant_set_destroy(cs);
         free(cs);
     }
+}
+
+static struct expr *
+parse_chassis_resident(struct expr_context *ctx)
+{
+    if (ctx->lexer->token.type != LEX_T_STRING) {
+        lexer_syntax_error(ctx->lexer, "expecting string");
+        return NULL;
+    }
+
+    struct expr *e = xzalloc(sizeof *e);
+    e->type = EXPR_T_CONDITION;
+    e->cond.type = EXPR_COND_CHASSIS_RESIDENT;
+    e->cond.not = false;
+    e->cond.string = xstrdup(ctx->lexer->token.s);
+
+    lexer_get(ctx->lexer);
+    if (!lexer_force_match(ctx->lexer, LEX_T_RPAREN)) {
+        expr_destroy(e);
+        return NULL;
+    }
+
+    return e;
 }
 
 static struct expr *
@@ -990,6 +1040,16 @@ expr_parse_primary(struct expr_context *ctx, bool *atomic)
         struct expr_field f;
         enum expr_relop r;
         struct expr_constant_set c;
+
+        if (lexer_lookahead(ctx->lexer) == LEX_T_LPAREN) {
+            if (lexer_match_id(ctx->lexer, "is_chassis_resident")) {
+                lexer_get(ctx->lexer); /* Skip "(". */
+                *atomic = true;
+                return parse_chassis_resident(ctx);
+            }
+            lexer_error(ctx->lexer, "parsing function name");
+            return NULL;
+        }
 
         if (!parse_field(ctx, &f)) {
             return NULL;
@@ -1144,33 +1204,35 @@ expr_parse__(struct expr_context *ctx)
     return e;
 }
 
-/* Parses an expression from 'lexer' using the symbols in 'symtab' and macros
- * in 'macros'.  If successful, returns the new expression; on failure, returns
- * NULL.  Returns nonnull if and only if lexer->error is NULL. */
+/* Parses an expression from 'lexer' using the symbols in 'symtab' and
+ * address set table in 'addr_sets'.  If successful, returns the new
+ * expression; on failure, returns NULL.  Returns nonnull if and only if
+ * lexer->error is NULL. */
 struct expr *
 expr_parse(struct lexer *lexer, const struct shash *symtab,
-           const struct shash *macros)
+           const struct shash *addr_sets)
 {
     struct expr_context ctx = { .lexer = lexer,
                                 .symtab = symtab,
-                                .macros = macros };
+                                .addr_sets = addr_sets };
     return lexer->error ? NULL : expr_parse__(&ctx);
 }
 
-/* Parses the expression in 's' using the symbols in 'symtab' and macros in
- * 'macros'.  If successful, returns the new expression and sets '*errorp' to
- * NULL.  On failure, returns NULL and sets '*errorp' to an explanatory error
- * message.  The caller must eventually free the returned expression (with
- * expr_destroy()) or error (with free()). */
+/* Parses the expression in 's' using the symbols in 'symtab' and
+ * address set table in 'addr_sets'.  If successful, returns the new
+ * expression and sets '*errorp' to NULL.  On failure, returns NULL and
+ * sets '*errorp' to an explanatory error message.  The caller must
+ * eventually free the returned expression (with expr_destroy()) or
+ * error (with free()). */
 struct expr *
 expr_parse_string(const char *s, const struct shash *symtab,
-                  const struct shash *macros, char **errorp)
+                  const struct shash *addr_sets, char **errorp)
 {
     struct lexer lexer;
 
     lexer_init(&lexer, s);
     lexer_get(&lexer);
-    struct expr *expr = expr_parse(&lexer, symtab, macros);
+    struct expr *expr = expr_parse(&lexer, symtab, addr_sets);
     lexer_force_end(&lexer);
     *errorp = lexer_steal_error(&lexer);
     if (*errorp) {
@@ -1383,6 +1445,7 @@ expr_get_level(const struct expr *expr)
         return level;
 
     case EXPR_T_BOOLEAN:
+    case EXPR_T_CONDITION:
         return EXPR_L_BOOLEAN;
 
     default:
@@ -1465,6 +1528,14 @@ expr_clone_andor(struct expr *expr)
     return new;
 }
 
+static struct expr *
+expr_clone_condition(struct expr *expr)
+{
+    struct expr *new = xmemdup(expr, sizeof *expr);
+    new->cond.string = xstrdup(new->cond.string);
+    return new;
+}
+
 /* Returns a clone of 'expr'.  This is a "deep copy": neither the returned
  * expression nor any of its substructure will be shared with 'expr'. */
 struct expr *
@@ -1480,6 +1551,9 @@ expr_clone(struct expr *expr)
 
     case EXPR_T_BOOLEAN:
         return expr_create_boolean(expr->boolean);
+
+    case EXPR_T_CONDITION:
+        return expr_clone_condition(expr);
     }
     OVS_NOT_REACHED();
 }
@@ -1510,6 +1584,10 @@ expr_destroy(struct expr *expr)
         break;
 
     case EXPR_T_BOOLEAN:
+        break;
+
+    case EXPR_T_CONDITION:
+        free(expr->cond.string);
         break;
     }
     free(expr);
@@ -1639,6 +1717,7 @@ expr_annotate__(struct expr *expr, const struct shash *symtab,
     }
 
     case EXPR_T_BOOLEAN:
+    case EXPR_T_CONDITION:
         *errorp = NULL;
         return expr;
 
@@ -1781,10 +1860,36 @@ expr_simplify_relational(struct expr *expr)
     return new ? new : expr_create_boolean(false);
 }
 
+/* Resolves condition and replaces the expression with a boolean. */
+static struct expr *
+expr_simplify_condition(struct expr *expr,
+                        bool (*is_chassis_resident)(const void *c_aux,
+                                                    const char *port_name),
+                        const void *c_aux)
+{
+    bool result;
+
+    switch (expr->cond.type) {
+    case EXPR_COND_CHASSIS_RESIDENT:
+        result = is_chassis_resident(c_aux, expr->cond.string);
+        break;
+
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    result ^= expr->cond.not;
+    expr_destroy(expr);
+    return expr_create_boolean(result);
+}
+
 /* Takes ownership of 'expr' and returns an equivalent expression whose
  * EXPR_T_CMP nodes use only tests for equality (EXPR_R_EQ). */
 struct expr *
-expr_simplify(struct expr *expr)
+expr_simplify(struct expr *expr,
+              bool (*is_chassis_resident)(const void *c_aux,
+                                          const char *port_name),
+              const void *c_aux)
 {
     struct expr *sub, *next;
 
@@ -1799,12 +1904,16 @@ expr_simplify(struct expr *expr)
     case EXPR_T_OR:
         LIST_FOR_EACH_SAFE (sub, next, node, &expr->andor) {
             ovs_list_remove(&sub->node);
-            expr_insert_andor(expr, next, expr_simplify(sub));
+            expr_insert_andor(expr, next,
+                              expr_simplify(sub, is_chassis_resident, c_aux));
         }
         return expr_fix(expr);
 
     case EXPR_T_BOOLEAN:
         return expr;
+
+    case EXPR_T_CONDITION:
+        return expr_simplify_condition(expr, is_chassis_resident, c_aux);
     }
     OVS_NOT_REACHED();
 }
@@ -1832,6 +1941,7 @@ expr_is_cmp(const struct expr *expr)
     }
 
     case EXPR_T_BOOLEAN:
+    case EXPR_T_CONDITION:
         return NULL;
 
     default:
@@ -1928,6 +2038,8 @@ crush_and_string(struct expr *expr, const struct expr_symbol *symbol)
             }
             free(new);
             break;
+        case EXPR_T_CONDITION:
+            OVS_NOT_REACHED();
         }
     }
 
@@ -2022,6 +2134,8 @@ crush_and_numeric(struct expr *expr, const struct expr_symbol *symbol)
             }
             expr_destroy(new);
             break;
+        case EXPR_T_CONDITION:
+            OVS_NOT_REACHED();
         }
     }
     if (ovs_list_is_empty(&expr->andor)) {
@@ -2234,6 +2348,10 @@ crush_cmps(struct expr *expr, const struct expr_symbol *symbol)
     case EXPR_T_BOOLEAN:
         return expr;
 
+    /* Should not hit expression type condition, since crush_cmps is only
+     * called during expr_normalize, after expr_simplify which resolves
+     * all conditions. */
+    case EXPR_T_CONDITION:
     default:
         OVS_NOT_REACHED();
     }
@@ -2441,8 +2559,13 @@ expr_normalize(struct expr *expr)
 
     case EXPR_T_BOOLEAN:
         return expr;
+
+    /* Should not hit expression type condition, since expr_normalize is
+     * only called after expr_simplify, which resolves all conditions. */
+    case EXPR_T_CONDITION:
+    default:
+        OVS_NOT_REACHED();
     }
-    OVS_NOT_REACHED();
 }
 
 /* Creates, initializes, and returns a new 'struct expr_match'.  If 'm' is
@@ -2609,6 +2732,8 @@ add_conjunction(const struct expr *and,
             break;
         case EXPR_T_AND:
         case EXPR_T_BOOLEAN:
+        case EXPR_T_CONDITION:
+        default:
             OVS_NOT_REACHED();
         }
     }
@@ -2740,6 +2865,12 @@ expr_to_matches(const struct expr *expr,
             /* No match. */
         }
         break;
+
+    /* Should not hit expression type condition, since expr_to_matches is
+     * only called after expr_simplify, which resolves all conditions. */
+    case EXPR_T_CONDITION:
+    default:
+        OVS_NOT_REACHED();
     }
     return n_conjs;
 }
@@ -2816,6 +2947,7 @@ expr_honors_invariants(const struct expr *expr)
         return true;
 
     case EXPR_T_BOOLEAN:
+    case EXPR_T_CONDITION:
         return true;
 
     default:
@@ -2863,6 +2995,9 @@ expr_is_normalized(const struct expr *expr)
 
     case EXPR_T_BOOLEAN:
         return true;
+
+    case EXPR_T_CONDITION:
+        return false;
 
     default:
         OVS_NOT_REACHED();
@@ -2956,6 +3091,11 @@ expr_evaluate(const struct expr *e, const struct flow *uflow,
     case EXPR_T_BOOLEAN:
         return e->boolean;
 
+    case EXPR_T_CONDITION:
+        /* Assume tests calling expr_evaluate are not chassis specific, so
+         * is_chassis_resident evaluates as true. */
+        return (e->cond.not ? false : true);
+
     default:
         OVS_NOT_REACHED();
     }
@@ -3009,6 +3149,15 @@ expr_resolve_field(const struct expr_field *f)
     return (struct mf_subfield) { symbol->field, ofs, n_bits };
 }
 
+static bool
+microflow_is_chassis_resident_cb(const void *c_aux OVS_UNUSED,
+                                 const char *port_name OVS_UNUSED)
+{
+    /* Assume tests calling expr_parse_microflow are not chassis specific, so
+     * is_chassis_resident need not be supplied and should return true. */
+    return true;
+}
+
 static struct expr *
 expr_parse_microflow__(struct lexer *lexer,
                        const struct shash *symtab,
@@ -3029,7 +3178,7 @@ expr_parse_microflow__(struct lexer *lexer,
     struct ds annotated = DS_EMPTY_INITIALIZER;
     expr_format(e, &annotated);
 
-    e = expr_simplify(e);
+    e = expr_simplify(e, microflow_is_chassis_resident_cb, NULL);
     e = expr_normalize(e);
 
     struct match m = MATCH_CATCHALL_INITIALIZER;
@@ -3065,6 +3214,9 @@ expr_parse_microflow__(struct lexer *lexer,
     }
         break;
 
+    /* Should not hit expression type condition, since
+     * expr_simplify was called above. */
+    case EXPR_T_CONDITION:
     default:
         OVS_NOT_REACHED();
     }
@@ -3074,10 +3226,11 @@ expr_parse_microflow__(struct lexer *lexer,
     return e;
 }
 
-/* Parses 's' as a microflow, using symbols from 'symtab', macros from
- * 'macros', and looking up port numbers using 'lookup_port' and 'aux'.  On
- * success, stores the result in 'uflow' and returns NULL, otherwise zeros
- * 'uflow' and returns an error message that the caller must free().
+/* Parses 's' as a microflow, using symbols from 'symtab', address set
+ * table from 'addr_sets', and looking up port numbers using 'lookup_port'
+ * and 'aux'.  On success, stores the result in 'uflow' and returns
+ * NULL, otherwise zeros 'uflow' and returns an error message that the
+ * caller must free().
  *
  * A "microflow" is a description of a single stream of packets, such as half a
  * TCP connection.  's' uses the syntax of an OVN logical expression to express
@@ -3103,7 +3256,7 @@ expr_parse_microflow__(struct lexer *lexer,
  * the last two as ambiguous.  Just don't be too clever. */
 char * OVS_WARN_UNUSED_RESULT
 expr_parse_microflow(const char *s, const struct shash *symtab,
-                     const struct shash *macros,
+                     const struct shash *addr_sets,
                      bool (*lookup_port)(const void *aux,
                                          const char *port_name,
                                          unsigned int *portp),
@@ -3113,7 +3266,7 @@ expr_parse_microflow(const char *s, const struct shash *symtab,
     lexer_init(&lexer, s);
     lexer_get(&lexer);
 
-    struct expr *e = expr_parse(&lexer, symtab, macros);
+    struct expr *e = expr_parse(&lexer, symtab, addr_sets);
     lexer_force_end(&lexer);
 
     if (e) {

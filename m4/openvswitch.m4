@@ -400,7 +400,7 @@ else:
    AM_CONDITIONAL([HAVE_PYTHON3], [test "$HAVE_PYTHON3" = yes])])
 
 
-dnl Checks for dot.
+dnl Checks for flake8.
 AC_DEFUN([OVS_CHECK_FLAKE8],
   [AC_CACHE_CHECK(
     [for flake8],
@@ -411,6 +411,18 @@ AC_DEFUN([OVS_CHECK_FLAKE8],
        ovs_cv_flake8=no
      fi])
    AM_CONDITIONAL([HAVE_FLAKE8], [test "$ovs_cv_flake8" = yes])])
+
+dnl Checks for sphinx.
+AC_DEFUN([OVS_CHECK_SPHINX],
+  [AC_CACHE_CHECK(
+    [for sphinx],
+    [ovs_cv_sphinx],
+    [if sphinx-build --version >/dev/null 2>&1; then
+       ovs_cv_sphinx=yes
+     else
+       ovs_cv_sphinx=no
+     fi])
+   AM_CONDITIONAL([HAVE_SPHINX], [test "$ovs_cv_sphinx" = yes])])
 
 dnl Checks for dot.
 AC_DEFUN([OVS_CHECK_DOT],
@@ -589,3 +601,18 @@ AC_DEFUN([OVS_CHECK_PRAGMA_MESSAGE],
      [AC_DEFINE(HAVE_PRAGMA_MESSAGE,1,[Define if compiler supports #pragma
      message directive])])
   ])
+
+dnl OVS_LIBTOOL_VERSIONS sets the major, minor, micro version information for
+dnl OVS_LTINFO variable.  This variable locks libtool information for shared
+dnl objects, allowing multiple versions with different ABIs to coexist.
+AC_DEFUN([OVS_LIBTOOL_VERSIONS],
+    [AC_MSG_CHECKING(linker output version information)
+  OVS_MAJOR=`echo "$PACKAGE_VERSION" | sed -e 's/[[.]].*//'`
+  OVS_MINOR=`echo "$PACKAGE_VERSION" | sed -e "s/^$OVS_MAJOR//" -e 's/^.//' -e 's/[[.]].*//'`
+  OVS_MICRO=`echo "$PACKAGE_VERSION" | sed -e "s/^$OVS_MAJOR.$OVS_MINOR//" -e 's/^.//' -e 's/[[^0-9]].*//'`
+  OVS_LT_RELINFO="-release $OVS_MAJOR"
+  OVS_LT_VERINFO="-version-info $OVS_MINOR:$OVS_MICRO"
+  OVS_LTINFO="$OVS_LT_RELINFO $OVS_LT_VERINFO"
+  AC_MSG_RESULT([libX-$OVS_MAJOR.so.$OVS_MINOR.0.$OVS_MICRO)])
+  AC_SUBST(OVS_LTINFO)
+    ])

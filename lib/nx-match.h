@@ -125,13 +125,16 @@ enum ofperr nxm_stack_push_check(const struct ofpact_stack *,
                                  const  struct flow *);
 enum ofperr nxm_stack_pop_check(const struct ofpact_stack *,
                                const struct flow *);
+void nx_stack_push(struct ofpbuf *stack, const void *v, uint8_t bytes);
+void nx_stack_push_bottom(struct ofpbuf *stack, const void *v, uint8_t bytes);
+void *nx_stack_pop(struct ofpbuf *stack, uint8_t *bytes);
 
 void nxm_execute_stack_push(const struct ofpact_stack *,
                             const struct flow *, struct flow_wildcards *,
                             struct ofpbuf *);
-void nxm_execute_stack_pop(const struct ofpact_stack *,
-                            struct flow *, struct flow_wildcards *,
-                            struct ofpbuf *);
+bool nxm_execute_stack_pop(const struct ofpact_stack *,
+                           struct flow *, struct flow_wildcards *,
+                           struct ofpbuf *);
 
 ovs_be64 oxm_bitmap_from_mf_bitmap(const struct mf_bitmap *, enum ofp_version);
 struct mf_bitmap oxm_bitmap_to_mf_bitmap(ovs_be64 oxm_bitmap,

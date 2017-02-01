@@ -319,6 +319,10 @@ struct ingress_policer {
     rte_spinlock_t policer_lock;
 };
 
+enum dpdk_hw_ol_features {
+    NETDEV_RX_CHECKSUM_OFFLOAD = 1 << 0,
+};
+
 struct netdev_dpdk {
     struct netdev up;
     int port_id;
@@ -352,6 +356,9 @@ struct netdev_dpdk {
     /* Identifier used to distinguish vhost devices from each other. */
     char vhost_id[PATH_MAX];
 
+    /* Device arguments for dpdk ports */
+    char *devargs;
+
     /* In dpdk_list. */
     struct ovs_list list_node OVS_GUARDED_BY(dpdk_mutex);
 
@@ -384,6 +391,10 @@ struct netdev_dpdk {
 
     /* DPDK-ETH Flow control */
     struct rte_eth_fc_conf fc_conf;
+
+    /* DPDK-ETH hardware offload features,
+     * from the enum set 'dpdk_hw_ol_features' */
+    uint32_t hw_ol_features;
 };
 
 struct netdev_rxq_dpdk {
@@ -633,6 +644,8 @@ dpdk_eth_dev_queue_setup(struct netdev_dpdk *dev, int n_rxq, int n_txq)
         conf.rxmode.jumbo_frame = 0;
         conf.rxmode.max_rx_pkt_len = 0;
     }
+    conf.rxmode.hw_ip_checksum = (dev->hw_ol_features &
+                                  NETDEV_RX_CHECKSUM_OFFLOAD) != 0;
     /* A device may report more queues than it makes available (this has
      * been observed for Intel xl710, which reserves some of them for
      * SRIOV):  rte_eth_*_queue_setup will fail if a queue is not
@@ -693,6 +706,29 @@ dpdk_eth_dev_queue_setup(struct netdev_dpdk *dev, int n_rxq, int n_txq)
 }
 
 static void
+dpdk_eth_checksum_offload_configure(struct netdev_dpdk *dev)
+    OVS_REQUIRES(dev->mutex)
+{
+    struct rte_eth_dev_info info;
+    bool rx_csum_ol_flag = false;
+    uint32_t rx_chksm_offload_capa = DEV_RX_OFFLOAD_UDP_CKSUM |
+                                     DEV_RX_OFFLOAD_TCP_CKSUM |
+                                     DEV_RX_OFFLOAD_IPV4_CKSUM;
+    rte_eth_dev_info_get(dev->port_id, &info);
+    rx_csum_ol_flag = (dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD) != 0;
+
+    if (rx_csum_ol_flag &&
+        (info.rx_offload_capa & rx_chksm_offload_capa) !=
+         rx_chksm_offload_capa) {
+        VLOG_WARN_ONCE("Rx checksum offload is not supported on device %d",
+                   dev->port_id);
+        dev->hw_ol_features &= ~NETDEV_RX_CHECKSUM_OFFLOAD;
+        return;
+    }
+    netdev_request_reconfigure(&dev->up);
+}
+
+static void
 dpdk_eth_flow_ctrl_setup(struct netdev_dpdk *dev) OVS_REQUIRES(dev->mutex)
 {
     if (rte_eth_dev_flow_ctrl_set(dev->port_id, &dev->fc_conf)) {
@@ -709,10 +745,6 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
     struct ether_addr eth_addr;
     int diag;
     int n_rxq, n_txq;
-
-    if (!rte_eth_dev_is_valid_port(dev->port_id)) {
-        return ENODEV;
-    }
 
     rte_eth_dev_info_get(dev->port_id, &info);
 
@@ -738,7 +770,7 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
 
     memset(&eth_addr, 0x0, sizeof(eth_addr));
     rte_eth_macaddr_get(dev->port_id, &eth_addr);
-    VLOG_INFO_RL(&rl, "Port %d: "ETH_ADDR_FMT"",
+    VLOG_INFO_RL(&rl, "Port %d: "ETH_ADDR_FMT,
                     dev->port_id, ETH_ADDR_BYTES_ARGS(eth_addr.addr_bytes));
 
     memcpy(dev->hwaddr.ea, eth_addr.addr_bytes, ETH_ADDR_LEN);
@@ -746,8 +778,6 @@ dpdk_eth_dev_init(struct netdev_dpdk *dev)
 
     mbp_priv = rte_mempool_get_priv(dev->dpdk_mp->mp);
     dev->buf_size = mbp_priv->mbuf_data_room_size - RTE_PKTMBUF_HEADROOM;
-
-    dev->flags = NETDEV_UP | NETDEV_PROMISC;
 
     /* Get the Flow control configuration for DPDK-ETH */
     diag = rte_eth_dev_flow_ctrl_get(dev->port_id, &dev->fc_conf);
@@ -797,42 +827,28 @@ netdev_dpdk_alloc_txq(unsigned int n_txqs)
 }
 
 static int
-netdev_dpdk_init(struct netdev *netdev, unsigned int port_no,
-                 enum dpdk_dev_type type)
+common_construct(struct netdev *netdev, unsigned int port_no,
+                 enum dpdk_dev_type type, int socket_id)
     OVS_REQUIRES(dpdk_mutex)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-    int sid;
-    int err = 0;
 
     ovs_mutex_init(&dev->mutex);
-    ovs_mutex_lock(&dev->mutex);
 
     rte_spinlock_init(&dev->stats_lock);
 
     /* If the 'sid' is negative, it means that the kernel fails
      * to obtain the pci numa info.  In that situation, always
      * use 'SOCKET0'. */
-    if (type == DPDK_DEV_ETH) {
-        sid = rte_eth_dev_socket_id(port_no);
-    } else {
-        sid = rte_lcore_to_socket_id(rte_get_master_lcore());
-    }
-
-    dev->socket_id = sid < 0 ? SOCKET0 : sid;
+    dev->socket_id = socket_id < 0 ? SOCKET0 : socket_id;
     dev->requested_socket_id = dev->socket_id;
     dev->port_id = port_no;
     dev->type = type;
     dev->flags = 0;
-    dev->requested_mtu = dev->mtu = ETHER_MTU;
+    dev->requested_mtu = ETHER_MTU;
     dev->max_packet_len = MTU_TO_FRAME_LEN(dev->mtu);
     ovsrcu_index_init(&dev->vid, -1);
     dev->vhost_reconfigured = false;
-
-    err = netdev_dpdk_mempool_configure(dev);
-    if (err) {
-        goto unlock;
-    }
 
     ovsrcu_init(&dev->qos_conf, NULL);
 
@@ -840,39 +856,26 @@ netdev_dpdk_init(struct netdev *netdev, unsigned int port_no,
     dev->policer_rate = 0;
     dev->policer_burst = 0;
 
-    netdev->n_rxq = NR_QUEUE;
-    netdev->n_txq = NR_QUEUE;
-    dev->requested_n_rxq = netdev->n_rxq;
-    dev->requested_n_txq = netdev->n_txq;
-    dev->rxq_size = NIC_PORT_DEFAULT_RXQ_SIZE;
-    dev->txq_size = NIC_PORT_DEFAULT_TXQ_SIZE;
-    dev->requested_rxq_size = dev->rxq_size;
-    dev->requested_txq_size = dev->txq_size;
+    netdev->n_rxq = 0;
+    netdev->n_txq = 0;
+    dev->requested_n_rxq = NR_QUEUE;
+    dev->requested_n_txq = NR_QUEUE;
+    dev->requested_rxq_size = NIC_PORT_DEFAULT_RXQ_SIZE;
+    dev->requested_txq_size = NIC_PORT_DEFAULT_TXQ_SIZE;
 
     /* Initialize the flow control to NULL */
     memset(&dev->fc_conf, 0, sizeof dev->fc_conf);
-    if (type == DPDK_DEV_ETH) {
-        err = dpdk_eth_dev_init(dev);
-        if (err) {
-            goto unlock;
-        }
-        dev->tx_q = netdev_dpdk_alloc_txq(netdev->n_txq);
-    } else {
-        dev->tx_q = netdev_dpdk_alloc_txq(OVS_VHOST_MAX_QUEUE_NUM);
-        /* Enable DPDK_DEV_VHOST device and set promiscuous mode flag. */
-        dev->flags = NETDEV_UP | NETDEV_PROMISC;
-    }
 
-    if (!dev->tx_q) {
-        err = ENOMEM;
-        goto unlock;
-    }
+    /* Initilize the hardware offload flags to 0 */
+    dev->hw_ol_features = 0;
+
+    dev->flags = NETDEV_UP | NETDEV_PROMISC;
 
     ovs_list_push_back(&dpdk_list, &dev->list_node);
 
-unlock:
-    ovs_mutex_unlock(&dev->mutex);
-    return err;
+    netdev_request_reconfigure(netdev);
+
+    return 0;
 }
 
 /* dev_name must be the prefix followed by a positive decimal number.
@@ -894,6 +897,21 @@ dpdk_dev_parse_name(const char dev_name[], const char prefix[],
     } else {
         return ENODEV;
     }
+}
+
+static int
+vhost_common_construct(struct netdev *netdev)
+    OVS_REQUIRES(dpdk_mutex)
+{
+    int socket_id = rte_lcore_to_socket_id(rte_get_master_lcore());
+    struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+
+    dev->tx_q = netdev_dpdk_alloc_txq(OVS_VHOST_MAX_QUEUE_NUM);
+    if (!dev->tx_q) {
+        return ENOMEM;
+    }
+
+    return common_construct(netdev, -1, DPDK_DEV_VHOST, socket_id);
 }
 
 static int
@@ -930,7 +948,7 @@ netdev_dpdk_vhost_construct(struct netdev *netdev)
         VLOG_INFO("Socket %s created for vhost-user port %s\n",
                   dev->vhost_id, name);
     }
-    err = netdev_dpdk_init(netdev, -1, DPDK_DEV_VHOST);
+    err = vhost_common_construct(netdev);
 
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
@@ -942,7 +960,7 @@ netdev_dpdk_vhost_client_construct(struct netdev *netdev)
     int err;
 
     ovs_mutex_lock(&dpdk_mutex);
-    err = netdev_dpdk_init(netdev, -1, DPDK_DEV_VHOST);
+    err = vhost_common_construct(netdev);
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
 }
@@ -950,19 +968,26 @@ netdev_dpdk_vhost_client_construct(struct netdev *netdev)
 static int
 netdev_dpdk_construct(struct netdev *netdev)
 {
-    unsigned int port_no;
     int err;
 
-    /* Names always start with "dpdk" */
-    err = dpdk_dev_parse_name(netdev->name, "dpdk", &port_no);
-    if (err) {
-        return err;
-    }
-
     ovs_mutex_lock(&dpdk_mutex);
-    err = netdev_dpdk_init(netdev, port_no, DPDK_DEV_ETH);
+    err = common_construct(netdev, -1, DPDK_DEV_ETH, SOCKET0);
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
+}
+
+static void
+common_destruct(struct netdev_dpdk *dev)
+    OVS_REQUIRES(dpdk_mutex)
+    OVS_EXCLUDED(dev->mutex)
+{
+    rte_free(dev->tx_q);
+    dpdk_mp_put(dev->dpdk_mp);
+
+    ovs_list_remove(&dev->list_node);
+    free(ovsrcu_get_protected(struct ingress_policer *,
+                              &dev->ingress_policer));
+    ovs_mutex_destroy(&dev->mutex);
 }
 
 static void
@@ -971,17 +996,11 @@ netdev_dpdk_destruct(struct netdev *netdev)
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
     ovs_mutex_lock(&dpdk_mutex);
-    ovs_mutex_lock(&dev->mutex);
 
     rte_eth_dev_stop(dev->port_id);
-    free(ovsrcu_get_protected(struct ingress_policer *,
-                              &dev->ingress_policer));
+    free(dev->devargs);
+    common_destruct(dev);
 
-    rte_free(dev->tx_q);
-    ovs_list_remove(&dev->list_node);
-    dpdk_mp_put(dev->dpdk_mp);
-
-    ovs_mutex_unlock(&dev->mutex);
     ovs_mutex_unlock(&dpdk_mutex);
 }
 
@@ -1004,7 +1023,6 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
     char *vhost_id;
 
     ovs_mutex_lock(&dpdk_mutex);
-    ovs_mutex_lock(&dev->mutex);
 
     /* Guest becomes an orphan if still attached. */
     if (netdev_dpdk_get_vid(dev) >= 0
@@ -1015,16 +1033,10 @@ netdev_dpdk_vhost_destruct(struct netdev *netdev)
                  "socket '%s' must be restarted.", dev->vhost_id);
     }
 
-    free(ovsrcu_get_protected(struct ingress_policer *,
-                              &dev->ingress_policer));
-
-    rte_free(dev->tx_q);
-    ovs_list_remove(&dev->list_node);
-    dpdk_mp_put(dev->dpdk_mp);
-
     vhost_id = xstrdup(dev->vhost_id);
 
-    ovs_mutex_unlock(&dev->mutex);
+    common_destruct(dev);
+
     ovs_mutex_unlock(&dpdk_mutex);
 
     if (!vhost_id[0]) {
@@ -1072,10 +1084,50 @@ netdev_dpdk_get_config(const struct netdev *netdev, struct smap *args)
                         dev->requested_txq_size);
         smap_add_format(args, "configured_txq_descriptors", "%d",
                         dev->txq_size);
+        if (dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD) {
+            smap_add(args, "rx_csum_offload", "true");
+        }
     }
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
+}
+
+static struct netdev_dpdk *
+netdev_dpdk_lookup_by_port_id(int port_id)
+    OVS_REQUIRES(dpdk_mutex)
+{
+    struct netdev_dpdk *dev;
+
+    LIST_FOR_EACH (dev, list_node, &dpdk_list) {
+        if (dev->port_id == port_id) {
+            return dev;
+        }
+    }
+
+    return NULL;
+}
+
+static int
+netdev_dpdk_process_devargs(const char *devargs, char **errp)
+{
+    uint8_t new_port_id = UINT8_MAX;
+
+    if (!rte_eth_dev_count()
+            || rte_eth_dev_get_port_by_name(devargs, &new_port_id)
+            || !rte_eth_dev_is_valid_port(new_port_id)) {
+        /* Device not found in DPDK, attempt to attach it */
+        if (!rte_eth_dev_attach(devargs, &new_port_id)) {
+            /* Attach successful */
+            VLOG_INFO("Device '%s' attached to DPDK", devargs);
+        } else {
+            /* Attach unsuccessful */
+            VLOG_WARN_BUF(errp, "Error attaching device '%s' to DPDK", devargs);
+            return -1;
+        }
+    }
+
+    return new_port_id;
 }
 
 static void
@@ -1109,7 +1161,8 @@ dpdk_process_queue_size(struct netdev *netdev, const struct smap *args,
 }
 
 static int
-netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args)
+netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args,
+                       char **errp)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
     bool rx_fc_en, tx_fc_en, autoneg;
@@ -1118,7 +1171,12 @@ netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args)
         {RTE_FC_NONE,     RTE_FC_TX_PAUSE},
         {RTE_FC_RX_PAUSE, RTE_FC_FULL    }
     };
+    bool rx_chksm_ofld;
+    bool temp_flag;
+    const char *new_devargs;
+    int err = 0;
 
+    ovs_mutex_lock(&dpdk_mutex);
     ovs_mutex_lock(&dev->mutex);
 
     dpdk_set_rxq_config(dev, args);
@@ -1129,6 +1187,57 @@ netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args)
     dpdk_process_queue_size(netdev, args, "n_txq_desc",
                             NIC_PORT_DEFAULT_TXQ_SIZE,
                             &dev->requested_txq_size);
+
+    new_devargs = smap_get(args, "dpdk-devargs");
+
+    if (dev->devargs && strcmp(new_devargs, dev->devargs)) {
+        /* The user requested a new device.  If we return error, the caller
+         * will delete this netdev and try to recreate it. */
+        err = EAGAIN;
+        goto out;
+    }
+
+    /* dpdk-devargs is required for device configuration */
+    if (new_devargs && new_devargs[0]) {
+        /* Don't process dpdk-devargs if value is unchanged and port id
+         * is valid */
+        if (!(dev->devargs && !strcmp(dev->devargs, new_devargs)
+               && rte_eth_dev_is_valid_port(dev->port_id))) {
+            int new_port_id = netdev_dpdk_process_devargs(new_devargs, errp);
+            if (!rte_eth_dev_is_valid_port(new_port_id)) {
+                err = EINVAL;
+            } else if (new_port_id == dev->port_id) {
+                /* Already configured, do not reconfigure again */
+                err = 0;
+            } else {
+                struct netdev_dpdk *dup_dev;
+                dup_dev = netdev_dpdk_lookup_by_port_id(new_port_id);
+                if (dup_dev) {
+                    VLOG_WARN_BUF(errp, "'%s' is trying to use device '%s' "
+                                        "which is already in use by '%s'",
+                                  netdev_get_name(netdev), new_devargs,
+                                  netdev_get_name(&dup_dev->up));
+                    err = EADDRINUSE;
+                } else {
+                    int sid = rte_eth_dev_socket_id(new_port_id);
+                    dev->requested_socket_id = sid < 0 ? SOCKET0 : sid;
+                    dev->devargs = xstrdup(new_devargs);
+                    dev->port_id = new_port_id;
+                    netdev_request_reconfigure(&dev->up);
+                    err = 0;
+                }
+            }
+        }
+    } else {
+        VLOG_WARN_BUF(errp, "'%s' is missing 'options:dpdk-devargs'. "
+                            "The old 'dpdk<port_id>' names are not supported",
+                      netdev_get_name(netdev));
+        err = EINVAL;
+    }
+
+    if (err) {
+        goto out;
+    }
 
     rx_fc_en = smap_get_bool(args, "rx-flow-ctrl", false);
     tx_fc_en = smap_get_bool(args, "tx-flow-ctrl", false);
@@ -1141,13 +1250,26 @@ netdev_dpdk_set_config(struct netdev *netdev, const struct smap *args)
         dpdk_eth_flow_ctrl_setup(dev);
     }
 
-    ovs_mutex_unlock(&dev->mutex);
+    /* Rx checksum offload configuration */
+    /* By default the Rx checksum offload is ON */
+    rx_chksm_ofld = smap_get_bool(args, "rx-checksum-offload", true);
+    temp_flag = (dev->hw_ol_features & NETDEV_RX_CHECKSUM_OFFLOAD)
+                        != 0;
+    if (temp_flag != rx_chksm_ofld) {
+        dev->hw_ol_features ^= NETDEV_RX_CHECKSUM_OFFLOAD;
+        dpdk_eth_checksum_offload_configure(dev);
+    }
 
-    return 0;
+out:
+    ovs_mutex_unlock(&dev->mutex);
+    ovs_mutex_unlock(&dpdk_mutex);
+
+    return err;
 }
 
 static int
-netdev_dpdk_ring_set_config(struct netdev *netdev, const struct smap *args)
+netdev_dpdk_ring_set_config(struct netdev *netdev, const struct smap *args,
+                            char **errp OVS_UNUSED)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
 
@@ -1160,7 +1282,8 @@ netdev_dpdk_ring_set_config(struct netdev *netdev, const struct smap *args)
 
 static int
 netdev_dpdk_vhost_client_set_config(struct netdev *netdev,
-                                    const struct smap *args)
+                                    const struct smap *args,
+                                    char **errp OVS_UNUSED)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
     const char *path;
@@ -1452,6 +1575,10 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch)
     int nb_rx;
     int dropped = 0;
 
+    if (OVS_UNLIKELY(!(dev->flags & NETDEV_UP))) {
+        return EAGAIN;
+    }
+
     nb_rx = rte_eth_rx_burst(rx->port_id, rxq->queue_id,
                              (struct rte_mbuf **) batch->packets,
                              NETDEV_MAX_BURST);
@@ -1682,6 +1809,11 @@ netdev_dpdk_send__(struct netdev_dpdk *dev, int qid,
                    struct dp_packet_batch *batch, bool may_steal,
                    bool concurrent_txq)
 {
+    if (OVS_UNLIKELY(!(dev->flags & NETDEV_UP))) {
+        dp_packet_delete_batch(batch, may_steal);
+        return;
+    }
+
     if (OVS_UNLIKELY(concurrent_txq)) {
         qid = qid % dev->up.n_txq;
         rte_spinlock_lock(&dev->tx_q[qid].tx_lock);
@@ -2146,8 +2278,6 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
                            enum netdev_flags *old_flagsp)
     OVS_REQUIRES(dev->mutex)
 {
-    int err;
-
     if ((off | on) & ~(NETDEV_UP | NETDEV_PROMISC)) {
         return EINVAL;
     }
@@ -2161,18 +2291,8 @@ netdev_dpdk_update_flags__(struct netdev_dpdk *dev,
     }
 
     if (dev->type == DPDK_DEV_ETH) {
-        if (dev->flags & NETDEV_UP) {
-            err = rte_eth_dev_start(dev->port_id);
-            if (err)
-                return -err;
-        }
-
         if (dev->flags & NETDEV_PROMISC) {
             rte_eth_promiscuous_enable(dev->port_id);
-        }
-
-        if (!(dev->flags & NETDEV_UP)) {
-            rte_eth_dev_stop(dev->port_id);
         }
 
         netdev_change_seq_changed(&dev->up);
@@ -2305,6 +2425,53 @@ netdev_dpdk_set_admin_state(struct unixctl_conn *conn, int argc,
         ovs_mutex_unlock(&dpdk_mutex);
     }
     unixctl_command_reply(conn, "OK");
+}
+
+static void
+netdev_dpdk_detach(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                   const char *argv[], void *aux OVS_UNUSED)
+{
+    int ret;
+    char *response;
+    uint8_t port_id;
+    char devname[RTE_ETH_NAME_MAX_LEN];
+    struct netdev_dpdk *dev;
+
+    ovs_mutex_lock(&dpdk_mutex);
+
+    if (!rte_eth_dev_count() || rte_eth_dev_get_port_by_name(argv[1],
+                                                             &port_id)) {
+        response = xasprintf("Device '%s' not found in DPDK", argv[1]);
+        goto error;
+    }
+
+    dev = netdev_dpdk_lookup_by_port_id(port_id);
+    if (dev) {
+        response = xasprintf("Device '%s' is being used by interface '%s'. "
+                             "Remove it before detaching",
+                             argv[1], netdev_get_name(&dev->up));
+        goto error;
+    }
+
+    rte_eth_dev_close(port_id);
+
+    ret = rte_eth_dev_detach(port_id, devname);
+    if (ret < 0) {
+        response = xasprintf("Device '%s' can not be detached", argv[1]);
+        goto error;
+    }
+
+    response = xasprintf("Device '%s' has been detached", argv[1]);
+
+    ovs_mutex_unlock(&dpdk_mutex);
+    unixctl_command_reply(conn, response);
+    free(response);
+    return;
+
+error:
+    ovs_mutex_unlock(&dpdk_mutex);
+    unixctl_command_reply_error(conn, response);
+    free(response);
 }
 
 /*
@@ -2582,6 +2749,9 @@ netdev_dpdk_class_init(void)
         unixctl_command_register("netdev-dpdk/set-admin-state",
                                  "[netdev] up|down", 1, 2,
                                  netdev_dpdk_set_admin_state, NULL);
+        unixctl_command_register("netdev-dpdk/detach",
+                                 "pci address of device", 1, 1,
+                                 netdev_dpdk_detach, NULL);
 
         ovsthread_once_done(&once);
     }
@@ -2616,12 +2786,12 @@ static int
 dpdk_ring_create(const char dev_name[], unsigned int port_no,
                  unsigned int *eth_port_id)
 {
-    struct dpdk_ring *ivshmem;
+    struct dpdk_ring *ring_pair;
     char *ring_name;
-    int err;
+    int port_id;
 
-    ivshmem = dpdk_rte_mzalloc(sizeof *ivshmem);
-    if (!ivshmem) {
+    ring_pair = dpdk_rte_mzalloc(sizeof *ring_pair);
+    if (!ring_pair) {
         return ENOMEM;
     }
 
@@ -2629,38 +2799,39 @@ dpdk_ring_create(const char dev_name[], unsigned int port_no,
     ring_name = xasprintf("%s_tx", dev_name);
 
     /* Create single producer tx ring, netdev does explicit locking. */
-    ivshmem->cring_tx = rte_ring_create(ring_name, DPDK_RING_SIZE, SOCKET0,
+    ring_pair->cring_tx = rte_ring_create(ring_name, DPDK_RING_SIZE, SOCKET0,
                                         RING_F_SP_ENQ);
     free(ring_name);
-    if (ivshmem->cring_tx == NULL) {
-        rte_free(ivshmem);
+    if (ring_pair->cring_tx == NULL) {
+        rte_free(ring_pair);
         return ENOMEM;
     }
 
     ring_name = xasprintf("%s_rx", dev_name);
 
     /* Create single consumer rx ring, netdev does explicit locking. */
-    ivshmem->cring_rx = rte_ring_create(ring_name, DPDK_RING_SIZE, SOCKET0,
+    ring_pair->cring_rx = rte_ring_create(ring_name, DPDK_RING_SIZE, SOCKET0,
                                         RING_F_SC_DEQ);
     free(ring_name);
-    if (ivshmem->cring_rx == NULL) {
-        rte_free(ivshmem);
+    if (ring_pair->cring_rx == NULL) {
+        rte_free(ring_pair);
         return ENOMEM;
     }
 
-    err = rte_eth_from_rings(dev_name, &ivshmem->cring_rx, 1,
-                             &ivshmem->cring_tx, 1, SOCKET0);
+    port_id = rte_eth_from_rings(dev_name, &ring_pair->cring_rx, 1,
+                                 &ring_pair->cring_tx, 1, SOCKET0);
 
-    if (err < 0) {
-        rte_free(ivshmem);
+    if (port_id < 0) {
+        rte_free(ring_pair);
         return ENODEV;
     }
 
-    ivshmem->user_port_id = port_no;
-    ivshmem->eth_port_id = rte_eth_dev_count() - 1;
-    ovs_list_push_back(&dpdk_ring_list, &ivshmem->list_node);
+    ring_pair->user_port_id = port_no;
+    ring_pair->eth_port_id = port_id;
+    *eth_port_id = port_id;
 
-    *eth_port_id = ivshmem->eth_port_id;
+    ovs_list_push_back(&dpdk_ring_list, &ring_pair->list_node);
+
     return 0;
 }
 
@@ -2668,7 +2839,7 @@ static int
 dpdk_ring_open(const char dev_name[], unsigned int *eth_port_id)
     OVS_REQUIRES(dpdk_mutex)
 {
-    struct dpdk_ring *ivshmem;
+    struct dpdk_ring *ring_pair;
     unsigned int port_no;
     int err = 0;
 
@@ -2679,11 +2850,11 @@ dpdk_ring_open(const char dev_name[], unsigned int *eth_port_id)
     }
 
     /* Look through our list to find the device */
-    LIST_FOR_EACH (ivshmem, list_node, &dpdk_ring_list) {
-         if (ivshmem->user_port_id == port_no) {
+    LIST_FOR_EACH (ring_pair, list_node, &dpdk_ring_list) {
+         if (ring_pair->user_port_id == port_no) {
             VLOG_INFO("Found dpdk ring device %s:", dev_name);
             /* Really all that is needed */
-            *eth_port_id = ivshmem->eth_port_id;
+            *eth_port_id = ring_pair->eth_port_id;
             return 0;
          }
     }
@@ -2724,8 +2895,8 @@ netdev_dpdk_ring_construct(struct netdev *netdev)
         goto unlock_dpdk;
     }
 
-    err = netdev_dpdk_init(netdev, port_no, DPDK_DEV_ETH);
-
+    err = common_construct(netdev, port_no, DPDK_DEV_ETH,
+                           rte_eth_dev_socket_id(port_no));
 unlock_dpdk:
     ovs_mutex_unlock(&dpdk_mutex);
     return err;
@@ -2950,7 +3121,8 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
         && netdev->n_rxq == dev->requested_n_rxq
         && dev->mtu == dev->requested_mtu
         && dev->rxq_size == dev->requested_rxq_size
-        && dev->txq_size == dev->requested_txq_size) {
+        && dev->txq_size == dev->requested_txq_size
+        && dev->socket_id == dev->requested_socket_id) {
         /* Reconfiguration is unnecessary */
 
         goto out;
@@ -2958,7 +3130,8 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
 
     rte_eth_dev_stop(dev->port_id);
 
-    if (dev->mtu != dev->requested_mtu) {
+    if (dev->mtu != dev->requested_mtu
+        || dev->socket_id != dev->requested_socket_id) {
         netdev_dpdk_mempool_configure(dev);
     }
 
@@ -2982,7 +3155,7 @@ out:
     return err;
 }
 
-static void
+static int
 dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
     OVS_REQUIRES(dev->mutex)
 {
@@ -3003,31 +3176,37 @@ dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
         }
     }
 
+    if (!dev->dpdk_mp) {
+        return ENOMEM;
+    }
+
     if (netdev_dpdk_get_vid(dev) >= 0) {
         dev->vhost_reconfigured = true;
     }
+
+    return 0;
 }
 
 static int
 netdev_dpdk_vhost_reconfigure(struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
+    int err;
 
     ovs_mutex_lock(&dev->mutex);
-    dpdk_vhost_reconfigure_helper(dev);
+    err = dpdk_vhost_reconfigure_helper(dev);
     ovs_mutex_unlock(&dev->mutex);
-    return 0;
+
+    return err;
 }
 
 static int
 netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-    int err = 0;
+    int err;
 
     ovs_mutex_lock(&dev->mutex);
-
-    dpdk_vhost_reconfigure_helper(dev);
 
     /* Configure vHost client mode if requested and if the following criteria
      * are met:
@@ -3042,6 +3221,7 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
         if (err) {
             VLOG_ERR("vhost-user device setup failure for device %s\n",
                      dev->vhost_id);
+            goto unlock;
         } else {
             /* Configuration successful */
             dev->vhost_driver_flags |= RTE_VHOST_USER_CLIENT;
@@ -3051,9 +3231,12 @@ netdev_dpdk_vhost_client_reconfigure(struct netdev *netdev)
         }
     }
 
+    err = dpdk_vhost_reconfigure_helper(dev);
+
+unlock:
     ovs_mutex_unlock(&dev->mutex);
 
-    return 0;
+    return err;
 }
 
 #define NETDEV_DPDK_CLASS(NAME, INIT, CONSTRUCT, DESTRUCT,    \

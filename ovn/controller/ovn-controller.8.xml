@@ -149,6 +149,17 @@
         value mapping two physical network names to two ovs bridges would be:
         <code>physnet1:br-eth0,physnet2:br-eth1</code>.
       </dd>
+
+      <dt><code>external_ids:ovn-encap-csum</code></dt>
+      <dd>
+        <code>ovn-encap-csum</code> indicates that encapsulation checksums can
+        be transmitted and received with reasonable performance. It is a hint
+        to senders transmitting data to this chassis that they should use
+        checksums to protect OVN metadata. Set to <code>true</code> to enable
+        or <code>false</code> to disable. Depending on the capabilities of the
+        network interface card, enabling encapsulation checksum may incur
+        performance loss. In such cases, encapsulation checksums can be disabled.
+      </dd>
     </dl>
 
     <p>
@@ -299,6 +310,26 @@
       <dt><code>ct-zone-list</code></dt>
       <dd>
         Lists each local logical port and its connection tracking zone.
+      </dd>
+
+      <dt><code>inject-pkt</code> <var>microflow</var></dt>
+      <dd>
+      <p>
+        Injects <var>microflow</var> into the connected Open vSwitch
+        instance.  <var>microflow</var> must contain an ingress logical
+        port (<code>inport</code> argument) that is present on the Open
+        vSwitch instance.
+      </p>
+
+      <p>
+        The <var>microflow</var> argument describes the packet whose
+        forwarding is to be simulated, in the syntax of an OVN logical
+        expression, as described in <code>ovn-sb</code>(5), to express
+        constraints.  The parser understands prerequisites; for example,
+        if the expression refers to <code>ip4.src</code>, there is no
+        need to explicitly state <code>ip4</code> or <code>eth.type ==
+        0x800</code>.
+      </p>
       </dd>
       </dl>
     </p>

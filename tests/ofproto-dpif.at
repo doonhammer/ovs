@@ -3823,7 +3823,7 @@ do
     AT_CHECK([ovs-appctl ofproto/trace ovs-dummy "$flow"], [0], [stdout])
     : > expout
     if test $mode = drop && test $type != no; then
-        echo 'Packets dropped because they are IP fragments and the fragment handling mode is "drop".' >> expout
+        echo ' 0. Packets are IP fragments and the fragment handling mode is "drop".' >> expout
         echo "Datapath actions: $exp_output" >> expout
     elif test $type = later; then
         echo "Datapath actions: $exp_output" >> expout
@@ -4873,9 +4873,10 @@ AT_CHECK([ovs-appctl ofproto/trace \
 AT_CHECK([tail -1 stdout], [0], [dnl
 Datapath actions: 2
 ])
-AT_CHECK([head -n 2 stdout], [0], [dnl
-Bridge: br0
+AT_CHECK([head -n 3 stdout], [0], [dnl
 Flow: pkt_mark=0x2,skb_priority=0x1,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:01,dl_dst=50:54:00:00:00:02,arp_spa=0.0.0.0,arp_tpa=0.0.0.0,arp_op=0,arp_sha=00:00:00:00:00:00,arp_tha=00:00:00:00:00:00
+
+bridge("br0")
 ])
 
 # Test command: ofproto/trace dp_name odp_flow packet
@@ -4884,9 +4885,10 @@ AT_CHECK([ovs-appctl ofproto/trace ovs-dummy \
 AT_CHECK([tail -1 stdout], [0], [dnl
 Datapath actions: 2
 ])
-AT_CHECK([head -n 2 stdout], [0], [dnl
-Bridge: br0
+AT_CHECK([head -n 3 stdout], [0], [dnl
 Flow: pkt_mark=0x2,skb_priority=0x1,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:01,dl_dst=50:54:00:00:00:02,arp_spa=0.0.0.0,arp_tpa=0.0.0.0,arp_op=0,arp_sha=00:00:00:00:00:00,arp_tha=00:00:00:00:00:00
+
+bridge("br0")
 ])
 
 # Test command: ofproto/trace br_name br_flow packet
@@ -4895,9 +4897,10 @@ AT_CHECK([ovs-appctl ofproto/trace br0 \
 AT_CHECK([tail -1 stdout], [0], [dnl
 Datapath actions: 1
 ])
-AT_CHECK([head -n 2 stdout], [0], [dnl
-Bridge: br0
+AT_CHECK([head -n 3 stdout], [0], [dnl
 Flow: pkt_mark=0x1,skb_priority=0x2,arp,in_port=2,vlan_tci=0x0000,dl_src=50:54:00:00:00:02,dl_dst=50:54:00:00:00:01,arp_spa=0.0.0.0,arp_tpa=0.0.0.0,arp_op=0,arp_sha=00:00:00:00:00:00,arp_tha=00:00:00:00:00:00
+
+bridge("br0")
 ])
 
 OVS_VSWITCHD_STOP
@@ -5032,12 +5035,12 @@ AT_CHECK([ovs-appctl dpif/dump-flows -m br0 | sed 's/, packets.*$//' > dp_flows1
 
 odp_flow=`cat dp_flows1.txt`
 AT_CHECK([ovs-appctl ofproto/trace "$odp_flow" | sed 's/\([[Ff]]low:\).*/\1 <cleared>/'], [0], [dnl
-Bridge: br0
 Flow: <cleared>
-No match, packets dropped because OFPPC_NO_PACKET_IN is set on in_port.
 
-Rule: table=254 cookie=0 priority=0,reg0=0x2
-OpenFlow actions=drop
+bridge("br0")
+-------------
+ 0. No match.
+    drop
 
 Final flow: <cleared>
 Megaflow: <cleared>
@@ -5053,12 +5056,12 @@ AT_CHECK([ovs-appctl dpif/dump-flows -m br0 | sed 's/, packets.*$//' > dp_flows2
 
 odp_flow=`cat dp_flows2.txt`
 AT_CHECK([ovs-appctl ofproto/trace "$odp_flow" | sed 's/\([[Ff]]low:\).*/\1 <cleared>/'], [0], [dnl
-Bridge: br0
 Flow: <cleared>
-No match, packets dropped because OFPPC_NO_PACKET_IN is set on in_port.
 
-Rule: table=254 cookie=0 priority=0,reg0=0x2
-OpenFlow actions=drop
+bridge("br0")
+-------------
+ 0. No match.
+    drop
 
 Final flow: <cleared>
 Megaflow: <cleared>
@@ -5728,7 +5731,7 @@ AT_CHECK([ovs-appctl ofproto/trace br0 in_port=LOCAL,dl_src=10:20:30:40:50:60],
 AT_CHECK([tail -1 stdout], [0], [Datapath actions: 2
 ])
 dnl the output(port=1,max_len=100) fails the translation, only output:2 in datapath
-AT_CHECK([grep "output_trunc does not support port: [[0-9]]*" stdout], [0], [stdout])
+AT_CHECK([grep "output_trunc does not support patch port [[0-9]]*" stdout], [0], [stdout])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -6245,7 +6248,7 @@ for i in `seq 1 3`; do
 done
 AT_CHECK([ovs-appctl dpctl/dump-flows | sed 's/.*\(packets:\)/\1/' | sed 's/used:[[0-9]].[[0-9]]*s/used:0.001s/'], [0], [dnl
 flow-dump from non-dpdk interfaces:
-packets:2, bytes:68, used:0.001s, actions:sample(sample=100.0%,actions(userspace(pid=0,ipfix(output_port=4294967295))))
+packets:2, bytes:68, used:0.001s, actions:userspace(pid=0,ipfix(output_port=4294967295))
 ])
 
 dnl Remove the IPFIX configuration.
@@ -6337,7 +6340,7 @@ for i in `seq 1 3`; do
 done
 AT_CHECK([ovs-appctl dpctl/dump-flows | sed 's/.*\(packets:\)/\1/' | sed 's/used:[[0-9]].[[0-9]]*s/used:0.001s/'], [0], [dnl
 flow-dump from non-dpdk interfaces:
-packets:2, bytes:68, used:0.001s, actions:sample(sample=100.0%,actions(userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=4294967295)))),2
+packets:2, bytes:68, used:0.001s, actions:userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=4294967295)),2
 ])
 
 dnl Remove the flow which contains sample action.
@@ -6385,7 +6388,7 @@ AT_CHECK([ovs-ofctl add-flows br0 flows.txt], [0], [ignore])
 
 AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(3),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.10.10.2,dst=10.10.10.1,proto=1,tos=1,ttl=128,frag=no),icmp(type=8,code=0)'], [0], [stdout])
 AT_CHECK([tail -1 stdout], [0], [dnl
-Datapath actions: sample(sample=100.0%,actions(userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=4294967295)))),set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),1
+Datapath actions: userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=4294967295)),set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),1
 ])
 
 dnl Remove the flow which contains sample action.
@@ -6403,7 +6406,7 @@ AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(3),eth(src=50:54:00:00:00:
 dnl Make sure flow sample action in datapath is behind set tunnel
 dnl action at egress point of tunnel port.
 AT_CHECK([tail -1 stdout], [0], [dnl
-Datapath actions: set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),sample(sample=100.0%,actions(userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=1),tunnel_out_port=1))),1
+Datapath actions: set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=1),tunnel_out_port=1),1
 ])
 
 dnl Remove the flow which contains sample action.
@@ -6421,7 +6424,7 @@ AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(3),eth(src=50:54:00:00:00:
 dnl Make sure flow sample action in datapath is behind set tunnel
 dnl action at egress point of tunnel port.
 AT_CHECK([tail -1 stdout], [0], [dnl
-Datapath actions: set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),sample(sample=100.0%,actions(userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=1),tunnel_out_port=1))),1,set(tunnel(tun_id=0x6,src=2.2.2.3,dst=1.1.1.2,tos=0x1,ttl=64,tp_dst=7471,flags(df|key))),sample(sample=100.0%,actions(userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=7471),tunnel_out_port=7471))),7471
+Datapath actions: set(tunnel(tun_id=0x5,src=2.2.2.2,dst=1.1.1.1,tos=0x1,ttl=64,flags(df|key))),userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=1),tunnel_out_port=1),1,set(tunnel(tun_id=0x6,src=2.2.2.3,dst=1.1.1.2,tos=0x1,ttl=64,tp_dst=7471,flags(df|key))),userspace(pid=0,flow_sample(probability=65535,collector_set_id=1,obs_domain_id=0,obs_point_id=0,output_port=7471),tunnel_out_port=7471),7471
 ])
 
 dnl Remove the flow which contains sample action.
@@ -6439,6 +6442,17 @@ AT_DATA([flows.txt], [dnl
 in_port=1, ip, actions=clone(set_field:192.168.3.3->ip_src),clone(set_field:192.168.4.4->ip_dst,output:2),clone(mod_dl_src:80:81:81:81:81:81,set_field:192.168.5.5->ip_dst,output:3),output:4
 ])
 AT_CHECK([ovs-ofctl add-flows br0 flows.txt], [0], [ignore])
+
+AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.10.10.2,dst=10.10.10.1,proto=1,tos=1,ttl=128,frag=no),icmp(type=8,code=0)'], [0], [stdout])
+
+AT_CHECK([tail -1 stdout], [0], [dnl
+Datapath actions: clone(set(ipv4(src=10.10.10.2,dst=192.168.4.4)),2),clone(set(eth(src=80:81:81:81:81:81)),set(ipv4(src=10.10.10.2,dst=192.168.5.5)),3),4
+])
+
+dnl Test flow xlate openflow clone action without using datapath clone action.
+AT_CHECK([ovs-appctl dpif/disable-dp-clone br0], [0],
+[Datapath clone action disabled for bridge br0
+])
 
 AT_CHECK([ovs-appctl ofproto/trace ovs-dummy 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.10.10.2,dst=10.10.10.1,proto=1,tos=1,ttl=128,frag=no),icmp(type=8,code=0)'], [0], [stdout])
 
@@ -7125,11 +7139,11 @@ AT_CHECK([strip_ufid < ovs-vswitchd.log | filter_flow_install | strip_used], [0]
 recirc_id(0),in_port(100),eth_type(0x0800),ipv4(src=192.168.0.1,frag=no), actions:101,set(ipv4(src=255.255.255.254)),2
 ])
 
-AT_CHECK([grep -e '|nx_match|WARN|' ovs-vswitchd.log | sed "s/^.*|WARN|//"], [0], [dnl
-Failed to pop from an empty stack. On flow
+AT_CHECK([grep -e '|ofproto_dpif_xlate|WARN|' ovs-vswitchd.log | sed "s/^.*|WARN|//"], [0], [dnl
+stack underflow while processing icmp,in_port=LOCAL,vlan_tci=0x0000,dl_src=50:54:00:00:00:05,dl_dst=50:54:00:00:00:07,nw_src=192.168.0.1,nw_dst=192.168.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=8,icmp_code=0 on bridge br1
 ])
 
-OVS_VSWITCHD_STOP(["/Failed to pop from an empty stack/d"])
+OVS_VSWITCHD_STOP(["/stack underflow/d"])
 AT_CLEANUP
 
 AT_SETUP([ofproto-dpif - port duration])
@@ -9147,6 +9161,66 @@ dnl No dropped packets
 n_packets=0
 ])
 
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This is a truncated version of "ofproto-dpif - conntrack - controller",
+dnl with extra send-to-controller actions following ct_clear to show that
+dnl the connection tracking data has been cleared.
+AT_SETUP([ofproto-dpif - conntrack - ct_clear])
+OVS_VSWITCHD_START
+
+add_of_ports br0 1 2
+
+AT_CHECK([ovs-appctl vlog/set dpif_netdev:dbg vconn:info ofproto_dpif:info])
+
+dnl Allow new connections on p1->p2, but not on p2->p1.
+AT_DATA([flows.txt], [dnl
+dnl Table 0
+dnl
+table=0,priority=100,arp,action=normal
+table=0,priority=10,in_port=1,udp,action=ct(commit,zone=0),controller,ct_clear,controller
+table=0,priority=10,in_port=2,udp,action=ct(table=1,zone=0)
+table=0,priority=1,action=drop
+dnl
+dnl Table 1
+dnl
+table=1,priority=10,in_port=2,ct_state=+trk+est-new,udp,action=controller,ct_clear,controller
+table=1,priority=1,action=drop
+])
+
+AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
+
+AT_CAPTURE_FILE([ofctl_monitor.log])
+AT_CHECK([ovs-ofctl monitor br0 65534 invalid_ttl -P nxt_packet_in --detach --no-chdir --pidfile 2> ofctl_monitor.log])
+
+AT_CHECK([ovs-appctl netdev-dummy/receive p2 'in_port(2),eth(src=50:54:00:00:00:0a,dst=50:54:00:00:00:09),eth_type(0x0800),ipv4(src=10.1.1.2,dst=10.1.1.1,proto=17,tos=0,ttl=64,frag=no),udp(src=2,dst=1)'])
+
+dnl OK, now start a new connection from port 1.
+AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.1.1.1,dst=10.1.1.2,proto=17,tos=0,ttl=64,frag=no),udp(src=1,dst=2)'])
+
+dnl Now try a reply from port 2.
+AT_CHECK([ovs-appctl netdev-dummy/receive p2 'in_port(2),eth(src=50:54:00:00:00:0a,dst=50:54:00:00:00:09),eth_type(0x0800),ipv4(src=10.1.1.2,dst=10.1.1.1,proto=17,tos=0,ttl=64,frag=no),udp(src=2,dst=1)'])
+
+OVS_WAIT_UNTIL([test `wc -l < ofctl_monitor.log` -ge 8])
+OVS_WAIT_UNTIL([ovs-appctl -t ovs-ofctl exit])
+
+dnl Check this output. We only see the latter two packets, not the first.
+dnl Note that the first packet doesn't have the ct_state bits set. This
+dnl happens because the ct_state field is available only after recirc.
+AT_CHECK([cat ofctl_monitor.log], [0], [dnl
+NXT_PACKET_IN (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=1,tp_dst=2 udp_csum:e9d6
+dnl
+NXT_PACKET_IN (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=1,tp_dst=2 udp_csum:e9d6
+dnl
+NXT_PACKET_IN (xid=0x0): table_id=1 cookie=0x0 total_len=42 ct_state=est|rpl|trk,in_port=2 (via action) data_len=42 (unbuffered)
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:0a,dl_dst=50:54:00:00:00:09,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=2,tp_dst=1 udp_csum:e9d6
+dnl
+NXT_PACKET_IN (xid=0x0): table_id=1 cookie=0x0 total_len=42 in_port=2 (via action) data_len=42 (unbuffered)
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:0a,dl_dst=50:54:00:00:00:09,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=2,tp_dst=1 udp_csum:e9d6
+])
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 

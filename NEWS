@@ -7,9 +7,19 @@ Post-v2.6.0
      * DSCP marking is now supported, via the new northbound QoS table.
      * IPAM now supports fixed MAC addresses.
      * Support for source IP address based routing.
-     * ovn-trace can now trace put_dhcp_opts and put_dhcp_optsv6 actions.
+     * ovn-trace:
+       - New --ovs option to also print OpenFlow flows.
+       - put_dhcp_opts and put_dhcp_optsv6 actions may now be traced.
      * Support for managing SSL and remote connection configuration in
        northbound and southbound databases.
+     * TCP connections to northbound and southbound databases are no
+       longer enabled by default and must be explicitly configured.
+       See documentation for ovn-sbctl/ovn-nbctl "set-connection"
+       command or the ovn-ctl "--db-sb-create-insecure-remote" and
+       "--db-nb-create-insecure-remote" command-line options for
+       information regarding remote connection configuration.
+     * New appctl "inject-pkt" command in ovn-controller that allows
+       packets to be injected into the connected OVS instance.
    - Fixed regression in table stats maintenance introduced in OVS
      2.3.0, wherein the number of OpenFlow table hits and misses was
      not accurate.
@@ -24,6 +34,8 @@ Post-v2.6.0
        "selection_method" and related options in ovs-ofctl(8) for
        details.
      * The "sample" action now supports "ingress" and "egress" options.
+     * The "ct" action now supports the TFTP ALG where support is available.
+     * New actions "clone" and "ct_clear".
    - ovs-ofctl:
      * 'bundle' command now supports packet-out messages.
      * New syntax for 'ovs-ofctl packet-out' command, which uses the
@@ -39,16 +51,29 @@ Post-v2.6.0
        a per-OpenFlow bridge basis rather than globally. (The interface
        has not changed.)
      * Removed support for IPsec tunnels.
+     * Added support to set packet mark for tunnel endpoint using
+       `egress_pkt_mark` OVSDB option.
    - DPDK:
      * New option 'n_rxq_desc' and 'n_txq_desc' fields for DPDK interfaces
        which set the number of rx and tx descriptors to use for the given port.
      * Support for DPDK v16.11.
+     * Support for rx checksum offload. Refer DPDK HOWTO for details.
+     * Port Hotplug is now supported.
+     * DPDK physical ports can now have arbitrary names. The PCI address of
+       the device must be set using the 'dpdk-devargs' option. Compatibility
+       with the old dpdk<portid> naming scheme is broken, and as such a
+       device will not be available for use until a valid dpdk-devargs is
+       specified.
+     * Virtual DPDK Poll Mode Driver (vdev PMD) support.
    - Fedora packaging:
      * A package upgrade does not automatically restart OVS service.
    - ovs-vswitchd/ovs-vsctl:
      * Ports now have a "protected" flag. Protected ports can not forward
        frames to other protected ports. Unprotected ports can receive and
        forward frames to protected and other unprotected ports.
+   - ovs-vsctl, ovn-nbctl, ovn-sbctl, vtep-ctl:
+     * Database commands now accept integer ranges, e.g. "set port
+       eth0 trunks=1-10" to enable trunking VLANs 1 to 10.
 
 v2.6.0 - 27 Sep 2016
 ---------------------

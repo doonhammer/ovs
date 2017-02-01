@@ -117,6 +117,13 @@ netdev_is_pmd(const struct netdev *netdev)
     return netdev->netdev_class->is_pmd;
 }
 
+bool
+netdev_has_tunnel_push_pop(const struct netdev *netdev)
+{
+    return netdev->netdev_class->push_header
+           && netdev->netdev_class->pop_header;
+}
+
 static void
 netdev_initialize(void)
     OVS_EXCLUDED(netdev_mutex)
@@ -324,7 +331,11 @@ netdev_is_reserved_name(const char *name)
  * null.
  *
  * Some network devices may need to be configured (with netdev_set_config())
- * before they can be used. */
+ * before they can be used.
+ *
+ * Before opening rxqs or sending packets, '*netdevp' may need to be
+ * reconfigured (with netdev_is_reconf_required() and netdev_reconfigure()).
+ * */
 int
 netdev_open(const char *name, const char *type, struct netdev **netdevp)
     OVS_EXCLUDED(netdev_mutex)
@@ -417,13 +428,19 @@ netdev_set_config(struct netdev *netdev, const struct smap *args, char **errp)
 {
     if (netdev->netdev_class->set_config) {
         const struct smap no_args = SMAP_INITIALIZER(&no_args);
+        char *verbose_error = NULL;
         int error;
 
         error = netdev->netdev_class->set_config(netdev,
-                                                 args ? args : &no_args);
+                                                 args ? args : &no_args,
+                                                 &verbose_error);
         if (error) {
-            VLOG_WARN_BUF(errp, "%s: could not set configuration (%s)",
+            VLOG_WARN_BUF(verbose_error ? NULL : errp,
+                          "%s: could not set configuration (%s)",
                           netdev_get_name(netdev), ovs_strerror(error));
+            if (verbose_error) {
+                *errp = verbose_error;
+            }
         }
         return error;
     } else if (args && !smap_is_empty(args)) {
@@ -686,6 +703,9 @@ netdev_set_tx_multiq(struct netdev *netdev, unsigned int n_txq)
  * if a partial packet was transmitted or if a packet is too big or too small
  * to transmit on the device.
  *
+ * The caller must make sure that 'netdev' supports sending by making sure that
+ * 'netdev_n_txq(netdev)' returns >= 1.
+ *
  * If the function returns a non-zero value, some of the packets might have
  * been sent anyway.
  *
@@ -710,11 +730,6 @@ int
 netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
             bool may_steal, bool concurrent_txq)
 {
-    if (!netdev->netdev_class->send) {
-        dp_packet_delete_batch(batch, may_steal);
-        return EOPNOTSUPP;
-    }
-
     int error = netdev->netdev_class->send(netdev, qid, batch, may_steal,
                                            concurrent_txq);
     if (!error) {
@@ -726,25 +741,27 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
     return error;
 }
 
+/* Pop tunnel header, build tunnel metadata and resize 'batch->packets'
+ * for further processing.
+ *
+ * The caller must make sure that 'netdev' support this operation by checking
+ * that netdev_has_tunnel_push_pop() returns true. */
 void
 netdev_pop_header(struct netdev *netdev, struct dp_packet_batch *batch)
 {
-    int i, n_cnt = 0;
-    struct dp_packet **buffers = batch->packets;
+    struct dp_packet *packet;
+    size_t i, size = dp_packet_batch_size(batch);
 
-    if (!netdev->netdev_class->pop_header) {
-        dp_packet_delete_batch(batch, true);
-        batch->count = 0;
-        return;
-    }
-
-    for (i = 0; i < batch->count; i++) {
-        buffers[i] = netdev->netdev_class->pop_header(buffers[i]);
-        if (buffers[i]) {
-            buffers[n_cnt++] = buffers[i];
+    DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
+        packet = netdev->netdev_class->pop_header(packet);
+        if (packet) {
+            /* Reset the checksum offload flags if present, to avoid wrong
+             * interpretation in the further packet processing when
+             * recirculated.*/
+            reset_dp_packet_checksum_ol_flags(packet);
+            dp_packet_batch_refill(batch, packet, i);
         }
     }
-    batch->count = n_cnt;
 }
 
 void
@@ -771,20 +788,20 @@ int netdev_build_header(const struct netdev *netdev,
     return EOPNOTSUPP;
 }
 
+/* Push tunnel header (reading from tunnel metadata) and resize
+ * 'batch->packets' for further processing.
+ *
+ * The caller must make sure that 'netdev' support this operation by checking
+ * that netdev_has_tunnel_push_pop() returns true. */
 int
 netdev_push_header(const struct netdev *netdev,
                    struct dp_packet_batch *batch,
                    const struct ovs_action_push_tnl *data)
 {
-    int i;
-
-    if (!netdev->netdev_class->push_header) {
-        return -EINVAL;
-    }
-
-    for (i = 0; i < batch->count; i++) {
-        netdev->netdev_class->push_header(batch->packets[i], data);
-        pkt_metadata_init(&batch->packets[i]->md, u32_to_odp(data->out_port));
+    struct dp_packet *packet;
+    DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+        netdev->netdev_class->push_header(packet, data);
+        pkt_metadata_init(&packet->md, u32_to_odp(data->out_port));
     }
 
     return 0;

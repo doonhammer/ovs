@@ -7,7 +7,7 @@
 
 lib_LTLIBRARIES += ofproto/libofproto.la
 ofproto_libofproto_la_LDFLAGS = \
-        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+        $(OVS_LTINFO) \
         -Wl,--version-script=$(top_builddir)/ofproto/libofproto.sym \
         $(AM_LDFLAGS)
 ofproto_libofproto_la_SOURCES = \
@@ -38,6 +38,8 @@ ofproto_libofproto_la_SOURCES = \
 	ofproto/ofproto-dpif-rid.h \
 	ofproto/ofproto-dpif-sflow.c \
 	ofproto/ofproto-dpif-sflow.h \
+	ofproto/ofproto-dpif-trace.c \
+	ofproto/ofproto-dpif-trace.h \
 	ofproto/ofproto-dpif-upcall.c \
 	ofproto/ofproto-dpif-upcall.h \
 	ofproto/ofproto-dpif-xlate.c \
@@ -60,7 +62,7 @@ ofproto_libofproto_la_LIBADD += ${PTHREAD_LIBS}
 endif
 
 pkgconfig_DATA += \
-	$(srcdir)/ofproto/libofproto.pc
+	ofproto/libofproto.pc
 
 # Distribute this generated file in order not to require Python at
 # build time if ofproto/ipfix.xml is not modified.

@@ -310,8 +310,12 @@
         <code>csum</code> indicates that encapsulation checksums can be
         transmitted and received with reasonable performance. It is a hint
         to senders transmitting data to this chassis that they should use
-        checksums to protect OVN metadata. Set to <code>true</code> to enable
-        or <code>false</code> to disable.
+        checksums to protect OVN metadata. <code>ovn-controller</code>
+        populates this key with the value defined in 
+        <ref table="Open_vSwitch" column="external_ids:ovn-encap-csum"/> column
+        of the Open_vSwitch database's <ref table="Open_vSwitch"
+        db="Open_vSwitch"/> table.  Other applications should treat this key as
+        read-only. See <code>ovn-controller</code>(8) for more information.
       </p>
 
       <p>
@@ -533,6 +537,20 @@
         latter is useful by itself as a catch-all expression that matches every
         packet.
       </p>
+
+      <p>
+        Match expressions also support a kind of function syntax.  The
+        following functions are supported:
+      </p>
+
+      <dl>
+        <dt><code>is_chassis_resident(<var>lport</var>)</code></dt>
+        <dd>
+          Evaluates to true on a chassis on which logical port <var>lport</var>
+          (a quoted string) resides, and to false elsewhere.  This function was
+          introduced in OVN 2.7.
+        </dd>
+      </dl>
 
       <p><em>Symbols</em></p>
 
@@ -942,10 +960,16 @@
 
         <dt><code>next;</code></dt>
         <dt><code>next(<var>table</var>);</code></dt>
+        <dt><code>next(pipeline=<var>pipeline</var>, table=<var>table</var>);</code></dt>
         <dd>
-          Executes another logical datapath table as a subroutine.  By default,
-          the table after the current one is executed.  Specify
-          <var>table</var> to jump to a specific table in the same pipeline.
+          Executes the given logical datapath <var>table</var> in
+          <var>pipeline</var> as a subroutine.  The default <var>table</var> is
+          just after the current one.  If <var>pipeline</var> is specified, it
+          may be <code>ingress</code> or <code>egress</code>; the default
+          <var>pipeline</var> is the one currently executing.  Actions in the
+          ingress pipeline may not use <code>next</code> to jump into the
+          egress pipeline (use the <code>output</code> instead), but
+          transitions in the opposite direction are allowed.
         </dd>
 
         <dt><code><var>field</var> = <var>constant</var>;</code></dt>
@@ -1108,11 +1132,26 @@
         <dd>
           <p>
             <code>ct_snat</code> sends the packet through the SNAT zone to
-            unSNAT any packet that was SNATed in the opposite direction.  If
-            the packet needs to be sent to the next tables, then it should be
-            followed by a <code>next;</code> action.  The next tables will not
-            see the changes in the packet caused by the connection tracker.
+            unSNAT any packet that was SNATed in the opposite direction.  The
+            behavior on gateway routers differs from the behavior on a
+            distributed router:
           </p>
+          <ul>
+            <li>
+              On a gateway router, if the packet needs to be sent to the next
+              tables, then it should be followed by a <code>next;</code>
+              action.  The next tables will not see the changes in the packet
+              caused by the connection tracker.
+            </li>
+            <li>
+              On a distributed router, if the connection tracker finds a
+              connection that was SNATed in the opposite direction, then the
+              destination IP address of the packet is UNSNATed.  The packet is
+              automatically sent to the next tables as if followed by the
+              <code>next;</code> action.  The next tables will see the changes
+              in the packet caused by the connection tracker.
+            </li>
+          </ul>
           <p>
             <code>ct_snat(<var>IP</var>)</code> sends the packet through the
             SNAT zone to change the source IP address of the packet to
@@ -1121,6 +1160,20 @@
             followed by <code>next;</code> action.  The next tables will see the
             changes in the packet caused by the connection tracker.
           </p>
+        </dd>
+
+        <dt><code>ct_clear;</code></dt>
+        <dd>
+          Clears connection tracking state.
+        </dd>
+
+        <dt><code>clone { <var>action</var>; </code>...<code> };</code></dt>
+        <dd>
+          Makes a copy of the packet being processed and executes each
+          <code>action</code> on the copy.  Actions following the
+          <var>clone</var> action, if any, apply to the original, unmodified
+          packet.  This can be used as a way to ``save and restore'' the packet
+          around a set of actions that may modify it and should not persist.
         </dd>
 
         <dt><code>arp { <var>action</var>; </code>...<code> };</code></dt>
@@ -1776,6 +1829,21 @@ tcp.flags = RST;
             table="Port_Binding"/>:<code>vtep-logical-switch</code> must also
             be defined.
           </dd>
+
+          <dt><code>chassisredirect</code></dt>
+          <dd>
+            A logical port that represents a particular instance, bound
+            to a specific chassis, of an otherwise distributed parent
+            port (e.g. of type <code>patch</code>).  A
+            <code>chassisredirect</code> port should never be used as an
+            <code>inport</code>.  When an ingress pipeline sets the
+            <code>outport</code>, it may set the value to a logical port
+            of type <code>chassisredirect</code>.  This will cause the
+            packet to be directed to a specific chassis to carry out the
+            egress pipeline.  At the beginning of the egress pipeline,
+            the <code>outport</code> will be reset to the value of the
+            distributed port.
+          </dd>
         </dl>
       </column>
     </group>
@@ -1929,6 +1997,26 @@ tcp.flags = RST;
         Indicates the queue number on the physical device. This is same as the
         <code>queue_id</code> used in OpenFlow in <code>struct
         ofp_action_enqueue</code>.
+      </column>
+    </group>
+
+    <group title="Chassis Redirect Options">
+      <p>
+        These options apply to logical ports with <ref column="type"/>
+        of <code>chassisredirect</code>.
+      </p>
+
+      <column name="options" key="distributed-port">
+        The name of the distributed port for which this
+        <code>chassisredirect</code> port represents a particular instance.
+      </column>
+
+      <column name="options" key="redirect-chassis">
+        The <code>chassis</code> that this <code>chassisredirect</code> port
+        is bound to.  This is taken from <ref table="Logical_Router_Port"
+        column="options" key="redirect-chassis" db="OVN_Northbound"/>
+        in the OVN_Northbound database's <ref table="Logical_Router_Port"
+        db="OVN_Northbound"/> table.
       </column>
     </group>
 

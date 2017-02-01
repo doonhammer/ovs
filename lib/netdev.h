@@ -89,6 +89,8 @@ struct netdev_tunnel_config {
     struct in6_addr ipv6_dst;
 
     uint32_t exts;
+    bool set_egress_pkt_mark;
+    uint32_t egress_pkt_mark;
 
     uint8_t ttl;
     bool ttl_inherit;
@@ -109,6 +111,7 @@ bool netdev_is_reserved_name(const char *name);
 int netdev_n_txq(const struct netdev *netdev);
 int netdev_n_rxq(const struct netdev *netdev);
 bool netdev_is_pmd(const struct netdev *netdev);
+bool netdev_has_tunnel_push_pop(const struct netdev *netdev);
 
 /* Open and close. */
 int netdev_open(const char *name, const char *type, struct netdev **netdevp);

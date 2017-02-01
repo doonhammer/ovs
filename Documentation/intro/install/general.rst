@@ -125,6 +125,10 @@ The datapath tests for userspace and Linux datapaths also rely upon:
 
 - netcat. Several common implementations are known to work.
 
+- curl. Version 7.47.0 is known to work. Earlier versions should also work.
+
+- tftpy. Version 0.6.2 is known to work. Earlier versions should also work.
+
 The ovs-vswitchd.conf.db(5) manpage will include an E-R diagram, in formats
 other than plain text, only if you have the following:
 
@@ -137,20 +141,16 @@ If you are going to extensively modify Open vSwitch, consider installing the
 following to obtain better warnings:
 
 - "sparse" version 0.4.4 or later
-  (http://www.kernel.org/pub/software/devel/sparse/dist/).
+  (https://www.kernel.org/pub/software/devel/sparse/dist/).
 
 - GNU make.
 
 - clang, version 3.4 or later
 
-- flake8, version 2.X, along with the hacking flake8 plugin (for Python code).
-  The automatic flake8 check that runs against Python code has some warnings
-  enabled that come from the "hacking" flake8 plugin. If it's not installed,
-  the warnings just won't occur until it's run on a system with "hacking"
-  installed. Note that there are problems with flake8 3.0 and the "hacking"
-  plugin. To ensure you get flake8 2.X, you can use::
-
-      $ pip install 'flake8<3.0'
+- flake8 along with the hacking flake8 plugin (for Python code). The automatic
+  flake8 check that runs against Python code has some warnings enabled that
+  come from the "hacking" flake8 plugin. If it's not installed, the warnings
+  just won't occur until it's run on a system with "hacking" installed.
 
 You may find the ovs-dev script found in ``utilities/ovs-dev.py`` useful.
 
@@ -171,7 +171,7 @@ simply install and run Open vSwitch you require the following software:
 
 - For optional support of ingress policing on Linux, the "tc" program
   from iproute2 (part of all major distributions and available at
-  http://www.linux-foundation.org/en/Net:Iproute2).
+  https://wiki.linuxfoundation.org/networking/iproute2).
 
 - Python 2.7. You must also have the Python six library.
 

@@ -16,12 +16,12 @@ EXTRA_DIST += \
 	Documentation/intro/install/fedora.rst \
 	Documentation/intro/install/general.rst \
 	Documentation/intro/install/netbsd.rst \
+	Documentation/intro/install/ovn-upgrades.rst \
 	Documentation/intro/install/rhel.rst \
 	Documentation/intro/install/userspace.rst \
 	Documentation/intro/install/windows.rst \
 	Documentation/intro/install/xenserver.rst \
 	Documentation/tutorials/index.rst \
-	Documentation/tutorials/ovn-basics.rst \
 	Documentation/tutorials/ovs-advanced.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/bonding.rst \
@@ -29,7 +29,6 @@ EXTRA_DIST += \
 	Documentation/topics/design.rst \
 	Documentation/topics/dpdk/index.rst \
 	Documentation/topics/dpdk/vhost-user.rst \
-	Documentation/topics/dpdk/ivshmem.rst \
 	Documentation/topics/testing.rst \
 	Documentation/topics/high-availability.rst \
 	Documentation/topics/integration.rst \
@@ -84,6 +83,7 @@ EXTRA_DIST += \
 	Documentation/internals/contributing/coding-style.rst \
 	Documentation/internals/contributing/coding-style-windows.rst \
 	Documentation/internals/contributing/documentation-style.rst \
+	Documentation/internals/contributing/libopenvswitch-abi.rst \
 	Documentation/internals/contributing/submitting-patches.rst \
 	Documentation/requirements.txt
 
@@ -96,9 +96,26 @@ SPHINXBUILDDIR = $(builddir)/Documentation/_build
 # Internal variables.
 PAPEROPT_a4 = -D latex_paper_size=a4
 PAPEROPT_letter = -D latex_paper_size=letter
-ALLSPHINXOPTS = -W -d $(SPHINXBUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SPHINXSRCDIR)
+ALLSPHINXOPTS = -W -n -d $(SPHINXBUILDDIR)/doctrees $(PAPEROPT_$(PAPER)) $(SPHINXOPTS) $(SPHINXSRCDIR)
 
-.PHONY: htmldocs
+sphinx_verbose = $(sphinx_verbose_@AM_V@)
+sphinx_verbose_ = $(sphinx_verbose_@AM_DEFAULT_V@)
+sphinx_verbose_0 = -q
+
+if HAVE_SPHINX
 htmldocs:
-	rm -rf $(SPHINXBUILDDIR)/*
-	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/html
+	$(AM_V_GEN)$(SPHINXBUILD) $(sphinx_verbose) -b html $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/html
+ALL_LOCAL += htmldocs
+
+check-docs:
+	$(SPHINXBUILD) -b linkcheck $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/linkcheck
+
+clean-docs:
+	rm -rf $(SPHINXBUILDDIR)/doctrees
+	rm -rf $(SPHINXBUILDDIR)/html
+	rm -rf $(SPHINXBUILDDIR)/linkcheck
+CLEAN_LOCAL += clean-docs
+endif
+.PHONY: htmldocs
+.PHONY: check-docs
+.PHONY: clean-docs
