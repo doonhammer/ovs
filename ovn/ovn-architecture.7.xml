@@ -383,9 +383,10 @@
     </li>
 
     <li>
-      <dfn>Logical services</dfn> are logical references to virtual network functions
-      (VNF). Adding a logical service requires adding steering rules to the OVN Northbound
-      database. These are the only rules necessary to implement traffic steering for VNFs.
+      <dfn>Logical port chains</dfn> are logical references to virtual network 
+      functions (VNF). Adding a logical port chain requires adding one or more
+      VNFs to a port chain and tehn steering traffic into the port chain by
+      setting an ACL classification with the action 'sfc'. 
       See <code>Life Cycle of an inserted VNF</code>, below, for details.
     </li>
     <li>
