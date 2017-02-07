@@ -2483,7 +2483,8 @@ build_pre_stateful(struct ovn_datapath *od, struct hmap *lflows)
 
 static bool
 build_chain_classifier_entry(struct ovn_datapath *od, struct hmap *ports,
-                             const struct nbrec_acl *acl, struct ds *ds_action);
+                             const struct nbrec_acl *acl, 
+                             struct ds *ds_action);
 
 static void
 build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
@@ -2793,20 +2794,26 @@ cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
  */
 static bool
 build_chain_classifier_entry(struct ovn_datapath *od, struct hmap *ports,
-                             const struct nbrec_acl *acl, struct ds *ds_action /*output*/)
+                             const struct nbrec_acl *acl, struct ds *ds_action)
 {
     /* TODO: match needs to explicitly include inport. That is needed until sfc
      *       has safeguards to tell apart initial packet from a packet that is
      *       already in the chain.
      */
     if (!strstr(acl->match, "inport")) {
-        VLOG_INFO("Acl match clause for sfc action needs to provide inport -- %s\n", acl->match);
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl,
+            "Acl match clause for sfc action needs to provide inport -- %s\n", 
+            acl->match);
         return false;
     }
 
     const char *const chain_id = smap_get(&acl->options, "sfc-port-chain");
     if (!chain_id) {
-        VLOG_INFO("Acl match %s with sfc action requires sfc-port-chain option\n", acl->match);
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl,
+            "Acl match %s with sfc action requires sfc-port-chain option\n", 
+            acl->match);
         return false;
     }
 
@@ -2832,38 +2839,50 @@ build_chain_classifier_entry(struct ovn_datapath *od, struct hmap *ports,
     }
 
     if (!chain_found) {
-        VLOG_INFO("Acl match for sfc action could not locate chain %s\n", chain_id);
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl, 
+            "Acl match for sfc action could not locate chain %s\n", chain_id);
         return false;
     }
 
-    /* extract first logical port of chain, by looking at the initial port pair group */
+    /* Extract first logical port of chain, by looking at the 
+       initial port pair group. */
     const struct nbrec_logical_port_pair_group *lppg = NULL;
     const struct nbrec_logical_port_pair *lpp = NULL;
     struct ovn_port *first_ovn_port = NULL;
 
-    /* Identify initial port pair group to be used, according to their sortkey */
+    /* Identify initial port pair group to be used, according to the sortkey. */
     if (lsp_chain->n_port_pair_groups > 0) {
-        struct nbrec_logical_port_pair_group **port_pair_groups
-            = xmalloc(sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
-        memcpy(port_pair_groups, lsp_chain->port_pair_groups,
-               sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
-        qsort(port_pair_groups, lsp_chain->n_port_pair_groups, sizeof *port_pair_groups,
+        //struct nbrec_logical_port_pair_group **port_pair_groups
+        //    = xmalloc(sizeof *port_pair_groups * 
+        //        lsp_chain->n_port_pair_groups);
+        //memcpy(port_pair_groups, lsp_chain->port_pair_groups,
+        //       sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
+        struct nbrec_logical_port_pair_group
+            **port_pair_groups = xmemdup(lpc->port_pair_groups,
+            sizeof *port_pair_groups * lpc->n_port_pair_groups);
+        qsort(port_pair_groups, lsp_chain->n_port_pair_groups, 
+            sizeof *port_pair_groups,
               cmp_port_pair_groups);
         lppg = port_pair_groups[0];
         free(port_pair_groups);
     }
 
-    // TODO: any port pair off of the intial pair group of chain could be used
+    /* TODO: any port pair of the intial pair group of chain could be used */
     lpp = (lppg && lppg->n_port_pairs > 0) ? lppg->port_pairs[0] : NULL;
-    first_ovn_port = (lpp && lpp->inport) ? ovn_port_find(ports, lpp->inport->name) : NULL;
+    first_ovn_port = (lpp && lpp->inport) ? ovn_port_find(ports, 
+        lpp->inport->name) : NULL;
 
     if (!first_ovn_port) {
-        VLOG_INFO("Acl match for sfc action could not locate logical port from chain %s" \
-                  " port-group %p port-chain %p\n", chain_id, lppg, lpp);
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_WARN_RL(&rl,
+        "Acl match for sfc action could not locate logical port from chain %s \
+                   port-group %p port-chain %p\n", chain_id, lppg, lpp);
         return false;
     }
 
-    ds_put_format(ds_action, "outport = %s;"" output;", first_ovn_port->json_key);
+    ds_put_format(ds_action, "outport = %s; output;", 
+                  first_ovn_port->json_key);
     return true;
 }
 
@@ -2882,7 +2901,6 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     *     * Unit tests!
     */
     const uint16_t ingress_inner_priority = 150;
-    //const uint16_t egress_inner_priority = 150;
 
     struct ovn_port **input_port_array = NULL;
     struct ovn_port **output_port_array = NULL;
@@ -2894,99 +2912,101 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     struct nbrec_logical_port_pair_group *lppg;
     struct nbrec_logical_port_pair *lpp;
 
-    VLOG_INFO("beginning port-chain insertion\n");
     /* Ingress table ls_in_chain: default to passing through to the next table
      * (priority 0)
      */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, 0, "1", "next;");
 
+    /* No port chains defined therefore, no further work to do here. */
     if (!od->nbs->port_chains) {
-        return;  // no shoes, no shirt, no chains: no further work to do here :)
+        return;  
     }
 
     struct ds ds_match = DS_EMPTY_INITIALIZER;
     struct ds ds_action = DS_EMPTY_INITIALIZER;
-
-    VLOG_INFO("Iterating through %"PRIuSIZE" port-chains\n", od->nbs->n_port_chains);
-    /*
-     * Iterate through all the port-chains defined for this datapath.
-     */
+    
+    /* Iterate through all the port-chains defined for this datapath. */
     for (size_t i = 0; i < od->nbs->n_port_chains; i++) {
         bool obtainedAllNeededInfo = true;
 
         lpc = od->nbs->port_chains[i];
-        VLOG_INFO("Iterating through %"PRIuSIZE" port-pair-groups for %s\n", lpc->n_port_pair_groups, lpc->name);
         /*
-         * Allocate space for port-pairs + 1. The Extra 1 represents the final hop to reach desired destination.
-         * TODO: We are going to allocate enough space to hold all the hops: 1 x portGroups + 1. This needs
-         *       to enhanced to: SUM(port pairs of each port group) + 1
+         * Allocate space for port-pairs + 1. The Extra 1 represents the 
+         * final hop to reach desired destination.
+         * TODO: We are going to allocate enough space to hold all the hops: 
+         *  1 x portGroups + 1. This needs
+         *  to enhanced to: SUM(port pairs of each port group) + 1
          */
-        input_port_array = xmalloc(sizeof *src_port * lpc->n_port_pair_groups + 1);
-        output_port_array = xmalloc(sizeof *dst_port * (lpc->n_port_pair_groups + 1));
+        input_port_array = xmalloc(sizeof *src_port * 
+                                   lpc->n_port_pair_groups + 1);
+        output_port_array = xmalloc(sizeof *dst_port * 
+                                  (lpc->n_port_pair_groups + 1));
 
-        /* Copy port groups from chain and sort them according to their sortkey */
-        struct nbrec_logical_port_pair_group **port_pair_groups
-            = xmalloc(sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        memcpy(port_pair_groups, lpc->port_pair_groups,
-               sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        qsort(port_pair_groups, lpc->n_port_pair_groups, sizeof *port_pair_groups,
-              cmp_port_pair_groups);
+        /* Copy port groups from chain and sort them according to sortkey. */
+        //struct nbrec_logical_port_pair_group **port_pair_groups
+        //    = xmalloc(sizeof *port_pair_groups * lpc->n_port_pair_groups);
+        //memcpy(port_pair_groups, lpc->port_pair_groups,
+        //      sizeof *port_pair_groups * lpc->n_port_pair_groups);
+        struct nbrec_logical_port_pair_group
+            **port_pair_groups = xmemdup(lpc->port_pair_groups,
+            sizeof *port_pair_groups * lpc->n_port_pair_groups);
+        qsort(port_pair_groups, lpc->n_port_pair_groups, 
+              sizeof *port_pair_groups, cmp_port_pair_groups);
 
-        /*
-         * For each port-pair-group in a port chain pull out the port-pairs
-         */
+        /* For each port-pair-group in a port chain pull out the port-pairs. */
         for (size_t j = 0; j < lpc->n_port_pair_groups; j++) {
             lppg = port_pair_groups[j];
-            VLOG_INFO("Iterating through %"PRIuSIZE" port-pair-group %s for chain %s\n", j, lppg->name, lpc->name);
             for (size_t k = 0; k < lppg->n_port_pairs; k++){
-                /*
-                 * TODO: Need to add load balancing logic when LB becomes available.
-                 *       Until LB is available just take the first PP in the PPG.
-                 */
+                 /* TODO: Need to add load balancing logic when LB becomes 
+                 * available. Until LB is available just take the first 
+                 * PP in the PPG. */
                 if (k > 0) {
-                    VLOG_INFO("Warning: Currently lacking support for more than one port-pair %"PRIuSIZE"\n", \
+                    static struct vlog_rate_limit rl = 
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+                    VLOG_WARN_RL(&rl,
+                        "Currently lacking support for more than \
+                            one port-pair %"PRIuSIZE"\n",
                               lppg->n_port_pairs);
                     break;
                 }
                 lpp = lppg->port_pairs[k];
 
-                input_port_array[j] = lpp->inport ? ovn_port_find(ports, lpp->inport->name) : NULL;
-                VLOG_INFO("In port for port-pair-group %s : %s  %p\n", lppg->name,
-                          (lpp->inport ? lpp->inport->name : ""), input_port_array[j]);
-                output_port_array[j] = lpp->outport ? ovn_port_find(ports, lpp->outport->name) : NULL;
-                VLOG_INFO("Out port for port-pair-group %s : %s  %p \n", lppg->name,
-                          (lpp->outport ? lpp->outport->name : ""), output_port_array[j]);
+                input_port_array[j] = lpp->inport ? ovn_port_find(ports, 
+                                       lpp->inport->name) : NULL;
+                output_port_array[j] = lpp->outport ? ovn_port_find(ports, 
+                                        lpp->outport->name) : NULL;
 
-                if (!input_port_array[j] || !output_port_array[j]) obtainedAllNeededInfo = false;
+                if (!input_port_array[j] || !output_port_array[j]) {
+                    obtainedAllNeededInfo = false;
+                }
             }
         }
 
-        /*
-         * Set last entry in port_array as the last port in chain. Note that for reverse
-         * output_port_array[lpc->n_port_pair_groups] would become the first inport.
-         */
-        dst_port = lpc->last_hop_port ? ovn_port_find(ports, lpc->last_hop_port->name) : NULL;
+        
+        /* Set last entry in port_array as the last port in chain. 
+        *  Note that for reverse output_port_array[lpc->n_port_pair_groups] 
+        *  would become the first inport. */
+        dst_port = lpc->last_hop_port ? ovn_port_find(ports, 
+                    lpc->last_hop_port->name) : NULL;
         input_port_array[lpc->n_port_pair_groups] = dst_port;
-        VLOG_INFO("In port for last port-pair-group %s  %p\n",
-                  (lpc->last_hop_port ? lpc->last_hop_port->name : ""),
-                  input_port_array[lpc->n_port_pair_groups]);
 
         struct eth_addr dst_logical_port_ea;
         ovs_be32 dst_logical_port_ip;
         if (dst_port && dst_port->nbsp) {
-            if (!ovs_scan(dst_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                          ETH_ADDR_SCAN_ARGS(dst_logical_port_ea), IP_SCAN_ARGS(&dst_logical_port_ip))) {
-                obtainedAllNeededInfo = false;
-            }
+            if (!ovs_scan(dst_port->nbsp->addresses[0],  
+                           ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
+                           ETH_ADDR_SCAN_ARGS(dst_logical_port_ea), 
+                           IP_SCAN_ARGS(&dst_logical_port_ip))) {
+                              obtainedAllNeededInfo = false;
+                           }
         } else {
             obtainedAllNeededInfo = false;
         }
 
         output_port_array[lpc->n_port_pair_groups] = NULL;
 
-        /*
-         * Steer traffic through the port-chain (FORWARD)
-         */
+        
+        /* Steer traffic through the port-chain (FORWARD). */
         if (obtainedAllNeededInfo) {
             for (size_t j = 0; j < lpc->n_port_pair_groups; j++){
 #ifdef _SFC_CHAIN_IS_IP_BASED
@@ -2994,17 +3014,18 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                               output_port_array[j]->json_key,
                               IP_ARGS(dst_logical_port_ip));
 #else // #ifdef _SFC_CHAIN_IS_IP_BASED
-                ds_put_format(&ds_match, "inport == %s && eth.dst == " ETH_ADDR_FMT,
+                ds_put_format(&ds_match, 
+                              "inport == %s && eth.dst == " ETH_ADDR_FMT,
                               output_port_array[j]->json_key,
                               ETH_ADDR_ARGS(dst_logical_port_ea));
 #endif // #ifdef _SFC_CHAIN_IS_IP_BASED
 
-                ds_put_format(&ds_action, "outport = %s;"" output;",
+                ds_put_format(&ds_action, "outport = %s; output;",
                               input_port_array[j+1]->json_key);
 
-                VLOG_INFO("Port chain action %s\n", ds_cstr_ro(&ds_action));
-                ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_inner_priority,
-                              ds_cstr_ro(&ds_match), ds_cstr_ro(&ds_action));
+                ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, 
+                               ingress_inner_priority,
+                               ds_cstr_ro(&ds_match), ds_cstr_ro(&ds_action));
 
                 ds_clear(&ds_match);
                 ds_clear(&ds_action);

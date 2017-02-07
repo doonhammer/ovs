@@ -791,7 +791,8 @@ lsp_by_name_or_uuid(struct ctl_context *ctx, const char *id,
  * Port chain CLI Functions
  */
 static const struct nbrec_logical_port_chain *
-lsp_chain_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bool must_exist)
+lsp_chain_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                           const bool must_exist)
 {
     const struct nbrec_logical_port_chain *lsp_chain = NULL;
     bool is_uuid = false;
@@ -818,7 +819,8 @@ lsp_chain_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bool mu
     return lsp_chain;
 }
 static const struct nbrec_logical_port_pair_group *
-lsp_pair_group_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bool must_exist)
+lsp_pair_group_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                                const bool must_exist)
 {
     const struct nbrec_logical_port_pair_group *lsp_pair_group = NULL;
     bool is_uuid = false;
@@ -826,8 +828,9 @@ lsp_pair_group_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bo
 
     if (uuid_from_string(&lsp_pair_group_uuid, id)) {
         is_uuid = true;
-        lsp_pair_group = nbrec_logical_port_pair_group_get_for_uuid(ctx->idl,
-                                                                    &lsp_pair_group_uuid);
+        lsp_pair_group = 
+          nbrec_logical_port_pair_group_get_for_uuid(ctx->idl,
+                                                      &lsp_pair_group_uuid);
     }
 
     if (!lsp_pair_group) {
@@ -846,7 +849,8 @@ lsp_pair_group_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bo
 }
 
 static const struct nbrec_logical_port_pair *
-lsp_pair_by_name_or_uuid(struct ctl_context *ctx, const char *id, const bool must_exist)
+lsp_pair_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                          const bool must_exist)
 {
     const struct nbrec_logical_port_pair *lsp_pair = NULL;
     bool is_uuid = false;
@@ -882,10 +886,12 @@ nbctl_lsp_chain_add(struct ctl_context *ctx)
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true /*must_exist*/);
     const char *lsp_chain_name = ctx->argc > 3 ? ctx->argv[2] : NULL;
-    const char *last_hop_lsp_name = lsp_chain_name ? ctx->argv[3] : ctx->argv[2];
+    const char *last_hop_lsp_name = 
+                               lsp_chain_name ? ctx->argv[3] : ctx->argv[2];
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, "--add-duplicate") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, 
+                                 "--add-duplicate") != NULL;
     if (may_exist && add_duplicate) {
         ctl_fatal("--may-exist and --add-duplicate may not be used together");
     }
@@ -933,16 +939,19 @@ nbctl_lsp_chain_add(struct ctl_context *ctx)
 static void
 remove_lsp_chain(const struct nbrec_logical_switch *lswitch, size_t idx)
 {
-    const struct nbrec_logical_port_chain *lsp_chain = lswitch->port_chains[idx];
+    const struct nbrec_logical_port_chain *lsp_chain = 
+                                                    lswitch->port_chains[idx];
 
     /* First remove 'lsp-chain' from the array of port-chains.  This is what will
      * actually cause the logical port-chain to be deleted when the transaction is
      * sent to the database server (due to garbage collection). */
     struct nbrec_logical_port_chain **new_port_chain
-        = xmemdup(lswitch->port_chains, sizeof *new_port_chain * lswitch->n_port_chains);
+        = xmemdup(lswitch->port_chains, 
+                   sizeof *new_port_chain * lswitch->n_port_chains);
     new_port_chain[idx] = new_port_chain[lswitch->n_port_chains - 1];
     nbrec_logical_switch_verify_port_chains(lswitch);
-    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain, lswitch->n_port_chains - 1);
+    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain, 
+                                          lswitch->n_port_chains - 1);
     free(new_port_chain);
 
     /* Delete 'lsp-chain' from the IDL.  This won't have a real effect on the
@@ -985,7 +994,8 @@ print_lsp_chain_entry(struct ctl_context *ctx,
 
     smap_init(&lsp_chains);
     for (i = 0; i < lswitch->n_port_chains; i++) {
-        const struct nbrec_logical_port_chain *lsp_chain = lswitch->port_chains[i];
+        const struct nbrec_logical_port_chain *lsp_chain = 
+                                                    lswitch->port_chains[i];
         if (chain_name_filter && strcmp(chain_name_filter, lsp_chain->name)) {
             continue;
         }
@@ -995,7 +1005,8 @@ print_lsp_chain_entry(struct ctl_context *ctx,
                             lswitch->name, lsp_chain->name);
         } else {
             smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s)",
-                            UUID_ARGS(&lsp_chain->header_.uuid), lsp_chain->name);
+                            UUID_ARGS(&lsp_chain->header_.uuid), 
+                            lsp_chain->name);
         }
     }
 
@@ -1038,21 +1049,27 @@ print_lsp_chain(const struct nbrec_logical_port_chain *lsp_chain,
     for (size_t i = 0; i < lsp_chain->n_port_pair_groups; i++) {
         const struct nbrec_logical_port_pair_group *lsp_pair_group
             = lsp_chain->port_pair_groups[i];
-        ds_put_format(&ctx->output, "    lsp-pair-group %s\n", lsp_pair_group->name);
+        ds_put_format(&ctx->output, "    lsp-pair-group %s\n", 
+                       lsp_pair_group->name);
         for (size_t j = 0; j < lsp_pair_group->n_port_pairs; j++){
-            const struct nbrec_logical_port_pair *lsp_pair = lsp_pair_group->port_pairs[j];
-            ds_put_format(&ctx->output, "        lsp-pair %s\n", lsp_pair->name);
+            const struct nbrec_logical_port_pair *lsp_pair = 
+                                                lsp_pair_group->port_pairs[j];
+            ds_put_format(&ctx->output, 
+                           "        lsp-pair %s\n", lsp_pair->name);
 
-            const struct nbrec_logical_switch_port *linport  = lsp_pair->inport;
+            const struct nbrec_logical_switch_port *linport = lsp_pair->inport;
             if (linport) {
-                ds_put_format(&ctx->output, "            lsp-pair inport "UUID_FMT" (%s)\n",
-                              UUID_ARGS(&linport->header_.uuid), linport->name);
+                ds_put_format(&ctx->output, 
+                           "            lsp-pair inport "UUID_FMT" (%s)\n",
+                            UUID_ARGS(&linport->header_.uuid), linport->name);
             }
 
-            const struct nbrec_logical_switch_port *loutport = lsp_pair->outport;
+            const struct nbrec_logical_switch_port *loutport = 
+                                                            lsp_pair->outport;
             if (loutport) {
-                ds_put_format(&ctx->output, "            lsp-pair outport "UUID_FMT" (%s)\n",
-                              UUID_ARGS(&loutport->header_.uuid), loutport->name);
+                ds_put_format(&ctx->output, 
+                          "            lsp-pair outport "UUID_FMT" (%s)\n",
+                          UUID_ARGS(&loutport->header_.uuid), loutport->name);
             }
         }
     }
@@ -1132,20 +1149,26 @@ nbctl_lsp_pair_group_add(struct ctl_context *ctx)
 
     /* Insert the logical port-pair-group into the logical switch. */
     nbrec_logical_port_chain_verify_port_pair_groups(lsp_chain);
-    struct nbrec_logical_port_pair_group  **new_port_pair_group = xmalloc(sizeof *new_port_pair_group *
-                                                                          (lsp_chain->n_port_pair_groups + 1));
-    memcpy(new_port_pair_group, lsp_chain->port_pair_groups, sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
+    struct nbrec_logical_port_pair_group  **new_port_pair_group = 
+                              xmalloc(sizeof *new_port_pair_group *
+                              (lsp_chain->n_port_pair_groups + 1));
+    memcpy(new_port_pair_group, lsp_chain->port_pair_groups, 
+                  sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
     new_port_pair_group[lsp_chain->n_port_pair_groups] =
         CONST_CAST(struct nbrec_logical_port_pair_group *,lsp_pair_group);
-    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, new_port_pair_group, lsp_chain->n_port_pair_groups + 1);
+    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, 
+                     new_port_pair_group, 
+                     lsp_chain->n_port_pair_groups + 1);
     free(new_port_pair_group);
 }
 
 /* Removes lsp-pair-group 'lsp_chain->port_pair_group[idx]'. */
 static void
-remove_lsp_pair_group(const struct nbrec_logical_port_chain *lsp_chain, size_t idx)
+remove_lsp_pair_group(const struct nbrec_logical_port_chain *lsp_chain, 
+                      size_t idx)
 {
-    const struct nbrec_logical_port_pair_group *lsp_pair_group = lsp_chain->port_pair_groups[idx];
+    const struct nbrec_logical_port_pair_group *lsp_pair_group = 
+                                              lsp_chain->port_pair_groups[idx];
 
     /* First remove 'lsp-pair-group' from the array of port-pair-groups.  This is what will
      * actually cause the logical port-pair-group to be deleted when the transaction is
@@ -3760,65 +3783,7 @@ cmd_set_ssl(struct ctl_context *ctx)
 
     nbrec_nb_global_set_ssl(nb_global, ssl);
 }
-#ifdef JED
-static const struct ctl_table_class tables[] = {
-    {&nbrec_table_nb_global,
-     {{&nbrec_table_nb_global, NULL, NULL},
-      {NULL, NULL, NULL}}},
 
-    {&nbrec_table_logical_switch,
-     {{&nbrec_table_logical_switch, &nbrec_logical_switch_col_name, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_logical_switch_port,
-     {{&nbrec_table_logical_switch_port, &nbrec_logical_switch_port_col_name,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_acl,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_load_balancer,
-     {{NULL, NULL, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_logical_router,
-     {{&nbrec_table_logical_router, &nbrec_logical_router_col_name, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_logical_router_port,
-     {{&nbrec_table_logical_router_port, &nbrec_logical_router_port_col_name,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_logical_router_static_route,
-     {{&nbrec_table_logical_router_static_route, NULL,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_nat,
-     {{&nbrec_table_nat, NULL,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_address_set,
-     {{&nbrec_table_address_set, &nbrec_address_set_col_name, NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_dhcp_options,
-     {{&nbrec_table_dhcp_options, NULL,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {&nbrec_table_qos,
-     {{&nbrec_table_qos, NULL,
-       NULL},
-      {NULL, NULL, NULL}}},
-
-    {NULL, {{NULL, NULL, NULL}, {NULL, NULL, NULL}}}
-};
-#endif
 static const struct ctl_table_class tables[NBREC_N_TABLES] = {
     [NBREC_TABLE_LOGICAL_SWITCH].row_ids[0]
     = {&nbrec_table_logical_switch, &nbrec_logical_switch_col_name, NULL},
@@ -4085,30 +4050,36 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "show", 0, 1, "[SWITCH]", NULL, nbctl_show, NULL, "", RO },
 
     /* lsp-chain commands. */
-    { "lsp-chain-add", 2, 3, "SWITCH [CHAIN] LAST_PORT", NULL, nbctl_lsp_chain_add,
+    { "lsp-chain-add", 2, 3, "SWITCH [CHAIN] LAST_PORT", NULL, 
+      nbctl_lsp_chain_add,
       NULL, "--may-exist,--add-duplicate", RW },
     { "lsp-chain-del", 1, 1, "CHAIN", NULL, nbctl_lsp_chain_del,
       NULL, "--if-exists", RW },
-    { "lsp-chain-list", 0, 2, "[SWITCH [CHAIN]]", NULL, nbctl_lsp_chain_list, NULL, "", RO },
-    { "lsp-chain-show", 0, 1, "[CHAIN]", NULL, nbctl_lsp_chain_show, NULL, "", RO },
+    { "lsp-chain-list", 0, 2, "[SWITCH [CHAIN]]", NULL, 
+      nbctl_lsp_chain_list, NULL, "", RO },
+    { "lsp-chain-show", 0, 1, "[CHAIN]", NULL, 
+      nbctl_lsp_chain_show, NULL, "", RO },
 
     /* lsp-pair-group commands. */
     { "lsp-pair-group-add", 1, 3, "CHAIN [PAIR-GROUP [OFFSET]]",
       NULL, nbctl_lsp_pair_group_add, NULL, "--may-exist,--add-duplicate", RW },
     { "lsp-pair-group-del", 1, 1, "PAIR-GROUP", NULL, nbctl_lsp_pair_group_del,
       NULL, "--if-exists", RW },
-    { "lsp-pair-group-list", 1, 1, "CHAIN", NULL, nbctl_lsp_pair_group_list, NULL, "", RO },
+    { "lsp-pair-group-list", 1, 1, "CHAIN", NULL, nbctl_lsp_pair_group_list, 
+      NULL, "", RO },
     { "lsp-pair-group-add-port-pair", 2, 2, "PAIR-GROUP LSP-PAIR",
       NULL, nbctl_lsp_pair_group_add_port_pair, NULL, "--may-exist", RW },
     { "lsp-pair-group-del-port-pair", 2, 2, "PAIR-GROUP LSP-PAIR",
       NULL, nbctl_lsp_pair_group_del_port_pair, NULL, "--if-exists", RW },
 
     /* lsp-pair commands. */
-    { "lsp-pair-add", 3, 4, "SWITCH, PORT-IN, PORT-OUT [LSP-PAIR]", NULL, nbctl_lsp_pair_add,
+    { "lsp-pair-add", 3, 4, "SWITCH, PORT-IN, PORT-OUT [LSP-PAIR]", NULL, 
+      nbctl_lsp_pair_add,
       NULL, "--may-exist,--add-duplicate", RW },
     { "lsp-pair-del", 1, 1, "LSP-PAIR", NULL, nbctl_lsp_pair_del,
       NULL, "--if-exists", RW },
-    { "lsp-pair-list", 0, 2, "[SWITCH [LSP-PAIR]]", NULL, nbctl_lsp_pair_list, NULL, "", RO },
+    { "lsp-pair-list", 0, 2, "[SWITCH [LSP-PAIR]]", NULL, 
+      nbctl_lsp_pair_list, NULL, "", RO },
 
     /* logical switch commands. */
     { "ls-add", 0, 1, "[SWITCH]", NULL, nbctl_ls_add, NULL,
@@ -4117,8 +4088,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "ls-list", 0, 0, "", NULL, nbctl_ls_list, NULL, "", RO },
 
     /* acl commands. */
-    { "acl-add", 5, 6, "SWITCH DIRECTION PRIORITY MATCH ACTION [ACL-OPTIONS]", NULL,
-      nbctl_acl_add, NULL, "--log,--may-exist", RW },
+    { "acl-add", 5, 6, "SWITCH DIRECTION PRIORITY MATCH ACTION [ACL-OPTIONS]", 
+      NULL, nbctl_acl_add, NULL, "--log,--may-exist", RW },
     { "acl-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
       nbctl_acl_del, NULL, "", RW },
     { "acl-list", 1, 1, "SWITCH", NULL, nbctl_acl_list, NULL, "", RO },
