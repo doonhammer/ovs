@@ -2859,8 +2859,8 @@ build_chain_classifier_entry(struct ovn_datapath *od, struct hmap *ports,
         //memcpy(port_pair_groups, lsp_chain->port_pair_groups,
         //       sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
         struct nbrec_logical_port_pair_group
-            **port_pair_groups = xmemdup(lpc->port_pair_groups,
-            sizeof *port_pair_groups * lpc->n_port_pair_groups);
+            **port_pair_groups = xmemdup(lsp_chain->port_pair_groups,
+            sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
         qsort(port_pair_groups, lsp_chain->n_port_pair_groups, 
             sizeof *port_pair_groups,
               cmp_port_pair_groups);
