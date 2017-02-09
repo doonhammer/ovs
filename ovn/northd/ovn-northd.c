@@ -2776,6 +2776,12 @@ cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
     if (ppg1->n_sortkey == 0 || ppg2->n_sortkey == 0) {
         return 0;
     }
+   
+    if (ppg1->n_sortkey == 0) {
+        return ppg2->n_sortkey == 0 ? -1 : 0;
+    } else if (ppg2->n_sortkey == 0) {
+        return 1;
+    }
 
     const int64_t key1 = ppg1->sortkey[0];
     const int64_t key2 = ppg2->sortkey[0];
@@ -2851,13 +2857,8 @@ build_chain_classifier_entry(struct ovn_datapath *od, struct hmap *ports,
     const struct nbrec_logical_port_pair *lpp = NULL;
     struct ovn_port *first_ovn_port = NULL;
 
-    /* Identify initial port pair group to be used, according to the sortkey. */
+    /* Identify initial port pair group to be used, according to the sortkey.*/
     if (lsp_chain->n_port_pair_groups > 0) {
-        //struct nbrec_logical_port_pair_group **port_pair_groups
-        //    = xmalloc(sizeof *port_pair_groups * 
-        //        lsp_chain->n_port_pair_groups);
-        //memcpy(port_pair_groups, lsp_chain->port_pair_groups,
-        //       sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
         struct nbrec_logical_port_pair_group
             **port_pair_groups = xmemdup(lsp_chain->port_pair_groups,
             sizeof *port_pair_groups * lsp_chain->n_port_pair_groups);
@@ -2942,18 +2943,14 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         output_port_array = xmalloc(sizeof *dst_port * 
                                   (lpc->n_port_pair_groups + 1));
 
-        /* Copy port groups from chain and sort them according to sortkey. */
-        //struct nbrec_logical_port_pair_group **port_pair_groups
-        //    = xmalloc(sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        //memcpy(port_pair_groups, lpc->port_pair_groups,
-        //      sizeof *port_pair_groups * lpc->n_port_pair_groups);
+        /* Copy port groups from chain and sort them according to sortkey.*/
         struct nbrec_logical_port_pair_group
             **port_pair_groups = xmemdup(lpc->port_pair_groups,
             sizeof *port_pair_groups * lpc->n_port_pair_groups);
         qsort(port_pair_groups, lpc->n_port_pair_groups, 
               sizeof *port_pair_groups, cmp_port_pair_groups);
 
-        /* For each port-pair-group in a port chain pull out the port-pairs. */
+        /* For each port-pair-group in a port chain pull out the port-pairs.*/
         for (size_t j = 0; j < lpc->n_port_pair_groups; j++) {
             lppg = port_pair_groups[j];
             for (size_t k = 0; k < lppg->n_port_pairs; k++){
@@ -2982,7 +2979,6 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
             }
         }
 
-        
         /* Set last entry in port_array as the last port in chain. 
         *  Note that for reverse output_port_array[lpc->n_port_pair_groups] 
         *  would become the first inport. */
@@ -3041,7 +3037,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     ds_destroy(&ds_action);
 }
 
-static void
+static void.
 build_qos(struct ovn_datapath *od, struct hmap *lflows) {
     ovn_lflow_add(lflows, od, S_SWITCH_IN_QOS_MARK, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_QOS_MARK, 0, "1", "next;");

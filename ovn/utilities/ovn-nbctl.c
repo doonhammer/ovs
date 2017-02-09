@@ -367,26 +367,35 @@ Logical switch port commands:\n\
   lsp-get-dhcpv4-options PORT  get the dhcpv4 options for PORT\n\
 \n\
 Logical port-chain commands:\n\
-  lsp-chain-add SWITCH [CHAIN] LAST_PORT create a logical port-chain [named LSP-CHAIN]\n\
-                                         that has LAST_PORT as last hop at the end of chain\n\
-  lsp-chain-del CHAIN                  delete LSP-CHAIN\n\
-  lsp-chain-list [SWITCH]              print the names of all logical port-chains [on SWITCH]\n\
-  lsp-chain-show SWITCH [CHAIN]        print details on port-chains on SWITCH\n\
+  lsp-chain-add SWITCH [CHAIN] LAST_PORT create a logical port-chain\n\
+                                         [named LSP-CHAIN] that has\n\
+                                         LAST_PORT as last hop at the\n\
+                                         end of chain\n\
+  lsp-chain-del CHAIN                    delete LSP-CHAIN\n\
+  lsp-chain-list [SWITCH]                print the names of all logical\n\
+                                         port-chains [on SWITCH]\n\
+  lsp-chain-show SWITCH [CHAIN]          print details on port-chains\n\
+                                         on SWITCH\n\
 \n\
 Logical port-pair-groups commands:\n\
   lsp-pair-group-add CHAIN [PAIR-GROUP [OFFSET]]\n\
-                    create a logical port-pair-group. Optionally, indicate the order it\n\
-                    should be in chain.\n\
-  lsp-pair-group-del PAIR-GROUP    delete a port-pair-group, does not delete port-pairs\n\
-  lsp-pair-group-list CHAIN    print port-pair-groups for a givan chain\n\
-  lsp-pair-group-add-port-pair PAIR-GROUP LSP-PAIR add a port pair to a port-pair-group\n\
-  lsp-pair-group-del-port-pair PAIR-GROUP LSP-PAIR del a port pair from a port-pair-group\n\
+                    create a logical port-pair-group. Optionally,\n\
+                    indicate the order it should be in chain.\n\
+  lsp-pair-group-del PAIR-GROUP    delete a port-pair-group, does\n\
+                                   not delete port-pairs\n\
+  lsp-pair-group-list CHAIN        print port-pair-groups for a givan chain\n\
+  lsp-pair-group-add-port-pair PAIR-GROUP LSP-PAIR add a port pair to a\n\
+                                                   port-pair-group\n\
+  lsp-pair-group-del-port-pair PAIR-GROUP LSP-PAIR del a port pair from a\n\
+                                                   port-pair-group\n\
 \n\
 Logical port-pair commands:\n\
   lsp-pair-add SWITCH PORT-IN PORT-OUT [LSP-PAIR]\n\
                                      create a logical port-pair\n\
-  lsp-pair-del LSP-PAIR              delete a port-pair, does not delete ports\n\
-  lsp-pair-list [SWITCH [LSP-PAIR]]  print the names of all logical port-pairs\n\
+  lsp-pair-del LSP-PAIR              delete a port-pair, does\n\
+                                     not delete ports\n\
+  lsp-pair-list [SWITCH [LSP-PAIR]]  print the names of all\n\
+                                     logical port-pairs\n\
 \n\
 Logical router commands:\n\
   lr-add [ROUTER]           create a logical router named ROUTER\n\
@@ -927,11 +936,14 @@ nbctl_lsp_chain_add(struct ctl_context *ctx)
     /* Insert the logical port-chain into the logical switch. */
 
     nbrec_logical_switch_verify_port_chains(lswitch);
-    struct nbrec_logical_port_chain  **new_port_chain = xmalloc(sizeof *new_port_chain *
-                                                                (lswitch->n_port_chains + 1));
-    memcpy(new_port_chain, lswitch->port_chains, sizeof *new_port_chain * lswitch->n_port_chains);
-    new_port_chain[lswitch->n_port_chains] = CONST_CAST(struct nbrec_logical_port_chain *, lsp_chain);
-    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain, lswitch->n_port_chains + 1);
+    struct nbrec_logical_port_chain  **new_port_chain = 
+              xmalloc(sizeof *new_port_chain * (lswitch->n_port_chains + 1));
+    memcpy(new_port_chain, lswitch->port_chains, 
+              sizeof *new_port_chain * lswitch->n_port_chains);
+    new_port_chain[lswitch->n_port_chains] = 
+              CONST_CAST(struct nbrec_logical_port_chain *, lsp_chain);
+    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain,
+              lswitch->n_port_chains + 1);
     free(new_port_chain);
 }
 
@@ -942,9 +954,10 @@ remove_lsp_chain(const struct nbrec_logical_switch *lswitch, size_t idx)
     const struct nbrec_logical_port_chain *lsp_chain = 
                                                     lswitch->port_chains[idx];
 
-    /* First remove 'lsp-chain' from the array of port-chains.  This is what will
-     * actually cause the logical port-chain to be deleted when the transaction is
-     * sent to the database server (due to garbage collection). */
+    /* First remove 'lsp-chain' from the array of port-chains.  
+     * This is what will actually cause the logical port-chain to be deleted 
+     * when the transaction is sent to the database server 
+     * (due to garbage collection). */
     struct nbrec_logical_port_chain **new_port_chain
         = xmemdup(lswitch->port_chains, 
                    sizeof *new_port_chain * lswitch->n_port_chains);
@@ -956,7 +969,8 @@ remove_lsp_chain(const struct nbrec_logical_switch *lswitch, size_t idx)
 
     /* Delete 'lsp-chain' from the IDL.  This won't have a real effect on the
      * database server (the IDL will suppress it in fact) but it means that it
-     * won't show up when we iterate with NBREC_LOGICAL_PORT_CHAIN_FOR_EACH later. */
+     * won't show up when we iterate with 
+     * NBREC_LOGICAL_PORT_CHAIN_FOR_EACH later. */
     nbrec_logical_port_chain_delete(lsp_chain);
 }
 
@@ -1074,7 +1088,8 @@ print_lsp_chain(const struct nbrec_logical_port_chain *lsp_chain,
         }
     }
 
-    // TODO: iterate ACLs and display the ones that have action 'sfc' and use this lsp_chain
+    /* TODO: iterate ACLs and display the ones that have action 'sfc' 
+     * and use this lsp_chain */
 }
 
 static void
@@ -1105,7 +1120,8 @@ nbctl_lsp_pair_group_add(struct ctl_context *ctx)
     const char *ppg_name = ctx->argc >= 3 ? ctx->argv[2] : NULL;
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, "--add-duplicate") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, 
+                                           "--add-duplicate") != NULL;
     if (may_exist && add_duplicate) {
         ctl_fatal("--may-exist and --add-duplicate may not be used together");
     }
@@ -1117,8 +1133,8 @@ nbctl_lsp_pair_group_add(struct ctl_context *ctx)
                     if (may_exist) {
                         return;
                     }
-                    ctl_fatal("%s: an lsp_port_pair_group with this name already exists",
-                              ppg_name);
+                    ctl_fatal("%s: an lsp_port_pair_group with this \
+                               name already exists", ppg_name);
                 }
             }
         }
@@ -1170,19 +1186,24 @@ remove_lsp_pair_group(const struct nbrec_logical_port_chain *lsp_chain,
     const struct nbrec_logical_port_pair_group *lsp_pair_group = 
                                               lsp_chain->port_pair_groups[idx];
 
-    /* First remove 'lsp-pair-group' from the array of port-pair-groups.  This is what will
-     * actually cause the logical port-pair-group to be deleted when the transaction is
-     * sent to the database server (due to garbage collection). */
+    /* First remove 'lsp-pair-group' from the array of port-pair-groups.  
+     * This is what will actually cause the logical port-pair-group to be 
+     * deleted when the transaction is sent to the database server 
+     * (due to garbage collection). */
     struct nbrec_logical_port_pair_group **new_port_pair_group
-        = xmemdup(lsp_chain->port_pair_groups, sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
-    new_port_pair_group[idx] = new_port_pair_group[lsp_chain->n_port_pair_groups - 1];
+        = xmemdup(lsp_chain->port_pair_groups, 
+            sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
+    new_port_pair_group[idx] = 
+            new_port_pair_group[lsp_chain->n_port_pair_groups - 1];
     nbrec_logical_port_chain_verify_port_pair_groups(lsp_chain);
-    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, new_port_pair_group, lsp_chain->n_port_pair_groups - 1);
+    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, 
+            new_port_pair_group, lsp_chain->n_port_pair_groups - 1);
     free(new_port_pair_group);
 
-    /* Delete 'lsp-pair-group' from the IDL.  This won't have a real effect on the
-     * database server (the IDL will suppress it in fact) but it means that it
-     * won't show up when we iterate with NBREC_LOGICAL_PORT_PAIR_GROUP_FOR_EACH later. */
+    /* Delete 'lsp-pair-group' from the IDL.  This won't have a real 
+     * effect on the database server (the IDL will suppress it in fact) but 
+     * it means that it won't show up when we iterate with 
+     * NBREC_LOGICAL_PORT_PAIR_GROUP_FOR_EACH later. */
     nbrec_logical_port_pair_group_delete(lsp_pair_group);
 }
 
@@ -1192,7 +1213,8 @@ nbctl_lsp_pair_group_del(struct ctl_context *ctx)
     const struct nbrec_logical_port_pair_group *lsp_pair_group;
     const bool must_exist = !shash_find(&ctx->options, "--if-exists");
 
-    lsp_pair_group = lsp_pair_group_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
+    lsp_pair_group = lsp_pair_group_by_name_or_uuid(ctx, ctx->argv[1], 
+                                                     must_exist);
     if (!lsp_pair_group) {
         return;
     }
@@ -1208,8 +1230,8 @@ nbctl_lsp_pair_group_del(struct ctl_context *ctx)
         }
     }
     if (must_exist) {
-        ctl_fatal("logical port-pair-group %s is not part of any logical port-chain",
-                  ctx->argv[1]);
+        ctl_fatal("logical port-pair-group %s is not part of any\
+                    logical port-chain", ctx->argv[1]);
     }
 }
 
@@ -1228,9 +1250,12 @@ nbctl_lsp_pair_group_list(struct ctl_context *ctx)
 
     smap_init(&lsp_pair_groups);
     for (i = 0; i < lsp_chain->n_port_pair_groups; i++) {
-        const struct nbrec_logical_port_pair_group *lsp_pair_group = lsp_chain->port_pair_groups[i];
-        smap_add_format(&lsp_pair_groups, lsp_pair_group->name, UUID_FMT " (%s)",
-                        UUID_ARGS(&lsp_pair_group->header_.uuid), lsp_pair_group->name);
+        const struct nbrec_logical_port_pair_group *lsp_pair_group = 
+                       lsp_chain->port_pair_groups[i];
+        smap_add_format(&lsp_pair_groups, lsp_pair_group->name, 
+                         UUID_FMT " (%s)",
+                         UUID_ARGS(&lsp_pair_group->header_.uuid), 
+                         lsp_pair_group->name);
     }
     const struct smap_node **nodes = smap_sort(&lsp_pair_groups);
     for (i = 0; i < smap_count(&lsp_pair_groups); i++) {
@@ -1263,7 +1288,8 @@ nbctl_lsp_pair_group_add_port_pair(struct ctl_context *ctx)
     for (size_t i = 0; i < lsp_pair_group->n_port_pairs; i++) {
         if (lsp_pair_group->port_pairs[i] == lsp_pair) {
             if (!may_exist) {
-                ctl_fatal("lsp_pair: %s is already added to port-pair-group %s\n", ctx->argv[2], ctx->argv[1]);
+                ctl_fatal("lsp_pair: %s is already added to\
+                           port-pair-group %s\n", ctx->argv[2], ctx->argv[1]);
             }
             return;
         }
@@ -1271,32 +1297,39 @@ nbctl_lsp_pair_group_add_port_pair(struct ctl_context *ctx)
 
     /* Insert the logical port-pair into the logical port-pair-group. */
     nbrec_logical_port_pair_group_verify_port_pairs(lsp_pair_group);
-    struct nbrec_logical_port_pair  **new_port_pair = xmalloc(sizeof *new_port_pair *
-                                                              (lsp_pair_group->n_port_pairs + 1));
-    memcpy(new_port_pair, lsp_pair_group->port_pairs, sizeof *new_port_pair * lsp_pair_group->n_port_pairs);
-    new_port_pair[lsp_pair_group->n_port_pairs] = CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
-    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, new_port_pair, lsp_pair_group->n_port_pairs + 1);
+    struct nbrec_logical_port_pair  **new_port_pair = 
+          xmalloc(sizeof *new_port_pair * (lsp_pair_group->n_port_pairs + 1));
+    memcpy(new_port_pair, lsp_pair_group->port_pairs, 
+          sizeof *new_port_pair * lsp_pair_group->n_port_pairs);
+    new_port_pair[lsp_pair_group->n_port_pairs] = 
+          CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
+    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, 
+          new_port_pair, lsp_pair_group->n_port_pairs + 1);
     free(new_port_pair);
 }
 
 /* Removes port-pair from port-pair-groiup but does not delete it'. */
 static void
-remove_lsp_pair_from_port_pair_group(const struct nbrec_logical_port_pair_group *lsp_pair_group, size_t idx)
+remove_lsp_pair_from_port_pair_group(
+      const struct nbrec_logical_port_pair_group *lsp_pair_group, size_t idx)
 {
     //TODO Check const struct nbrec_logical_port_pair *lsp_pair = lsp_pair_group->port_pairs[idx];
 
-    /* First remove 'lsp-pair' from the array of port-pairs.  This is what will
-     * actually cause the logical port-pair to be deleted when the transaction is
-     * sent to the database server (due to garbage collection). */
+    /* First remove 'lsp-pair' from the array of port-pairs.  This is 
+     * what will actually cause the logical port-pair to be deleted when the 
+     * transaction is sent to the database server 
+     * (due to garbage collection). */
     struct nbrec_logical_port_pair **new_port_pair
-        = xmemdup(lsp_pair_group->port_pairs, sizeof *new_port_pair * lsp_pair_group->n_port_pairs);
+        = xmemdup(lsp_pair_group->port_pairs, sizeof *new_port_pair * 
+                  lsp_pair_group->n_port_pairs);
     new_port_pair[idx] = new_port_pair[lsp_pair_group->n_port_pairs - 1];
     nbrec_logical_port_pair_group_verify_port_pairs(lsp_pair_group);
-    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, new_port_pair, lsp_pair_group->n_port_pairs - 1);
+    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, new_port_pair, 
+                  lsp_pair_group->n_port_pairs - 1);
     free(new_port_pair);
 
-    /* Do not delete actual port-pair as they are owned by a lswitch and can be reused. */
-    //nbrec_logical_port_pair_delete(lsp_pair);
+    /* Do not delete actual port-pair as they are owned by a 
+     * lswitch and can be reused. */
 }
 
 static void
@@ -1338,7 +1371,8 @@ nbctl_lsp_pair_add(struct ctl_context *ctx)
     const struct nbrec_logical_port_pair *lsp_pair;
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, "--add-duplicate") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, 
+                                           "--add-duplicate") != NULL;
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
     lsp_in = lsp_by_name_or_uuid(ctx, ctx->argv[2], true);
@@ -1377,11 +1411,14 @@ nbctl_lsp_pair_add(struct ctl_context *ctx)
 
     /* Insert the logical port-pair into the logical port-pair-group. */
     nbrec_logical_switch_verify_port_pairs(lswitch);
-    struct nbrec_logical_port_pair  **new_port_pair = xmalloc(sizeof *new_port_pair *
-                                                              (lswitch->n_port_pairs + 1));
-    memcpy(new_port_pair, lswitch->port_pairs, sizeof *new_port_pair * lswitch->n_port_pairs);
-    new_port_pair[lswitch->n_port_pairs] = CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
-    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, lswitch->n_port_pairs + 1);
+    struct nbrec_logical_port_pair  **new_port_pair = 
+                 xmalloc(sizeof *new_port_pair * (lswitch->n_port_pairs + 1));
+    memcpy(new_port_pair, lswitch->port_pairs, 
+                 sizeof *new_port_pair * lswitch->n_port_pairs);
+    new_port_pair[lswitch->n_port_pairs] = 
+                 CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
+    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, 
+                 lswitch->n_port_pairs + 1);
     free(new_port_pair);
 }
 /* Removes lswitch->pair_pair[idx]'. */
@@ -1394,15 +1431,18 @@ remove_lsp_pair(const struct nbrec_logical_switch *lswitch, size_t idx)
      * actually cause the logical port-pair to be deleted when the transaction is
      * sent to the database server (due to garbage collection). */
     struct nbrec_logical_port_pair **new_port_pair
-        = xmemdup(lswitch->port_pairs, sizeof *new_port_pair * lswitch->n_port_pairs);
+        = xmemdup(lswitch->port_pairs, 
+                   sizeof *new_port_pair * lswitch->n_port_pairs);
     new_port_pair[idx] = new_port_pair[lswitch->n_port_pairs - 1];
     nbrec_logical_switch_verify_port_pairs(lswitch);
-    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, lswitch->n_port_pairs - 1);
+    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, 
+                   lswitch->n_port_pairs - 1);
     free(new_port_pair);
 
     /* Delete 'lsp-pair' from the IDL.  This won't have a real effect on the
      * database server (the IDL will suppress it in fact) but it means that it
-     * won't show up when we iterate with NBREC_LOGICAL_PORT_PAIR_FOR_EACH later. */
+     * won't show up when we iterate with 
+     * NBREC_LOGICAL_PORT_PAIR_FOR_EACH later. */
     nbrec_logical_port_pair_delete(lsp_pair);
 }
 
@@ -1446,7 +1486,8 @@ print_lsp_pairs_for_switch(struct ctl_context *ctx,
 
     smap_init(&lsp_pairs);
     for (i = 0; i < lswitch->n_port_pairs; i++) {
-        const struct nbrec_logical_port_pair *lsp_pair = lswitch->port_pairs[i];
+        const struct nbrec_logical_port_pair *lsp_pair = 
+                    lswitch->port_pairs[i];
         if (ppair_name_filter && strcmp(ppair_name_filter, lsp_pair->name)) {
             continue;
         }
@@ -1456,13 +1497,15 @@ print_lsp_pairs_for_switch(struct ctl_context *ctx,
         const char *loutport_name = loutport ? loutport->name : "<not_set>";
 
         if (show_switch_name) {
-            smap_add_format(&lsp_pairs, lsp_pair->name, UUID_FMT " (%s:%s) in:%s out:%s",
-                            UUID_ARGS(&lsp_pair->header_.uuid), lswitch->name,
-                            lsp_pair->name, linport_name, loutport_name);
+            smap_add_format(&lsp_pairs, lsp_pair->name, 
+                             UUID_FMT " (%s:%s) in:%s out:%s",
+                             UUID_ARGS(&lsp_pair->header_.uuid), lswitch->name,
+                             lsp_pair->name, linport_name, loutport_name);
         } else {
-            smap_add_format(&lsp_pairs, lsp_pair->name, UUID_FMT " (%s) in:%s out:%s",
-                            UUID_ARGS(&lsp_pair->header_.uuid),
-                            lsp_pair->name, linport_name, loutport_name);
+            smap_add_format(&lsp_pairs, lsp_pair->name, 
+                             UUID_FMT " (%s) in:%s out:%s",
+                             UUID_ARGS(&lsp_pair->header_.uuid),
+                             lsp_pair->name, linport_name, loutport_name);
         }
     }
     const struct smap_node **nodes = smap_sort(&lsp_pairs);
@@ -4062,7 +4105,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
 
     /* lsp-pair-group commands. */
     { "lsp-pair-group-add", 1, 3, "CHAIN [PAIR-GROUP [OFFSET]]",
-      NULL, nbctl_lsp_pair_group_add, NULL, "--may-exist,--add-duplicate", RW },
+      NULL, nbctl_lsp_pair_group_add, NULL, "--may-exist,--add-duplicate", 
+      RW },
     { "lsp-pair-group-del", 1, 1, "PAIR-GROUP", NULL, nbctl_lsp_pair_group_del,
       NULL, "--if-exists", RW },
     { "lsp-pair-group-list", 1, 1, "CHAIN", NULL, nbctl_lsp_pair_group_list, 
