@@ -2519,7 +2519,7 @@ build_pre_stateful(struct ovn_datapath *od, struct hmap *lflows)
 }
 
 static void
-build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
+build_acls(struct ovn_datapath *od, struct hmap *lflows)
 {
     bool has_stateful = has_stateful_acl(od);
 
@@ -2784,37 +2784,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         }
     }
 }
-#ifdef AWS
-static int
-cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
-{
-    const struct nbrec_logical_port_pair_group *const *ppg1p = ppg1_;
-    const struct nbrec_logical_port_pair_group *const *ppg2p = ppg2_;
-    const struct nbrec_logical_port_pair_group *ppg1 = *ppg1p;
-    const struct nbrec_logical_port_pair_group *ppg2 = *ppg2p;
 
-    if (ppg1->n_sortkey == 0 || ppg2->n_sortkey == 0) {
-        return 0;
-    }
-   
-    if (ppg1->n_sortkey == 0) {
-        return ppg2->n_sortkey == 0 ? -1 : 0;
-    } else if (ppg2->n_sortkey == 0) {
-        return 1;
-    }
-
-    const int64_t key1 = ppg1->sortkey[0];
-    const int64_t key2 = ppg2->sortkey[0];
-
-    if (key1 < key2) {
-        return -1;
-    } else if (key1 > key2) {
-        return 1;
-    } else {
-        return 0;
-    }
-}
-#endif
 static void
 build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
 {
@@ -3213,7 +3183,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         build_pre_acls(od, lflows);
         build_pre_lb(od, lflows);
         build_pre_stateful(od, lflows);
-        build_acls(od, lflows, ports);
+        build_acls(od, lflows);
         build_chain(od, lflows, ports);
         build_qos(od, lflows);
         build_lb(od, lflows);

@@ -1,7 +1,7 @@
 {
     "name": "OVN_Northbound",
     "version": "5.5.1",
-    "cksum": "3027626963 19681",
+    "cksum": "3459385300 19499",
     "tables": {
         "NB_Global": {
             "columns": {
@@ -202,7 +202,7 @@
             "isRoot": true},
         "Load_Balancer": {
             "columns": {
-		            "name": {"type": "string"},
+                "name": {"type": "string"},
                 "vips": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}},
@@ -225,10 +225,6 @@
                 "action": {"type": {"key": {"type": "string",
                                             "enum": ["set", ["allow", "allow-related", "drop", "reject"]]}}},
                 "log": {"type": "boolean"},
-                "options": {
-                    "type": {"key": "string",
-                             "value": "string",
-                             "min": 0, "max": "unlimited"}},
                 "external_ids": {
                     "type": {"key": "string", "value": "string",
                              "min": 0, "max": "unlimited"}}},
