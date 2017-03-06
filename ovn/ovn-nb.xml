@@ -120,7 +120,7 @@
         logical port.
       </p>
     </column>
-    <column name="port_chains">
+    <column name="sfcs">
       <p>
         The logical port-chains connected to the logical switch.
       </p>
@@ -129,7 +129,7 @@
         logical port.
       </p>
     </column>
-        <column name="port_chain_classifiers">
+        <column name="vnfs">
       <p>
         The logical port-chains connected to the logical switch.
       </p>
@@ -138,7 +138,15 @@
         logical port.
       </p>
     </column>
-    <column name="port_pairs">
+    <column name="amis">
+      <p>
+        The logical chains that define the service path.
+      </p>
+      <p>
+        Logical chains cannot currently cross logical switch boundaries.
+      </p>
+    </column>
+    <column name="vpcs">
       <p>
         The logical chains that define the service path.
       </p>
@@ -180,7 +188,7 @@
       </column>
     </group>
   </table>
-  <table name="Logical_Port_Chain" title="Logical port chain">
+  <table name="Logical_SFC" title="Logical sfc">
     <p>
       Each row represents one logical port chain
     </p>
@@ -194,7 +202,25 @@
       </p>
     </column>
 
-    <column name="port_pair_groups">
+    <column name="vnf">
+      <p>
+        The logical list of port pairs that the flow goes through.
+      </p>
+
+      <p>
+        It is an error for a port pair group to be empty.
+      </p>
+    </column>
+     <column name="ami">
+      <p>
+        The logical list of port pairs that the flow goes through.
+      </p>
+
+      <p>
+        It is an error for a port pair group to be empty.
+      </p>
+    </column>
+     <column name="vpc">
       <p>
         The logical list of port pairs that the flow goes through.
       </p>
@@ -209,7 +235,7 @@
       </column>
     </group>
   </table>
-  <table name="Logical_Port_Chain_Classifier" title="Logical port chain classifier">
+  <table name="Logical_VPC" title="Logical vnf">
     <p>
       Each row represents one logical port chain
     </p>
@@ -221,28 +247,7 @@
         logical chains's UUID should be used as the unique identifier.
       </p>
     </column>
-    <column name="port">
-      <p>
-        The logical list of port pairs that the flow goes through.
-      </p>
-      <p>
-        It is an error for a port pair group to be empty.
-      </p>
-    </column>
-    <column name="chain">
-      <p>
-      </p>
-    </column>
-    <column name="direction">
-      <p>
-      </p>
-    </column>
-    <column name="path">
-      <p>
-       
-      </p>
-    </column>
-    <column name="match">
+    <column name="cidr">
       <p>
        
       </p>
@@ -253,7 +258,7 @@
       </column>
     </group>
   </table>
-  <table name="Logical_Port_Pair_Group" title="logical port pair groups">
+  <table name="Logical_AMI" title="logical ami">
     <p>
       An ordered port pair list
     </p>
@@ -264,17 +269,24 @@
       </p>
     </column>
 
-    <column name="port_pairs">
+    <column name="appport">
       <p>
         port pair for this group
       </p>
     </column>
-
-    <column name="sortkey">
+    <column name="inport">
       <p>
-        An integer used for ordering instances of <ref table="Logical_Port_Pair_Group"/>
-        in the <ref column="port_pairs" table="Logical_Port_Chain"/> column
-        of <ref table="Logical_Port_Chain"/>.
+        port pair for this group
+      </p>
+    </column>
+       <column name="tunnel_port">
+      <p>
+        port pair for this group
+      </p>
+    </column>
+    <column name="tunnel_type">
+      <p>
+        port pair for this group
       </p>
     </column>
     <group title="Common Columns">
@@ -284,7 +296,7 @@
     </group>
   </table>
 
-  <table name="Logical_Port_Pair" title="logical port pairs">
+  <table name="Logical_VNF" title="logical vnf">
     <p>
       Ports pairs defining the service
     </p>
@@ -297,15 +309,25 @@
 
     <column name="outport">
       <p>
-        Out logical port for this port pair. Can be the same value as inport.
+        port pair for this group
       </p>
     </column>
-
     <column name="inport">
       <p>
-        In logical port for this port pair.
+        port pair for this group
       </p>
     </column>
+       <column name="tunnel_port">
+      <p>
+        port pair for this group
+      </p>
+    </column>
+    <column name="tunnel_type">
+      <p>
+        port pair for this group
+      </p>
+    </column>
+   
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.

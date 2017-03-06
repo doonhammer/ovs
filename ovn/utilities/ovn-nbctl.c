@@ -366,42 +366,35 @@ Logical switch port commands:\n\
                             set dhcpv4 options for PORT\n\
   lsp-get-dhcpv4-options PORT  get the dhcpv4 options for PORT\n\
 \n\
-Logical port chain commands:\n\
-  lsp-chain-add SWITCH CHAIN         create a logical port-chain\n\
-                                     named CHAIN\n\
-  lsp-chain-del CHAIN                delete CHAIN\n\
-  lsp-chain-list [SWITCH]            print the names of all logical\n\
-                                     port-chains [on SWITCH]\n\
-  lsp-chain-show SWITCH [CHAIN]      print details on port-chains\n\
-                                     on SWITCH\n\
+Logical SFC commands:\n\
+  ls-sfc-add SWITCH VNF AMI VPC [SFC] create a logical sfc\n\
+                                      named SFC\n\
+  ls-sfc-del SFC                      delete SFC\n\
+  ls-sfc-list [SWITCH]                print the names of all logical\n\
+                                      sfcs [on SWITCH]\n\
+  ls-sfc-show SWITCH [SFC]            print details on sfcs\n\
+                                      on SWITCH\n\
 \n\
-Logical port pair group commands:\n\
-  lsp-pair-group-add CHAIN [PAIR-GROUP [OFFSET]]\n\
-                    create a logical port-pair-group. Optionally,\n\
-                    indicate the order it should be in chain.\n\
-  lsp-pair-group-del PAIR-GROUP    delete a port-pair-group, does\n\
-                                   not delete port-pairs\n\
-  lsp-pair-group-list CHAIN        print port-pair-groups for a given chain\n\
-  lsp-pair-group-add-port-pair PAIR-GROUP LSP-PAIR add a port pair to a\n\
-                                                   port-pair-group\n\
-  lsp-pair-group-del-port-pair PAIR-GROUP LSP-PAIR del a port pair from a\n\
-                                                   port-pair-group\n\
-\n\
-Logical port chain classifier commands:\n\
-  lsp-chain-classifier-add SWITCH CHAIN PORT DIRECTION PATH MATCH [NAME]\n\
-                            add a CHAIN to a CLASSIFIER\n\
-  lsp-chain-classifier-del CHAIN \n\
-                            remove classifier from CHAIN\n\
-  lsp-chain-classifier-list SWITCH [CHAIN]\n\
-                            print classifiers for SWITCH [CHAIN]\n\
-\n\
-Logical port pair commands:\n\
-  lsp-pair-add SWITCH PORT-IN PORT-OUT [LSP-PAIR]\n\
-                                     create a logical port-pair\n\
-  lsp-pair-del LSP-PAIR              delete a port-pair, does\n\
+Logical VNF commands:\n\
+  ls-vnf-add SWITCH PORT-IN PORT-OUT TUNNEL-PORT TUNNEL-TYPE [VNF]\n\
+                                     create a logical VNF\n\
+  ls-vnf-del VNF                    delete a VNF, does\n\
                                      not delete ports\n\
-  lsp-pair-list [SWITCH [LSP-PAIR]]  print the names of all\n\
-                                     logical port-pairs\n\
+  ls-vnf-list [SWITCH [VNF]]         print the names of all\n\
+                                     logical VNfs\n\
+\n\
+Logical AMI commands:\n\
+  ls-ami-add SWITCH PORT-IN PORT-APP TUNNEL-PORT TUNNEL-TYPE [AMI]\n\
+                                     create a logical AMI\n\
+  ls-ami-del AMI                     delete a AMI, does\n\
+                                     not delete ports\n\
+  ls-ami-list [SWITCH [AMI]]         print the names of all\n\
+                                     logical AMIs\n\
+\n\
+Logical VPC commands:\n\
+   ls-vpc-add SWITCH CIDR [VPC]      create a logical VPC\n\
+   ls-vpc-del VPC\n\
+   ls-vpc-list [SWITCH [VPC]]\n\
 \n\
 Logical router commands:\n\
   lr-add [ROUTER]           create a logical router named ROUTER\n\
@@ -802,659 +795,183 @@ lsp_by_name_or_uuid(struct ctl_context *ctx, const char *id,
     return lsp;
 }
 
-/*
- * Port chain CLI Functions
- */
-static const struct nbrec_logical_port_chain *
-lsp_chain_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
-                           const bool must_exist)
-{
-    const struct nbrec_logical_port_chain *lsp_chain = NULL;
-    bool is_uuid = false;
-    struct uuid lsp_chain_uuid;
 
-    if (uuid_from_string(&lsp_chain_uuid, id)) {
-        is_uuid = true;
-        lsp_chain = nbrec_logical_port_chain_get_for_uuid(ctx->idl,
-                                                          &lsp_chain_uuid);
-    }
-
-    if (!lsp_chain) {
-        NBREC_LOGICAL_PORT_CHAIN_FOR_EACH(lsp_chain, ctx->idl) {
-            if (!strcmp(lsp_chain->name, id)) {
-                break;
-            }
-        }
-    }
-    if (!lsp_chain && must_exist) {
-        ctl_fatal("lsp_chain not found for %s: '%s'",
-                  is_uuid ? "UUID" : "name", id);
-    }
-
-    return lsp_chain;
-}
-static const struct nbrec_logical_port_pair_group *
-lsp_pair_group_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+static const struct nbrec_logical_sfc *
+ls_sfc_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
                                 const bool must_exist)
 {
-    const struct nbrec_logical_port_pair_group *lsp_pair_group = NULL;
+    const struct nbrec_logical_sfc *ls_sfc = NULL;
     bool is_uuid = false;
-    struct uuid lsp_pair_group_uuid;
+    struct uuid ls_sfc_uuid;
 
-    if (uuid_from_string(&lsp_pair_group_uuid, id)) {
+    if (uuid_from_string(&ls_sfc_uuid, id)) {
         is_uuid = true;
-        lsp_pair_group = 
-          nbrec_logical_port_pair_group_get_for_uuid(ctx->idl,
-                                                      &lsp_pair_group_uuid);
+        ls_sfc = 
+          nbrec_logical_sfc_get_for_uuid(ctx->idl,
+                                              &ls_sfc_uuid);
     }
 
-    if (!lsp_pair_group) {
-        NBREC_LOGICAL_PORT_PAIR_GROUP_FOR_EACH(lsp_pair_group, ctx->idl) {
-            if (!strcmp(lsp_pair_group->name, id)) {
-                break;
-            }
-        }
-    }
-    if (!lsp_pair_group && must_exist) {
-        ctl_fatal("lsp_pair_group not found for %s: '%s'",
-                  is_uuid ? "UUID" : "name", id);
-    }
-
-    return lsp_pair_group;
-}
-
-static const struct nbrec_logical_port_chain_classifier *
-lsp_chain_classifier_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
-                                const bool must_exist)
-{
-    const struct nbrec_logical_port_chain_classifier *lsp_chain_classifier = NULL;
-    bool is_uuid = false;
-    struct uuid lsp_chain_classifier_uuid;
-
-    if (uuid_from_string(&lsp_chain_classifier_uuid, id)) {
-        is_uuid = true;
-        lsp_chain_classifier = 
-          nbrec_logical_port_chain_classifier_get_for_uuid(ctx->idl,
-                                              &lsp_chain_classifier_uuid);
-    }
-
-    if (!lsp_chain_classifier) {
-        NBREC_LOGICAL_PORT_CHAIN_CLASSIFIER_FOR_EACH(lsp_chain_classifier, 
+    if (!ls_sfc) {
+        NBREC_LOGICAL_SFC_FOR_EACH(ls_sfc, 
                                                       ctx->idl) {
-            if (!strcmp(lsp_chain_classifier->name, id)) {
+            if (!strcmp(ls_sfc->name, id)) {
                 break;
             }
         }
     }
-    if (!lsp_chain_classifier && must_exist) {
-        ctl_fatal("lsp_chain_classifier not found for %s: '%s'",
+    if (!ls_sfc && must_exist) {
+        ctl_fatal("ls-sfc not found for %s: '%s'",
                   is_uuid ? "UUID" : "name", id);
     }
 
-    return lsp_chain_classifier;
+    return ls_sfc;
 }
 
-static const struct nbrec_logical_port_pair *
-lsp_pair_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
-                          const bool must_exist)
+static const struct nbrec_logical_vnf *
+ls_vnf_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                                const bool must_exist)
 {
-    const struct nbrec_logical_port_pair *lsp_pair = NULL;
+    const struct nbrec_logical_vnf *ls_vnf = NULL;
     bool is_uuid = false;
-    struct uuid lsp_pair_uuid;
+    struct uuid ls_vnf_uuid;
 
-    if (uuid_from_string(&lsp_pair_uuid, id)) {
+    if (uuid_from_string(&ls_vnf_uuid, id)) {
         is_uuid = true;
-        lsp_pair = nbrec_logical_port_pair_get_for_uuid(ctx->idl,
-                                                        &lsp_pair_uuid);
+        ls_vnf = 
+          nbrec_logical_vnf_get_for_uuid(ctx->idl,
+                                              &ls_vnf_uuid);
     }
 
-    if (!lsp_pair) {
-        NBREC_LOGICAL_PORT_PAIR_FOR_EACH(lsp_pair, ctx->idl) {
-            if (!strcmp(lsp_pair->name, id)) {
+    if (!ls_vnf) {
+        NBREC_LOGICAL_VNF_FOR_EACH(ls_vnf, 
+                                                      ctx->idl) {
+            if (!strcmp(ls_vnf->name, id)) {
                 break;
             }
         }
     }
-    if (!lsp_pair && must_exist) {
-        ctl_fatal("lsp_pair not found for %s: '%s'",
+    if (!ls_vnf && must_exist) {
+        ctl_fatal("ls-vnf not found for %s: '%s'",
                   is_uuid ? "UUID" : "name", id);
     }
 
-    return lsp_pair;
+    return ls_vnf;
 }
 
-
-static void
-nbctl_lsp_chain_add(struct ctl_context *ctx)
+static const struct nbrec_logical_ami *
+ls_ami_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                                const bool must_exist)
 {
-    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_ami *ls_ami = NULL;
+    bool is_uuid = false;
+    struct uuid ls_ami_uuid;
 
-    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true /*must_exist*/);
-    const char *lsp_chain_name = ctx->argc > 2 ? ctx->argv[2] : NULL;
-  
-    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, 
-                                 "--add-duplicate") != NULL;
-    if (may_exist && add_duplicate) {
-        ctl_fatal("--may-exist and --add-duplicate may not be used together");
+    if (uuid_from_string(&ls_ami_uuid, id)) {
+        is_uuid = true;
+        ls_ami = 
+          nbrec_logical_ami_get_for_uuid(ctx->idl,
+                                              &ls_ami_uuid);
     }
 
-    if (lsp_chain_name) {
-        if (!add_duplicate) {
-            const struct nbrec_logical_port_chain *lsp_chain;
-            NBREC_LOGICAL_PORT_CHAIN_FOR_EACH(lsp_chain, ctx->idl) {
-                if (!strcmp(lsp_chain->name, lsp_chain_name)) {
-                    if (may_exist) {
-                        return;
-                    }
-                    ctl_fatal("%s: an lsp_chain with this name already exists",
-                              lsp_chain_name);
-                }
-            }
-        }
-    } else if (may_exist) {
-        ctl_fatal("--may-exist requires specifying a name");
-    } else if (add_duplicate) {
-        ctl_fatal("--add-duplicate requires specifying a name");
-    }
-
-    struct nbrec_logical_port_chain *lsp_chain;
-    lsp_chain = nbrec_logical_port_chain_insert(ctx->txn);
-    if (lsp_chain_name) {
-        nbrec_logical_port_chain_set_name(lsp_chain, lsp_chain_name);
-    }
-
-    /* Insert the logical port-chain into the logical switch. */
-
-    nbrec_logical_switch_verify_port_chains(lswitch);
-    struct nbrec_logical_port_chain  **new_port_chain = 
-              xmalloc(sizeof *new_port_chain * (lswitch->n_port_chains + 1));
-    memcpy(new_port_chain, lswitch->port_chains, 
-              sizeof *new_port_chain * lswitch->n_port_chains);
-    new_port_chain[lswitch->n_port_chains] = 
-              CONST_CAST(struct nbrec_logical_port_chain *, lsp_chain);
-    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain,
-              lswitch->n_port_chains + 1);
-    free(new_port_chain);
-}
-
-/* Removes lswitch->pair_chain[idx]'. */
-static void
-remove_lsp_chain(const struct nbrec_logical_switch *lswitch, size_t idx)
-{
-    const struct nbrec_logical_port_chain *lsp_chain = 
-                                                    lswitch->port_chains[idx];
-
-    /* First remove 'lsp-chain' from the array of port-chains.  
-     * This is what will actually cause the logical port-chain to be deleted 
-     * when the transaction is sent to the database server 
-     * (due to garbage collection). */
-    struct nbrec_logical_port_chain **new_port_chain
-        = xmemdup(lswitch->port_chains, 
-                   sizeof *new_port_chain * lswitch->n_port_chains);
-    new_port_chain[idx] = new_port_chain[lswitch->n_port_chains - 1];
-    nbrec_logical_switch_verify_port_chains(lswitch);
-    nbrec_logical_switch_set_port_chains(lswitch, new_port_chain, 
-                                          lswitch->n_port_chains - 1);
-    free(new_port_chain);
-
-    /* Delete 'lsp-chain' from the IDL.  This won't have a real effect on the
-     * database server (the IDL will suppress it in fact) but it means that it
-     * won't show up when we iterate with 
-     * NBREC_LOGICAL_PORT_CHAIN_FOR_EACH later. */
-    nbrec_logical_port_chain_delete(lsp_chain);
-}
-
-static void
-nbctl_lsp_chain_del(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_chain *lsp_chain;
-    const bool must_exist = !shash_find(&ctx->options, "--if-exists");
-
-    lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
-    if (!lsp_chain) {
-        return;
-    }
-
-    /* Find the lswitch that contains 'port-chain', then delete it. */
-    const struct nbrec_logical_switch *lswitch;
-    NBREC_LOGICAL_SWITCH_FOR_EACH (lswitch, ctx->idl) {
-        for (size_t i = 0; i < lswitch->n_port_chains; i++) {
-            if (lswitch->port_chains[i] == lsp_chain) {
-                remove_lsp_chain(lswitch,i);
-                return;
+    if (!ls_ami) {
+        NBREC_LOGICAL_AMI_FOR_EACH(ls_ami, 
+                                                      ctx->idl) {
+            if (!strcmp(ls_ami->name, id)) {
+                break;
             }
         }
     }
-}
-
-static void
-print_lsp_chain_entry(struct ctl_context *ctx,
-                      const struct nbrec_logical_switch *lswitch,
-                      const char *chain_name_filter,
-                      const bool show_switch_name)
-{
-    struct smap lsp_chains;
-    size_t i;
-
-    smap_init(&lsp_chains);
-    for (i = 0; i < lswitch->n_port_chains; i++) {
-        const struct nbrec_logical_port_chain *lsp_chain = 
-                                                    lswitch->port_chains[i];
-        if (chain_name_filter && strcmp(chain_name_filter, lsp_chain->name)) {
-            continue;
-        }
-        if (show_switch_name) {
-            smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s:%s)",
-                            UUID_ARGS(&lsp_chain->header_.uuid),
-                            lswitch->name, lsp_chain->name);
-        } else {
-            smap_add_format(&lsp_chains, lsp_chain->name, UUID_FMT " (%s)",
-                            UUID_ARGS(&lsp_chain->header_.uuid), 
-                            lsp_chain->name);
-        }
+    if (!ls_ami && must_exist) {
+        ctl_fatal("ls-ami not found for %s: '%s'",
+                  is_uuid ? "UUID" : "name", id);
     }
 
-    const struct smap_node **nodes = smap_sort(&lsp_chains);
-    for (i = 0; i < smap_count(&lsp_chains); i++) {
-        const struct smap_node *node = nodes[i];
-        ds_put_format(&ctx->output, "%s\n", node->value);
-    }
-    smap_destroy(&lsp_chains);
-    free(nodes);
+    return ls_ami;
 }
 
-static void
-nbctl_lsp_chain_list(struct ctl_context *ctx)
+static const struct nbrec_logical_vpc *
+ls_vpc_by_name_or_uuid(struct ctl_context *ctx, const char *id, 
+                                const bool must_exist)
 {
-    const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
-    const char *chain_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
-    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_vpc *ls_vpc = NULL;
+    bool is_uuid = false;
+    struct uuid ls_vpc_uuid;
 
-    if (id) {
-        lswitch = ls_by_name_or_uuid(ctx, id, true);
-        print_lsp_chain_entry(ctx, lswitch, chain_name_filter, false);
-    } else {
-        NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
-            if (lswitch->n_port_chains == 0) {
-                continue;
-            }
-            print_lsp_chain_entry(ctx, lswitch, chain_name_filter, true);
-        }
+    if (uuid_from_string(&ls_vpc_uuid, id)) {
+        is_uuid = true;
+        ls_vpc = 
+          nbrec_logical_vpc_get_for_uuid(ctx->idl,
+                                              &ls_vpc_uuid);
     }
-}
 
-static void
-print_lsp_chain(const struct nbrec_logical_port_chain *lsp_chain,
-                  struct ctl_context *ctx)
-{
-    ds_put_format(&ctx->output, "lsp-chain "UUID_FMT" (%s)\n",
-                  UUID_ARGS(&lsp_chain->header_.uuid), lsp_chain->name);
-    for (size_t i = 0; i < lsp_chain->n_port_pair_groups; i++) {
-        const struct nbrec_logical_port_pair_group *lsp_pair_group
-            = lsp_chain->port_pair_groups[i];
-        ds_put_format(&ctx->output, "    lsp-pair-group %s\n", 
-                       lsp_pair_group->name);
-        for (size_t j = 0; j < lsp_pair_group->n_port_pairs; j++){
-            const struct nbrec_logical_port_pair *lsp_pair = 
-                                                lsp_pair_group->port_pairs[j];
-            ds_put_format(&ctx->output, 
-                           "        lsp-pair %s\n", lsp_pair->name);
-
-            const struct nbrec_logical_switch_port *linport = lsp_pair->inport;
-            if (linport) {
-                ds_put_format(&ctx->output, 
-                           "            lsp-pair inport "UUID_FMT" (%s)\n",
-                            UUID_ARGS(&linport->header_.uuid), linport->name);
-            }
-
-            const struct nbrec_logical_switch_port *loutport = 
-                                                            lsp_pair->outport;
-            if (loutport) {
-                ds_put_format(&ctx->output, 
-                          "            lsp-pair outport "UUID_FMT" (%s)\n",
-                          UUID_ARGS(&loutport->header_.uuid), loutport->name);
+    if (!ls_vpc) {
+        NBREC_LOGICAL_VPC_FOR_EACH(ls_vpc, 
+                                                      ctx->idl) {
+            if (!strcmp(ls_vpc->name, id)) {
+                break;
             }
         }
     }
-}
-
-static void
-nbctl_lsp_chain_show(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_chain *lsp_chain;
-
-    if (ctx->argc == 2) {
-        lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[1], false);
-        if (lsp_chain) {
-            print_lsp_chain(lsp_chain, ctx);
-        }
-    } else {
-        NBREC_LOGICAL_PORT_CHAIN_FOR_EACH(lsp_chain, ctx->idl) {
-            print_lsp_chain(lsp_chain, ctx);
-        }
+    if (!ls_vpc && must_exist) {
+        ctl_fatal("ls-vpc not found for %s: '%s'",
+                  is_uuid ? "UUID" : "name", id);
     }
-}
-/* End of port-chain operations */
 
+    return ls_vpc;
+}
 /*
- * Port Pair Groups CLI Functions
- */
-static void
-nbctl_lsp_pair_group_add(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_pair_group *lsp_pair_group;
-    const char *ppg_name = ctx->argc >= 3 ? ctx->argv[2] : NULL;
-
-    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, 
-                                           "--add-duplicate") != NULL;
-    if (may_exist && add_duplicate) {
-        ctl_fatal("--may-exist and --add-duplicate may not be used together");
-    }
-
-    if (ppg_name) {
-        if (!add_duplicate) {
-            NBREC_LOGICAL_PORT_PAIR_GROUP_FOR_EACH(lsp_pair_group, ctx->idl) {
-                if (!strcmp(lsp_pair_group->name, ppg_name)) {
-                    if (may_exist) {
-                        return;
-                    }
-                    ctl_fatal("%s: an lsp_port_pair_group with this \
-                               name already exists", ppg_name);
-                }
-            }
-        }
-    } else if (may_exist) {
-        ctl_fatal("--may-exist requires specifying a name");
-    } else if (add_duplicate) {
-        ctl_fatal("--add-duplicate requires specifying a name");
-    }
-
-    /* check lsp_chain exists */
-    const struct nbrec_logical_port_chain *lsp_chain;
-    lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[1], true);
-    if (!lsp_chain) {
-        return;
-    }
-
-    /* create the logical port-pair-group. */
-    lsp_pair_group = nbrec_logical_port_pair_group_insert(ctx->txn);
-    if (ppg_name) {
-        nbrec_logical_port_pair_group_set_name(lsp_pair_group, ctx->argv[2]);
-    }
-
-    int64_t sortkey = (int64_t) lsp_chain->n_port_pair_groups + 1;
-    if (ctx->argc >= 4) {
-         sortkey = (int64_t) atoi(ctx->argv[3]);
-    }
-    nbrec_logical_port_pair_group_set_sortkey(lsp_pair_group, &sortkey, 1);
-
-    /* Insert the logical port-pair-group into the logical switch. */
-    nbrec_logical_port_chain_verify_port_pair_groups(lsp_chain);
-    struct nbrec_logical_port_pair_group  **new_port_pair_group = 
-                              xmalloc(sizeof *new_port_pair_group *
-                              (lsp_chain->n_port_pair_groups + 1));
-    memcpy(new_port_pair_group, lsp_chain->port_pair_groups, 
-                  sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
-    new_port_pair_group[lsp_chain->n_port_pair_groups] =
-        CONST_CAST(struct nbrec_logical_port_pair_group *,lsp_pair_group);
-    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, 
-                     new_port_pair_group, 
-                     lsp_chain->n_port_pair_groups + 1);
-    free(new_port_pair_group);
-}
-
-/* Removes lsp-pair-group 'lsp_chain->port_pair_group[idx]'. */
-static void
-remove_lsp_pair_group(const struct nbrec_logical_port_chain *lsp_chain, 
-                      size_t idx)
-{
-    const struct nbrec_logical_port_pair_group *lsp_pair_group = 
-                                              lsp_chain->port_pair_groups[idx];
-
-    /* First remove 'lsp-pair-group' from the array of port-pair-groups.  
-     * This is what will actually cause the logical port-pair-group to be 
-     * deleted when the transaction is sent to the database server 
-     * (due to garbage collection). */
-    struct nbrec_logical_port_pair_group **new_port_pair_group
-        = xmemdup(lsp_chain->port_pair_groups, 
-            sizeof *new_port_pair_group * lsp_chain->n_port_pair_groups);
-    new_port_pair_group[idx] = 
-            new_port_pair_group[lsp_chain->n_port_pair_groups - 1];
-    nbrec_logical_port_chain_verify_port_pair_groups(lsp_chain);
-    nbrec_logical_port_chain_set_port_pair_groups(lsp_chain, 
-            new_port_pair_group, lsp_chain->n_port_pair_groups - 1);
-    free(new_port_pair_group);
-
-    /* Delete 'lsp-pair-group' from the IDL.  This won't have a real 
-     * effect on the database server (the IDL will suppress it in fact) but 
-     * it means that it won't show up when we iterate with 
-     * NBREC_LOGICAL_PORT_PAIR_GROUP_FOR_EACH later. */
-    nbrec_logical_port_pair_group_delete(lsp_pair_group);
-}
-
-static void
-nbctl_lsp_pair_group_del(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_pair_group *lsp_pair_group;
-    const bool must_exist = !shash_find(&ctx->options, "--if-exists");
-
-    lsp_pair_group = lsp_pair_group_by_name_or_uuid(ctx, ctx->argv[1], 
-                                                     must_exist);
-    if (!lsp_pair_group) {
-        return;
-    }
-
-    /* Find the port-chain that contains 'port-pair-group', then delete it. */
-    const struct nbrec_logical_port_chain *lsp_chain;
-    NBREC_LOGICAL_PORT_CHAIN_FOR_EACH (lsp_chain, ctx->idl) {
-        for (size_t i = 0; i < lsp_chain->n_port_pair_groups; i++) {
-            if (lsp_chain->port_pair_groups[i] == lsp_pair_group) {
-                remove_lsp_pair_group(lsp_chain,i);
-                return;
-            }
-        }
-    }
-    if (must_exist) {
-        ctl_fatal("logical port-pair-group %s is not part of any\
-                    logical port-chain", ctx->argv[1]);
-    }
-}
-
-static void
-nbctl_lsp_pair_group_list(struct ctl_context *ctx)
-{
-    const char *id = ctx->argv[1];
-    const struct nbrec_logical_port_chain *lsp_chain;
-    struct smap lsp_pair_groups;
-    size_t i;
-
-    lsp_chain = lsp_chain_by_name_or_uuid(ctx, id, true);
-    if (!lsp_chain) {
-        return;
-    }
-
-    smap_init(&lsp_pair_groups);
-    for (i = 0; i < lsp_chain->n_port_pair_groups; i++) {
-        const struct nbrec_logical_port_pair_group *lsp_pair_group = 
-                       lsp_chain->port_pair_groups[i];
-        smap_add_format(&lsp_pair_groups, lsp_pair_group->name, 
-                         UUID_FMT " (%s)",
-                         UUID_ARGS(&lsp_pair_group->header_.uuid), 
-                         lsp_pair_group->name);
-    }
-    const struct smap_node **nodes = smap_sort(&lsp_pair_groups);
-    for (i = 0; i < smap_count(&lsp_pair_groups); i++) {
-        const struct smap_node *node = nodes[i];
-        ds_put_format(&ctx->output, "%s\n", node->value);
-    }
-    smap_destroy(&lsp_pair_groups);
-    free(nodes);
-}
-
-static void
-nbctl_lsp_pair_group_add_port_pair(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_pair_group *lsp_pair_group;
-    const struct nbrec_logical_port_pair *lsp_pair;
-    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-
-    lsp_pair_group = lsp_pair_group_by_name_or_uuid(ctx, ctx->argv[1], true);
-    if (!lsp_pair_group) {
-        return;
-    }
-
-    /* Check that port-pair exists  */
-    lsp_pair = lsp_pair_by_name_or_uuid(ctx, ctx->argv[2], true);
-    if (!lsp_pair){
-        return;
-    }
-
-    /* Do not add port pair more than once in a given port-pair-group */
-    for (size_t i = 0; i < lsp_pair_group->n_port_pairs; i++) {
-        if (lsp_pair_group->port_pairs[i] == lsp_pair) {
-            if (!may_exist) {
-                ctl_fatal("lsp_pair: %s is already added to\
-                           port-pair-group %s\n", ctx->argv[2], ctx->argv[1]);
-            }
-            return;
-        }
-    }
-
-    /* Insert the logical port-pair into the logical port-pair-group. */
-    nbrec_logical_port_pair_group_verify_port_pairs(lsp_pair_group);
-    struct nbrec_logical_port_pair  **new_port_pair = 
-          xmalloc(sizeof *new_port_pair * (lsp_pair_group->n_port_pairs + 1));
-    memcpy(new_port_pair, lsp_pair_group->port_pairs, 
-          sizeof *new_port_pair * lsp_pair_group->n_port_pairs);
-    new_port_pair[lsp_pair_group->n_port_pairs] = 
-          CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
-    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, 
-          new_port_pair, lsp_pair_group->n_port_pairs + 1);
-    free(new_port_pair);
-}
-
-/* Removes port-pair from port-pair-groiup but does not delete it'. */
-static void
-remove_lsp_pair_from_port_pair_group(
-      const struct nbrec_logical_port_pair_group *lsp_pair_group, size_t idx)
-{
-    //TODO Check const struct nbrec_logical_port_pair *lsp_pair = lsp_pair_group->port_pairs[idx];
-
-    /* First remove 'lsp-pair' from the array of port-pairs.  This is 
-     * what will actually cause the logical port-pair to be deleted when the 
-     * transaction is sent to the database server 
-     * (due to garbage collection). */
-    struct nbrec_logical_port_pair **new_port_pair
-        = xmemdup(lsp_pair_group->port_pairs, sizeof *new_port_pair * 
-                  lsp_pair_group->n_port_pairs);
-    new_port_pair[idx] = new_port_pair[lsp_pair_group->n_port_pairs - 1];
-    nbrec_logical_port_pair_group_verify_port_pairs(lsp_pair_group);
-    nbrec_logical_port_pair_group_set_port_pairs(lsp_pair_group, new_port_pair, 
-                  lsp_pair_group->n_port_pairs - 1);
-    free(new_port_pair);
-
-    /* Do not delete actual port-pair as they are owned by a 
-     * lswitch and can be reused. */
-}
-
-static void
-nbctl_lsp_pair_group_del_port_pair(struct ctl_context *ctx)
-{
-    const struct nbrec_logical_port_pair *lsp_pair;
-    const struct nbrec_logical_port_pair_group *lsp_pair_group;
-    const bool must_exist = !shash_find(&ctx->options, "--if-exists");
-
-
-    lsp_pair_group = lsp_pair_group_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
-    if (!lsp_pair_group) {
-        return;
-    }
-    lsp_pair = lsp_pair_by_name_or_uuid(ctx, ctx->argv[2], must_exist);
-    if (!lsp_pair) {
-        return;
-    }
-    /* Find the port-pair_group that contains 'port-pair', then delete it. */
-  
-
-    for (size_t i = 0; i < lsp_pair_group->n_port_pairs; i++) {
-      if (lsp_pair_group->port_pairs[i] == lsp_pair) {
-        remove_lsp_pair_from_port_pair_group(lsp_pair_group,i);
-        return;
-      }
-    }
-    if (must_exist) {
-        ctl_fatal("logical port-pair %s is not part of any logical switch",
-                  ctx->argv[1]);
-    }
-}
-/* End of port-pair-group operations */
-
-/*
- * Port Chain Classifier CLI Functions
+ * SFC CLI Functions
  */
 static bool
-parse_chain_direction(const char *direction)
+parse_tunnel_type(const char *tunnel_type)
 {
-    if (strcasecmp(direction, "uni-directional")) {
+    if (strcasecmp(tunnel_type, "gre")) {
         return true;
-    } else if (strcasecmp(direction, "bi-directional")) {
-        return true;
-    } else {
-        ctl_fatal("%s: direction must be \"uni-directional\" \
-                     or \"bi-directional\"", direction);
-    }
-}
-static bool
-parse_chain_path(const char *path){
-    if (strcasecmp(path, "entry-lport")) {
-        return true;
-    } else if (strcasecmp(path, "exit-lport")) {
+    } else if (strcasecmp(tunnel_type, "vxlan")) {
         return true;
     } else {
-        ctl_fatal("%s: path must be \"entry-lport\" \
-                     or \"exit-lport\"", path);
+        ctl_fatal("%s: tunnel type must be \"gre\" \
+                     or \"vxlan\"", tunnel_type);
     }
 }
+
 static void
-nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
+nbctl_ls_sfc_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *lswitch;
-    const struct nbrec_logical_port_chain *lsp_chain;
-    const struct nbrec_logical_switch_port *lsp_input;
+    const struct nbrec_logical_vnf *ls_vnf;
+    const struct nbrec_logical_ami * ls_ami;
+    const struct nbrec_logical_vpc * ls_vpc;
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true /*must_exist*/);
-    lsp_chain = lsp_chain_by_name_or_uuid(ctx, ctx->argv[2], true /*must_exist*/);
-    lsp_input = lsp_by_name_or_uuid(ctx, ctx->argv[3], true); /* must exist */
+    ls_vnf = ls_vnf_by_name_or_uuid(ctx, ctx->argv[2], true /*must_exist*/);
+    ls_ami = ls_ami_by_name_or_uuid(ctx, ctx->argv[3], true); /* must exist */
+    ls_vpc = ls_vpc_by_name_or_uuid(ctx, ctx->argv[4], true); /* must exist */
 
-    const char *lsp_chain_classifier_name = 
-                                       ctx->argc > 7 ? ctx->argv[7] : NULL;
+    const char *ls_sfc_name = ctx->argc > 4 ? ctx->argv[5] : NULL;
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     const bool add_duplicate = shash_find(&ctx->options, 
                                  "--add-duplicate") != NULL;
    
-     VLOG_WARN("Adding port-chain-classifier %s to switch %s",lsp_chain_classifier_name,lswitch->name);
+    VLOG_WARN("Adding sfc %s to switch %s",ls_sfc_name,lswitch->name);
   
     if (may_exist && add_duplicate) {
         ctl_fatal("--may-exist and --add-duplicate may not be used together");
     }
 
-    if (lsp_chain_classifier_name) {
+    if (ls_sfc_name) {
         if (!add_duplicate) {
-            const struct nbrec_logical_port_chain_classifier 
-                                                      *lsp_chain_classifier;
-            NBREC_LOGICAL_PORT_CHAIN_CLASSIFIER_FOR_EACH(lsp_chain_classifier,
-                                                  ctx->idl) {
-                if (!strcmp(lsp_chain_classifier->name, 
-                                lsp_chain_classifier_name)) {
+            const struct nbrec_logical_sfc *ls_sfc;
+            NBREC_LOGICAL_SFC_FOR_EACH(ls_sfc,ctx->idl) {
+                if (!strcmp(ls_sfc->name, 
+                                ls_sfc_name)) {
                     if (may_exist) {
                         return;
                     }
-                    ctl_fatal("%s: an lsp_chain_classifier \
+                    ctl_fatal("%s: an ls-sfc \
                                with this name already exists",
-                               lsp_chain_classifier_name);
+                               ls_sfc_name);
                 }
             }
         }
@@ -1464,203 +981,177 @@ nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
         ctl_fatal("--add-duplicate requires specifying a name");
     }
 
-    struct nbrec_logical_port_chain_classifier *lsp_chain_classifier;
-    lsp_chain_classifier = 
-                       nbrec_logical_port_chain_classifier_insert(ctx->txn);
-
-    nbrec_logical_port_chain_classifier_set_chain(
-                                        lsp_chain_classifier, lsp_chain);
-    nbrec_logical_port_chain_classifier_set_port(
-                                        lsp_chain_classifier, lsp_input);
-    VLOG_WARN("Added port and chain");
-    if (parse_chain_direction(ctx->argv[4])){
-    nbrec_logical_port_chain_classifier_set_direction(
-                                        lsp_chain_classifier, ctx->argv[4]);
-    }
-    if (parse_chain_path(ctx->argv[5])){
-          nbrec_logical_port_chain_classifier_set_path(
-                                        lsp_chain_classifier, ctx->argv[5]);
-    }
-    nbrec_logical_port_chain_classifier_set_match(
-                                        lsp_chain_classifier, ctx->argv[6]);
-    VLOG_WARN("Added path, direction and match");
-    if (lsp_chain_classifier_name){
-           nbrec_logical_port_chain_classifier_set_name(lsp_chain_classifier, 
-                                        lsp_chain_classifier_name);
-    } 
+    struct nbrec_logical_sfc *ls_sfc;
+    ls_sfc = nbrec_logical_sfc_insert(ctx->txn);
+    nbrec_logical_sfc_set_vnf(ls_sfc, ls_vnf);
+    VLOG_WARN("Added vnf %s", ls_vnf->name);
+    nbrec_logical_sfc_set_ami(ls_sfc, ls_ami);
+    VLOG_WARN("Added ami %s", ls_ami->name);
+    nbrec_logical_sfc_set_vpc(ls_sfc, ls_vpc);
+    VLOG_WARN("Added vpc %s", ls_vpc->name);
+  
     /* Insert the logical port-chain into the logical switch. */
     VLOG_WARN("Added all");
-     VLOG_WARN("Currently there are %u classifiers installed", (unsigned int)lswitch->n_port_chain_classifiers);
-    nbrec_logical_switch_verify_port_chain_classifiers(lswitch);
+    nbrec_logical_switch_verify_sfcs(lswitch);
    
-    struct nbrec_logical_port_chain_classifier  **new_port_chain_classifier = 
-            xmalloc( sizeof *new_port_chain_classifier * (lswitch->n_port_chain_classifiers + 1));
-    memcpy(new_port_chain_classifier, lswitch->port_chain_classifiers, 
-              sizeof *new_port_chain_classifier * 
-              lswitch->n_port_chain_classifiers);
-    new_port_chain_classifier[lswitch->n_port_chain_classifiers] = 
-              CONST_CAST(struct nbrec_logical_port_chain_classifier *, 
-                lsp_chain_classifier);
-    nbrec_logical_switch_set_port_chain_classifiers(lswitch, 
-              new_port_chain_classifier,
-              lswitch->n_port_chain_classifiers + 1);
-    VLOG_WARN("Currently there are %u classifiers installed", (unsigned int)lswitch->n_port_chain_classifiers);
-    free(new_port_chain_classifier);
+    struct nbrec_logical_sfc  **new_sfc = 
+            xmalloc( sizeof *new_sfc * (lswitch->n_sfcs + 1));
+    memcpy(new_sfc, lswitch->sfcs, 
+              sizeof *new_sfc * 
+              lswitch->n_sfcs);
+    new_sfc[lswitch->n_sfcs] = 
+              CONST_CAST(struct nbrec_logical_sfc *, ls_sfc);
+    nbrec_logical_switch_set_sfcs(lswitch, 
+              new_sfc,
+              lswitch->n_sfcs + 1);
+    VLOG_WARN("Currently there are %u sfcs installed", (unsigned int)lswitch->n_sfcs);
 }
 
 /* Removes lsp-chain-classifier from logical switch. */
 static void
-remove_lsp_chain_classifier(const struct nbrec_logical_switch *lswitch, 
+ls_sfc_remove(const struct nbrec_logical_switch *lswitch, 
                                 size_t idx)
 {
-    const struct nbrec_logical_port_chain_classifier *lsp_chain_classifier = 
-                                      lswitch->port_chain_classifiers[idx];
+    const struct nbrec_logical_sfc *ls_sfc = 
+                                      lswitch->sfcs[idx];
 
     /* First remove 'lsp-chain' from the array of port-chains.  
      * This is what will actually cause the logical port-chain to be deleted 
      * when the transaction is sent to the database server 
      * (due to garbage collection). */
-    struct nbrec_logical_port_chain_classifier **new_port_chain_classifier
-        = xmemdup(lswitch->port_chain_classifiers, 
-                   sizeof *new_port_chain_classifier *
-                    lswitch->n_port_chain_classifiers);
-    new_port_chain_classifier[idx] = 
-                 new_port_chain_classifier[lswitch->n_port_chain_classifiers - 1];
-    nbrec_logical_switch_verify_port_chain_classifiers(lswitch);
-    nbrec_logical_switch_set_port_chain_classifiers(lswitch, 
-                      new_port_chain_classifier, 
-                      lswitch->n_port_chain_classifiers - 1);
-    free(new_port_chain_classifier);
+    struct nbrec_logical_sfc **new_sfc
+        = xmemdup(lswitch->sfcs, 
+                   sizeof *new_sfc *
+                    lswitch->n_sfcs);
+    new_sfc[idx] = 
+                 new_sfc[lswitch->n_sfcs - 1];
+    nbrec_logical_switch_verify_sfcs(lswitch);
+    nbrec_logical_switch_set_sfcs(lswitch, 
+                      new_sfc, 
+                      lswitch->n_sfcs - 1);
+    free(new_sfc);
 
     /* Delete 'lsp-chain' from the IDL.  This won't have a real effect on the
      * database server (the IDL will suppress it in fact) but it means that it
      * won't show up when we iterate with 
      * NBREC_LOGICAL_PORT_CHAIN_FOR_EACH later. */
-    nbrec_logical_port_chain_classifier_delete(lsp_chain_classifier);
+    nbrec_logical_sfc_delete(ls_sfc);
 }
 
 static void
-nbctl_lsp_chain_classifier_del(struct ctl_context *ctx)
+nbctl_ls_sfc_del(struct ctl_context *ctx)
 {
-    const struct nbrec_logical_port_chain_classifier *lsp_chain_classifier;
+    const struct nbrec_logical_sfc *ls_sfc;
     const bool must_exist = !shash_find(&ctx->options, "--if-exists");
 
-    lsp_chain_classifier = 
-         lsp_chain_classifier_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
-    if (!lsp_chain_classifier) {
+    ls_sfc = 
+         ls_sfc_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
+    if (!ls_sfc) {
         return;
     }
 
     /* Find the lswitch that contains 'port-chain', then delete it. */
     const struct nbrec_logical_switch *lswitch;
     NBREC_LOGICAL_SWITCH_FOR_EACH (lswitch, ctx->idl) {
-        for (size_t i = 0; i < lswitch->n_port_chain_classifiers; i++) {
-            if (lswitch->port_chain_classifiers[i] == lsp_chain_classifier) {
-                remove_lsp_chain_classifier(lswitch,i);
+        for (size_t i = 0; i < lswitch->n_sfcs; i++) {
+            if (lswitch->sfcs[i] == ls_sfc) {
+                ls_sfc_remove(lswitch,i);
                 return;
             }
         }
     }
 }
 static void
-print_lsp_chain_classifier_entry(struct ctl_context *ctx,
+print_ls_sfc_entry(struct ctl_context *ctx,
                       const struct nbrec_logical_switch *lswitch,
-                      const char *chain_classifier_name_filter,
+                      const char *sfc_name_filter,
                       const bool show_switch_name)
 {
-    struct smap lsp_chain_classifiers;
+    struct smap ls_sfcs;
     size_t i;
-    VLOG_INFO("Number of classifiers %u for switch %s",(unsigned int)lswitch->n_port_chain_classifiers,lswitch->name);
-    smap_init(&lsp_chain_classifiers);
-    for (i = 0; i < lswitch->n_port_chain_classifiers; i++) {
-        const struct nbrec_logical_port_chain_classifier 
-                 *lsp_chain_classifier =  lswitch->port_chain_classifiers[i];
-        const struct nbrec_logical_port_chain *lsp_chain;
-        const struct nbrec_logical_switch_port *lsp;
+    VLOG_INFO("Number of sfcs %u for switch %s",(unsigned int)lswitch->n_sfcs,lswitch->name);
+    smap_init(&ls_sfcs);
+    for (i = 0; i < lswitch->n_sfcs; i++) {
+        const struct nbrec_logical_sfc 
+                 *ls_sfc =  lswitch->sfcs[i];
+  
+        const struct nbrec_logical_vnf *ls_vnf = ls_sfc->vnf;
+        const struct nbrec_logical_ami *ls_ami = ls_sfc->ami;
+        const struct nbrec_logical_vpc *ls_vpc = ls_sfc->vpc;
 
-        lsp_chain = lsp_chain_classifier->chain;
-        lsp = lsp_chain_classifier->port;
-        if (chain_classifier_name_filter && 
-                 strcmp(chain_classifier_name_filter,
-                 lsp_chain_classifier->name)) {
+        if (sfc_name_filter && 
+                 strcmp(sfc_name_filter,
+                 ls_sfc->name)) {
             continue;
         }
         if (show_switch_name) {
-            smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name, UUID_FMT " (%s:%s)",
-                            UUID_ARGS(&lsp_chain_classifier->header_.uuid),
-                            lswitch->name, lsp_chain_classifier->name);
+            smap_add_format(&ls_sfcs, 
+                            ls_sfc->name, UUID_FMT " (%s:%s)",
+                            UUID_ARGS(&ls_sfc->header_.uuid),
+                            lswitch->name, ls_sfc->name);
         } else {
-            smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name, UUID_FMT " (%s)",
-                            UUID_ARGS(&lsp_chain_classifier->header_.uuid), 
-                            lsp_chain_classifier->name);
+            smap_add_format(&ls_sfcs, 
+                            ls_sfc->name, UUID_FMT " (%s)",
+                            UUID_ARGS(&ls_sfc->header_.uuid), 
+                            ls_sfc->name);
         }
-        smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name,UUID_FMT " (%s)",
-                            UUID_ARGS(&lsp_chain->header_.uuid), 
-                            lsp_chain->name);
-        smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name,UUID_FMT " (%s)",
-                            UUID_ARGS(&lsp->header_.uuid), 
-                            lsp->name);
-        smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name, "%s",
-                            lsp_chain_classifier->direction
-                            );
-        smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name, "%s",
-                            lsp_chain_classifier->path
-                            );
-        smap_add_format(&lsp_chain_classifiers, 
-                            lsp_chain_classifier->name, "%s",
-                            lsp_chain_classifier->match
-                            );
+        smap_add_format(&ls_sfcs, 
+                            ls_sfc->name,UUID_FMT " (%s)",
+                            UUID_ARGS(&ls_vnf->header_.uuid), 
+                            ls_vnf->name);
+        smap_add_format(&ls_sfcs, 
+                            ls_sfc->name,UUID_FMT " (%s)",
+                            UUID_ARGS(&ls_ami->header_.uuid), 
+                            ls_ami->name);
+        smap_add_format(&ls_sfcs, 
+                            ls_sfc->name,UUID_FMT " (%s)",
+                            UUID_ARGS(&ls_vpc->header_.uuid), 
+                            ls_vpc->name);
     }
 
-    const struct smap_node **nodes = smap_sort(&lsp_chain_classifiers);
-    for (i = 0; i < smap_count(&lsp_chain_classifiers); i++) {
+    const struct smap_node **nodes = smap_sort(&ls_sfcs);
+    for (i = 0; i < smap_count(&ls_sfcs); i++) {
         const struct smap_node *node = nodes[i];
         ds_put_format(&ctx->output, "%s\n", node->value);
     }
-    smap_destroy(&lsp_chain_classifiers);
+    smap_destroy(&ls_sfcs);
     free(nodes);
 }
 
 static void
-nbctl_lsp_chain_classifier_list(struct ctl_context *ctx)
+nbctl_ls_sfc_list(struct ctl_context *ctx)
 {
     const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
-    const char *chain_classifier_name_filter = 
+    const char *sfc_name_filter = 
                                         ctx->argc > 2 ? ctx->argv[2] : NULL;
     const struct nbrec_logical_switch *lswitch;
 
     if (id) {
         lswitch = ls_by_name_or_uuid(ctx, id, true);
-        VLOG_INFO("Number of classifiers %u for switch %s",(unsigned int)lswitch->n_port_chain_classifiers,lswitch->name);
-        print_lsp_chain_classifier_entry(ctx, lswitch, 
-                                 chain_classifier_name_filter, false);
+        VLOG_INFO("Number of sfcs %u for switch %s",(unsigned int)lswitch->n_sfcs,lswitch->name);
+        print_ls_sfc_entry(ctx, lswitch, 
+                                 sfc_name_filter, false);
     } else {
         NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
-            VLOG_INFO("Number of classifiers %u for switch %s",(unsigned int)lswitch->n_port_chain_classifiers,lswitch->name);
-            if (lswitch->n_port_chain_classifiers == 0) {
+            VLOG_INFO("Number of classifiers %u for switch %s",(unsigned int)lswitch->n_sfcs,lswitch->name);
+            if (lswitch->n_sfcs == 0) {
                 continue;
             }
-            print_lsp_chain_classifier_entry(ctx, lswitch, 
-                                  chain_classifier_name_filter, true);
+            print_ls_sfc_entry(ctx, lswitch, 
+                                  sfc_name_filter, true);
         }
     }
 }
 /* End of port-chain-classifier operations  */
 /*
- * port-pair operations
+ * lp-vnf operations
  */
 static void
-nbctl_lsp_pair_add(struct ctl_context *ctx)
+nbctl_ls_vnf_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *lswitch;
-    const struct nbrec_logical_switch_port *lsp_in,*lsp_out;
-    const struct nbrec_logical_port_pair *lsp_pair;
+    const struct nbrec_logical_switch_port *lsp_in,*lsp_out, *lsp_tunnel;
+    const struct nbrec_logical_vnf *ls_vnf;
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
     const bool add_duplicate = shash_find(&ctx->options, 
@@ -1669,21 +1160,23 @@ nbctl_lsp_pair_add(struct ctl_context *ctx)
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
     lsp_in = lsp_by_name_or_uuid(ctx, ctx->argv[2], true);
     lsp_out = lsp_by_name_or_uuid(ctx, ctx->argv[3], true);
+    lsp_tunnel = lsp_by_name_or_uuid(ctx, ctx->argv[4], true);
 
-    const char *lsp_pair_name = ctx->argc >= 5 ? ctx->argv[4] : NULL;
+    const char *ls_vnf_tunnel_type = ctx->argv[5];
+    const char *ls_vnf_name = ctx->argc >= 7 ? ctx->argv[6] : NULL;
     if (may_exist && add_duplicate) {
         ctl_fatal("--may-exist and --add-duplicate may not be used together");
     }
 
-    if (lsp_pair_name) {
+    if (ls_vnf_name) {
         if (!add_duplicate) {
-            NBREC_LOGICAL_PORT_PAIR_FOR_EACH(lsp_pair, ctx->idl) {
-                if (!strcmp(lsp_pair->name, lsp_pair_name)) {
+            NBREC_LOGICAL_VNF_FOR_EACH(ls_vnf, ctx->idl) {
+                if (!strcmp(ls_vnf->name, ls_vnf_name)) {
                     if (may_exist) {
                         return;
                     }
-                    ctl_fatal("%s: an lsp_pair with this name already exists",
-                              lsp_pair_name);
+                    ctl_fatal("%s: an ls_vnf with this name already exists",
+                              ls_vnf_name);
                 }
             }
         }
@@ -1693,152 +1186,550 @@ nbctl_lsp_pair_add(struct ctl_context *ctx)
         ctl_fatal("--add-duplicate requires specifying a name");
     }
 
-    /* create the logical port-pair. */
-    lsp_pair = nbrec_logical_port_pair_insert(ctx->txn);
-    nbrec_logical_port_pair_set_inport(lsp_pair, lsp_in);
-    nbrec_logical_port_pair_set_outport(lsp_pair, lsp_out);
-    if (lsp_pair_name) {
-        nbrec_logical_port_pair_set_name(lsp_pair, lsp_pair_name);
+    /* create the logical vnf. */
+    ls_vnf = nbrec_logical_vnf_insert(ctx->txn);
+    nbrec_logical_vnf_set_inport(ls_vnf, lsp_in);
+    nbrec_logical_vnf_set_outport(ls_vnf, lsp_out);
+    nbrec_logical_vnf_set_tunnel_port(ls_vnf, lsp_tunnel);
+    nbrec_logical_vnf_set_tunnel_type(ls_vnf, ls_vnf_tunnel_type);
+    if (ls_vnf_name) {
+        nbrec_logical_vnf_set_name(ls_vnf, ls_vnf_name);
     }
 
-    /* Insert the logical port-pair into the logical port-pair-group. */
-    nbrec_logical_switch_verify_port_pairs(lswitch);
-    struct nbrec_logical_port_pair  **new_port_pair = 
-                 xmalloc(sizeof *new_port_pair * (lswitch->n_port_pairs + 1));
-    memcpy(new_port_pair, lswitch->port_pairs, 
-                 sizeof *new_port_pair * lswitch->n_port_pairs);
-    new_port_pair[lswitch->n_port_pairs] = 
-                 CONST_CAST(struct nbrec_logical_port_pair *, lsp_pair);
-    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, 
-                 lswitch->n_port_pairs + 1);
-    free(new_port_pair);
+    /* Insert the logical vnf into the logical port-pair-group. */
+    nbrec_logical_switch_verify_vnfs(lswitch);
+    struct nbrec_logical_vnf  **new_vnf = 
+                 xmalloc(sizeof *new_vnf * (lswitch->n_vnfs + 1));
+    memcpy(new_vnf, lswitch->vnfs, 
+                 sizeof *new_vnf * lswitch->n_vnfs);
+    new_vnf[lswitch->n_vnfs] = 
+                 CONST_CAST(struct nbrec_logical_vnf *, ls_vnf);
+    nbrec_logical_switch_set_vnfs(lswitch, new_vnf, 
+                 lswitch->n_vnfs + 1);
+    free(new_vnf);
 }
-/* Removes lswitch->pair_pair[idx]'. */
+/* Removes ls_vnf[idx]'. */
 static void
-remove_lsp_pair(const struct nbrec_logical_switch *lswitch, size_t idx)
+remove_ls_vnf(const struct nbrec_logical_switch *lswitch, size_t idx)
 {
-    const struct nbrec_logical_port_pair *lsp_pair = lswitch->port_pairs[idx];
+    const struct nbrec_logical_vnf *ls_vnf = lswitch->vnfs[idx];
 
-    /* First remove 'lsp-pair' from the array of port-pairs.  This is what will
-     * actually cause the logical port-pair to be deleted when the transaction is
+    /* First remove 'ls-vnf' from the array of vnfs.  This is what will
+     * actually cause the logical vnf to be deleted when the transaction is
      * sent to the database server (due to garbage collection). */
-    struct nbrec_logical_port_pair **new_port_pair
-        = xmemdup(lswitch->port_pairs, 
-                   sizeof *new_port_pair * lswitch->n_port_pairs);
-    new_port_pair[idx] = new_port_pair[lswitch->n_port_pairs - 1];
-    nbrec_logical_switch_verify_port_pairs(lswitch);
-    nbrec_logical_switch_set_port_pairs(lswitch, new_port_pair, 
-                   lswitch->n_port_pairs - 1);
-    free(new_port_pair);
+    struct nbrec_logical_vnf **new_vnf
+        = xmemdup(lswitch->vnfs, 
+                   sizeof *new_vnf * lswitch->n_vnfs);
+    new_vnf[idx] = new_vnf[lswitch->n_vnfs - 1];
+    nbrec_logical_switch_verify_vnfs(lswitch);
+    nbrec_logical_switch_set_vnfs(lswitch, new_vnf, 
+                   lswitch->n_vnfs - 1);
+    free(new_vnf);
 
-    /* Delete 'lsp-pair' from the IDL.  This won't have a real effect on the
+    /* Delete 'ls-vnf' from the IDL.  This won't have a real effect on the
      * database server (the IDL will suppress it in fact) but it means that it
      * won't show up when we iterate with 
-     * NBREC_LOGICAL_PORT_PAIR_FOR_EACH later. */
-    nbrec_logical_port_pair_delete(lsp_pair);
+     * NBREC_LOGICAL_VNF_FOR_EACH later. */
+    nbrec_logical_vnf_delete(ls_vnf);
 }
 
 static void
-nbctl_lsp_pair_del(struct ctl_context *ctx)
+nbctl_ls_vnf_del(struct ctl_context *ctx)
 {
-    const struct nbrec_logical_port_pair *lsp_pair;
+    const struct nbrec_logical_vnf *ls_vnf;
     const bool must_exist = !shash_find(&ctx->options, "--if-exists");
 
-    lsp_pair = lsp_pair_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
-    if (!lsp_pair) {
+    ls_vnf = ls_vnf_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
+    if (!ls_vnf) {
         if (must_exist) {
-            ctl_fatal("Cannot find lsp_pair: %s\n", ctx->argv[1]);
+            ctl_fatal("Cannot find ls-vnf: %s\n", ctx->argv[1]);
         }
     }
 
-    /* Find the port-pair_group that contains 'port-pair', then delete it. */
+    /* Find the switch that contains 'vnf', then delete it. */
     const struct nbrec_logical_switch *lswitch;
     NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
-        for (size_t i = 0; i < lswitch->n_port_pairs; i++) {
-            if (lswitch->port_pairs[i] == lsp_pair) {
-                remove_lsp_pair(lswitch,i);
+        for (size_t i = 0; i < lswitch->n_vnfs; i++) {
+            if (lswitch->vnfs[i] == ls_vnf) {
+                remove_ls_vnf(lswitch,i);
                 return;
             }
         }
     }
     if (must_exist) {
-        ctl_fatal("logical port-pair %s is not part of any logical switch",
+        ctl_fatal("logical vnf %s is not part of any logical switch",
                   ctx->argv[1]);
     }
 }
 
 static void
-print_lsp_pairs_for_switch(struct ctl_context *ctx,
+print_ls_vnf_for_switch(struct ctl_context *ctx,
                            const struct nbrec_logical_switch *lswitch,
-                           const char *ppair_name_filter,
+                           const char *vnf_name_filter,
                            const bool show_switch_name)
 {
-    struct smap lsp_pairs;
+    struct smap ls_vnfs;
     size_t i;
 
-    smap_init(&lsp_pairs);
-    for (i = 0; i < lswitch->n_port_pairs; i++) {
-        const struct nbrec_logical_port_pair *lsp_pair = 
-                    lswitch->port_pairs[i];
-        if (ppair_name_filter!= NULL && strcmp(ppair_name_filter, lsp_pair->name)!= 0) {
+    smap_init(&ls_vnfs);
+    for (i = 0; i < lswitch->n_vnfs; i++) {
+        const struct nbrec_logical_vnf *ls_vnf = 
+                    lswitch->vnfs[i];
+        if (vnf_name_filter!= NULL && strcmp(vnf_name_filter, 
+                                              ls_vnf->name)!= 0) {
             continue;
         } else {
-          const struct nbrec_logical_switch_port *linport  = lsp_pair->inport;
-          const struct nbrec_logical_switch_port *loutport = lsp_pair->outport;
+          const struct nbrec_logical_switch_port *linport  = ls_vnf->inport;
+          const struct nbrec_logical_switch_port *loutport = ls_vnf->outport;
+           const struct nbrec_logical_switch_port *ltunnelport = 
+                                                         ls_vnf->tunnel_port;
           const char *linport_name = linport ? linport->name : "<not_set>";
-          const char *loutport_name = loutport ? loutport->name : "<not_set>";
-
+          const char *loutport_name = 
+                              loutport ? loutport->name : "<not_set>";
+          const char *ltunnelport_name = 
+                              ltunnelport ? ltunnelport->name : "<not_set>";
+          const char *ltunnel_type = ls_vnf->tunnel_type;
           if (show_switch_name) {
-            smap_add_format(&lsp_pairs, lsp_pair->name, 
-                             UUID_FMT " (%s:%s) in:%s out:%s",
-                             UUID_ARGS(&lsp_pair->header_.uuid), lswitch->name,
-                             lsp_pair->name, linport_name, loutport_name);
+            smap_add_format(&ls_vnfs, ls_vnf->name, 
+                             UUID_FMT 
+                             " (%s:%s) in:%s out:%s tunnel:%s tunnel type:%s",
+                             UUID_ARGS(&ls_vnf->header_.uuid), lswitch->name,
+                             ls_vnf->name, linport_name, loutport_name, 
+                             ltunnelport_name,ltunnel_type);
           } else {
-            smap_add_format(&lsp_pairs, lsp_pair->name, 
-                             UUID_FMT " (%s) in:%s out:%s",
-                             UUID_ARGS(&lsp_pair->header_.uuid),
-                             lsp_pair->name, linport_name, loutport_name);
+            smap_add_format(&ls_vnfs, ls_vnf->name, 
+                             UUID_FMT 
+                             " (%s) in:%s out:%s tunnel:%s tunnel type:%s",
+                             UUID_ARGS(&ls_vnf->header_.uuid),
+                             ls_vnf->name, linport_name, loutport_name, 
+                             ltunnelport_name,ltunnel_type);
         }
       }
     }
-    const struct smap_node **nodes = smap_sort(&lsp_pairs);
-    for (i = 0; i < smap_count(&lsp_pairs); i++) {
+    const struct smap_node **nodes = smap_sort(&ls_vnfs);
+    for (i = 0; i < smap_count(&ls_vnfs); i++) {
         const struct smap_node *node = nodes[i];
         ds_put_format(&ctx->output, "%s\n", node->value);
     }
-    smap_destroy(&lsp_pairs);
+    smap_destroy(&ls_vnfs);
     free(nodes);
 }
 
 static void
-nbctl_lsp_pair_list(struct ctl_context *ctx)
+nbctl_ls_vnf_list(struct ctl_context *ctx)
 {
     const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
-    const char *pair_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
+    const char *vnf_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
     const struct nbrec_logical_switch *lswitch;
-    const struct nbrec_logical_port_pair *lsp_pair;
+    const struct nbrec_logical_vnf *ls_vnf;
 
-    if (pair_name_filter!= NULL){
-      lsp_pair = lsp_pair_by_name_or_uuid(ctx, ctx->argv[2], true);
-      if (!lsp_pair) {
-           ctl_fatal("%s: an lsp_pair with this name does not exist",
+    if (vnf_name_filter!= NULL){
+      ls_vnf = ls_vnf_by_name_or_uuid(ctx, ctx->argv[2], true);
+      if (!ls_vnf) {
+           ctl_fatal("%s: an ls-ami with this name does not exist",
                               ctx->argv[2]);
            return;
       }
     }
     if (id) {
         lswitch = ls_by_name_or_uuid(ctx, id, true);
-        print_lsp_pairs_for_switch(ctx, lswitch, pair_name_filter, false);
+        print_ls_vnf_for_switch(ctx, lswitch, vnf_name_filter, false);
     } else {
         NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
-            if (lswitch->n_port_pairs == 0) {
+            if (lswitch->n_vnfs == 0) {
                 continue;
             }
-            print_lsp_pairs_for_switch(ctx, lswitch, pair_name_filter, true);
+            print_ls_vnf_for_switch(ctx, lswitch, vnf_name_filter, true);
         }
     }
 }
-/* End of port-pair operations */
+/* End of vnf operations */
+
+/*
+ * lp-ami operations
+ */
+static void
+nbctl_ls_ami_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_switch_port *lsp_in,*lsp_app, *lsp_tunnel;
+    const struct nbrec_logical_ami *ls_ami;
+
+    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, 
+                                           "--add-duplicate") != NULL;
+
+    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
+    lsp_in = lsp_by_name_or_uuid(ctx, ctx->argv[2], true);
+    lsp_app = lsp_by_name_or_uuid(ctx, ctx->argv[3], true);
+    lsp_tunnel = lsp_by_name_or_uuid(ctx, ctx->argv[4], true);
+
+    const char *ls_ami_tunnel_type = ctx->argv[5];
+    const char *ls_ami_name = ctx->argc >= 7 ? ctx->argv[6] : NULL;
+    if (may_exist && add_duplicate) {
+        ctl_fatal("--may-exist and --add-duplicate may not be used together");
+    }
+
+    if (ls_ami_name) {
+        if (!add_duplicate) {
+            NBREC_LOGICAL_AMI_FOR_EACH(ls_ami, ctx->idl) {
+                if (!strcmp(ls_ami->name, ls_ami_name)) {
+                    if (may_exist) {
+                        return;
+                    }
+                    ctl_fatal("%s: an ls-ami with this name already exists",
+                              ls_ami_name);
+                }
+            }
+        }
+    } else if (may_exist) {
+        ctl_fatal("--may-exist requires specifying a name");
+    } else if (add_duplicate) {
+        ctl_fatal("--add-duplicate requires specifying a name");
+    }
+
+    /* create the logical ami. */
+    ls_ami = nbrec_logical_ami_insert(ctx->txn);
+    nbrec_logical_ami_set_inport(ls_ami, lsp_in);
+    nbrec_logical_ami_set_appport(ls_ami, lsp_app);
+    nbrec_logical_ami_set_tunnel_port(ls_ami, lsp_tunnel);
+    nbrec_logical_ami_set_tunnel_type(ls_ami, ls_ami_tunnel_type);
+    if (ls_ami_name) {
+        nbrec_logical_ami_set_name(ls_ami, ls_ami_name);
+    }
+
+    /* Insert the logical ami into the logical port-pair-group. */
+    nbrec_logical_switch_verify_amis(lswitch);
+    struct nbrec_logical_ami  **new_ami = 
+                 xmalloc(sizeof *new_ami * (lswitch->n_amis + 1));
+    memcpy(new_ami, lswitch->amis, 
+                 sizeof *new_ami * lswitch->n_amis);
+    new_ami[lswitch->n_amis] = 
+                 CONST_CAST(struct nbrec_logical_ami *, ls_ami);
+    nbrec_logical_switch_set_amis(lswitch, new_ami, 
+                 lswitch->n_amis + 1);
+    free(new_ami);
+}
+/* Removes ls_ami[idx]'. */
+static void
+remove_ls_ami(const struct nbrec_logical_switch *lswitch, size_t idx)
+{
+    const struct nbrec_logical_ami *ls_ami = lswitch->amis[idx];
+
+    /* First remove 'ls-ami' from the array of amis.  This is what will
+     * actually cause the logical ami to be deleted when the transaction is
+     * sent to the database server (due to garbage collection). */
+    struct nbrec_logical_ami **new_ami
+        = xmemdup(lswitch->amis, 
+                   sizeof *new_ami * lswitch->n_amis);
+    new_ami[idx] = new_ami[lswitch->n_amis - 1];
+    nbrec_logical_switch_verify_amis(lswitch);
+    nbrec_logical_switch_set_amis(lswitch, new_ami, 
+                   lswitch->n_amis - 1);
+    free(new_ami);
+
+    /* Delete 'ls-ami' from the IDL.  This won't have a real effect on the
+     * database server (the IDL will suppress it in fact) but it means that it
+     * won't show up when we iterate with 
+     * NBREC_LOGICAL_ami_FOR_EACH later. */
+    nbrec_logical_ami_delete(ls_ami);
+}
+
+static void
+nbctl_ls_ami_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_ami *ls_ami;
+    const bool must_exist = !shash_find(&ctx->options, "--if-exists");
+
+    ls_ami = ls_ami_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
+    if (!ls_ami) {
+        if (must_exist) {
+            ctl_fatal("Cannot find ls-ami: %s\n", ctx->argv[1]);
+        }
+    }
+
+    /* Find the switch that contains 'ami', then delete it. */
+    const struct nbrec_logical_switch *lswitch;
+    NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
+        for (size_t i = 0; i < lswitch->n_amis; i++) {
+            if (lswitch->amis[i] == ls_ami) {
+                remove_ls_ami(lswitch,i);
+                return;
+            }
+        }
+    }
+    if (must_exist) {
+        ctl_fatal("logical ami %s is not part of any logical switch",
+                  ctx->argv[1]);
+    }
+}
+
+static void
+print_ls_ami_for_switch(struct ctl_context *ctx,
+                           const struct nbrec_logical_switch *lswitch,
+                           const char *ami_name_filter,
+                           const bool show_switch_name)
+{
+    struct smap ls_amis;
+    size_t i;
+
+    smap_init(&ls_amis);
+    for (i = 0; i < lswitch->n_amis; i++) {
+        const struct nbrec_logical_ami *ls_ami = 
+                    lswitch->amis[i];
+        if (ami_name_filter!= NULL && strcmp(ami_name_filter, 
+                                              ls_ami->name)!= 0) {
+            continue;
+        } else {
+          const struct nbrec_logical_switch_port *linport  = ls_ami->inport;
+          const struct nbrec_logical_switch_port *lappport = ls_ami->appport;
+           const struct nbrec_logical_switch_port *ltunnelport = 
+                                                         ls_ami->tunnel_port;
+          const char *linport_name = linport ? linport->name : "<not_set>";
+          const char *lappport_name = 
+                              lappport ? lappport->name : "<not_set>";
+          const char *ltunnelport_name = 
+                              ltunnelport ? ltunnelport->name : "<not_set>";
+          const char *ltunnel_type = ls_ami->tunnel_type;
+          if (show_switch_name) {
+            smap_add_format(&ls_amis, ls_ami->name, 
+                             UUID_FMT 
+                             " (%s:%s) in:%s out:%s tunnel:%s tunnel type:%s",
+                             UUID_ARGS(&ls_ami->header_.uuid), lswitch->name,
+                             ls_ami->name, linport_name, lappport_name, 
+                             ltunnelport_name,ltunnel_type);
+          } else {
+            smap_add_format(&ls_amis, ls_ami->name, 
+                             UUID_FMT 
+                             " (%s) in:%s out:%s tunnel:%s tunnel type:%s",
+                             UUID_ARGS(&ls_ami->header_.uuid),
+                             ls_ami->name, linport_name, lappport_name, 
+                             ltunnelport_name,ltunnel_type);
+        }
+      }
+    }
+    const struct smap_node **nodes = smap_sort(&ls_amis);
+    for (i = 0; i < smap_count(&ls_amis); i++) {
+        const struct smap_node *node = nodes[i];
+        ds_put_format(&ctx->output, "%s\n", node->value);
+    }
+    smap_destroy(&ls_amis);
+    free(nodes);
+}
+
+static void
+nbctl_ls_ami_list(struct ctl_context *ctx)
+{
+    const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
+    const char *ami_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
+    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_ami *ls_ami;
+
+    if (ami_name_filter!= NULL){
+      ls_ami = ls_ami_by_name_or_uuid(ctx, ctx->argv[2], true);
+      if (!ls_ami) {
+           ctl_fatal("%s: an ls-ami with this name does not exist",
+                              ctx->argv[2]);
+           return;
+      }
+    }
+    if (id) {
+        lswitch = ls_by_name_or_uuid(ctx, id, true);
+        print_ls_ami_for_switch(ctx, lswitch, ami_name_filter, false);
+    } else {
+        NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
+            if (lswitch->n_amis == 0) {
+                continue;
+            }
+            print_ls_ami_for_switch(ctx, lswitch, ami_name_filter, true);
+        }
+    }
+}
+/* End of ami operations */
+
+/*
+ * lp-vpc operations
+ */
+static void
+nbctl_ls_vpc_add(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_vpc *ls_vpc;
+
+    const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
+    const bool add_duplicate = shash_find(&ctx->options, 
+                                           "--add-duplicate") != NULL;
+
+    lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
+
+    const char *ls_vpc_cidr = ctx->argv[2];
+    const char *ls_vpc_name = ctx->argc >= 2 ? ctx->argv[3] : NULL;
+    if (may_exist && add_duplicate) {
+        ctl_fatal("--may-exist and --add-duplicate may not be used together");
+    }
+
+    if (ls_vpc_name) {
+        if (!add_duplicate) {
+            NBREC_LOGICAL_VPC_FOR_EACH(ls_vpc, ctx->idl) {
+                if (!strcmp(ls_vpc->name, ls_vpc_name)) {
+                    if (may_exist) {
+                        return;
+                    }
+                    ctl_fatal("%s: an ls-vpc with this name already exists",
+                              ls_vpc_name);
+                }
+            }
+        }
+    } else if (may_exist) {
+        ctl_fatal("--may-exist requires specifying a name");
+    } else if (add_duplicate) {
+        ctl_fatal("--add-duplicate requires specifying a name");
+    }
+
+    /* create the logical vpc. */
+    ls_vpc = nbrec_logical_vpc_insert(ctx->txn);
+    nbrec_logical_vpc_set_cidr(ls_vpc, ls_vpc_cidr);
+    if (ls_vpc_name) {
+        nbrec_logical_vpc_set_name(ls_vpc, ls_vpc_name);
+    }
+
+    /* Insert the logical vpc into the logical port-pair-group. */
+    nbrec_logical_switch_verify_vpcs(lswitch);
+    struct nbrec_logical_vpc  **new_vpc = 
+                 xmalloc(sizeof *new_vpc * (lswitch->n_vpcs + 1));
+    memcpy(new_vpc, lswitch->vpcs, 
+                 sizeof *new_vpc * lswitch->n_vpcs);
+    new_vpc[lswitch->n_vpcs] = 
+                 CONST_CAST(struct nbrec_logical_vpc *, ls_vpc);
+    nbrec_logical_switch_set_vpcs(lswitch, new_vpc, 
+                 lswitch->n_vpcs + 1);
+    free(new_vpc);
+}
+/* Removes ls_vpc[idx]'. */
+static void
+remove_ls_vpc(const struct nbrec_logical_switch *lswitch, size_t idx)
+{
+    const struct nbrec_logical_vpc *ls_vpc = lswitch->vpcs[idx];
+
+    /* First remove 'ls-vpc' from the array of vpcs.  This is what will
+     * actually cause the logical vpc to be deleted when the transaction is
+     * sent to the database server (due to garbage collection). */
+    struct nbrec_logical_vpc **new_vpc
+        = xmemdup(lswitch->vpcs, 
+                   sizeof *new_vpc * lswitch->n_vpcs);
+    new_vpc[idx] = new_vpc[lswitch->n_vpcs - 1];
+    nbrec_logical_switch_verify_vpcs(lswitch);
+    nbrec_logical_switch_set_vpcs(lswitch, new_vpc, 
+                   lswitch->n_vpcs - 1);
+    free(new_vpc);
+
+    /* Delete 'ls-vpc' from the IDL.  This won't have a real effect on the
+     * database server (the IDL will suppress it in fact) but it means that it
+     * won't show up when we iterate with 
+     * NBREC_LOGICAL_vpc_FOR_EACH later. */
+    nbrec_logical_vpc_delete(ls_vpc);
+}
+
+static void
+nbctl_ls_vpc_del(struct ctl_context *ctx)
+{
+    const struct nbrec_logical_vpc *ls_vpc;
+    const bool must_exist = !shash_find(&ctx->options, "--if-exists");
+
+    ls_vpc = ls_vpc_by_name_or_uuid(ctx, ctx->argv[1], must_exist);
+    if (!ls_vpc) {
+        if (must_exist) {
+            ctl_fatal("Cannot find ls-vpc: %s\n", ctx->argv[1]);
+        }
+    }
+
+    /* Find the switch that contains 'vpc', then delete it. */
+    const struct nbrec_logical_switch *lswitch;
+    NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
+        for (size_t i = 0; i < lswitch->n_vpcs; i++) {
+            if (lswitch->vpcs[i] == ls_vpc) {
+                remove_ls_vpc(lswitch,i);
+                return;
+            }
+        }
+    }
+    if (must_exist) {
+        ctl_fatal("logical vpc %s is not part of any logical switch",
+                  ctx->argv[1]);
+    }
+}
+
+static void
+print_ls_vpc_for_switch(struct ctl_context *ctx,
+                           const struct nbrec_logical_switch *lswitch,
+                           const char *vpc_name_filter,
+                           const bool show_switch_name)
+{
+    struct smap ls_vpcs;
+    size_t i;
+
+    smap_init(&ls_vpcs);
+    for (i = 0; i < lswitch->n_vpcs; i++) {
+        const struct nbrec_logical_vpc *ls_vpc = 
+                    lswitch->vpcs[i];
+        if (vpc_name_filter!= NULL && strcmp(vpc_name_filter, 
+                                              ls_vpc->name)!= 0) {
+            continue;
+        } else {
+          const char *lcidr = ls_vpc->cidr;
+          if (show_switch_name) {
+            smap_add_format(&ls_vpcs, ls_vpc->name, 
+                             UUID_FMT 
+                             " (%s:%s) cidr:%s ",
+                             UUID_ARGS(&ls_vpc->header_.uuid), lswitch->name,
+                             ls_vpc->name, lcidr);
+          } else {
+            smap_add_format(&ls_vpcs, ls_vpc->name, 
+                             UUID_FMT 
+                             " (%s) cidr:%s",
+                             UUID_ARGS(&ls_vpc->header_.uuid),
+                             ls_vpc->name, lcidr);
+        }
+      }
+    }
+    const struct smap_node **nodes = smap_sort(&ls_vpcs);
+    for (i = 0; i < smap_count(&ls_vpcs); i++) {
+        const struct smap_node *node = nodes[i];
+        ds_put_format(&ctx->output, "%s\n", node->value);
+    }
+    smap_destroy(&ls_vpcs);
+    free(nodes);
+}
+
+static void
+nbctl_ls_vpc_list(struct ctl_context *ctx)
+{
+    const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
+    const char *vpc_name_filter = ctx->argc > 2 ? ctx->argv[2] : NULL;
+    const struct nbrec_logical_switch *lswitch;
+    const struct nbrec_logical_vpc *ls_vpc;
+
+    if (vpc_name_filter!= NULL){
+      ls_vpc = ls_vpc_by_name_or_uuid(ctx, ctx->argv[2], true);
+      if (!ls_vpc) {
+           ctl_fatal("%s: an ls-vpc with this name does not exist",
+                              ctx->argv[2]);
+           return;
+      }
+    }
+    if (id) {
+        lswitch = ls_by_name_or_uuid(ctx, id, true);
+        print_ls_vpc_for_switch(ctx, lswitch, vpc_name_filter, false);
+    } else {
+        NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
+            if (lswitch->n_vpcs == 0) {
+                continue;
+            }
+            print_ls_vpc_for_switch(ctx, lswitch, vpc_name_filter, true);
+        }
+    }
+}
+/* End of vpc operations */
 
 /* Returns the logical switch that contains 'lsp'. */
 static const struct nbrec_logical_switch *
@@ -2379,10 +2270,9 @@ nbctl_acl_add(struct ctl_context *ctx)
 
     /* Validate action. */
     if (strcmp(action, "allow") && strcmp(action, "allow-related")
-        && strcmp(action, "drop") && strcmp(action, "reject")
-        && strcmp(action, "sfc")) {
+        && strcmp(action, "drop") && strcmp(action, "reject")) {
         ctl_fatal("%s: action must be one of \"allow\", \"allow-related\", "
-                  "\"drop\", \"reject\" and \"sfc\"", action);
+                  "\"drop\", \"reject\"", action);
         return;
     }
 
@@ -4394,47 +4284,44 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "sync", 0, 0, "", nbctl_pre_sync, nbctl_sync, NULL, "", RO },
     { "show", 0, 1, "[SWITCH]", NULL, nbctl_show, NULL, "", RO },
 
-    /* lsp-chain commands. */
-    { "lsp-chain-add", 1, 2, "SWITCH [CHAIN]", NULL, 
-      nbctl_lsp_chain_add,
+    /* ls-sfc commands. */
+    { "ls-sfc-add", 4, 5, "SWITCH VNF VPC AMI [SFC]", NULL, 
+      nbctl_ls_sfc_add,
       NULL, "--may-exist,--add-duplicate", RW },
-    { "lsp-chain-del", 1, 1, "CHAIN", NULL, nbctl_lsp_chain_del,
+    { "ls-sfc-del", 1, 1, "SFC", NULL, nbctl_ls_sfc_del,
       NULL, "--if-exists", RW },
-    { "lsp-chain-list", 0, 2, "[SWITCH [CHAIN]]", NULL, 
-      nbctl_lsp_chain_list, NULL, "", RO },
-    { "lsp-chain-show", 0, 1, "[CHAIN]", NULL, 
-      nbctl_lsp_chain_show, NULL, "", RO },
-
-    /* lsp-pair-group commands. */
-    { "lsp-pair-group-add", 1, 3, "CHAIN [PAIR-GROUP [OFFSET]]",
-      NULL, nbctl_lsp_pair_group_add, NULL, "--may-exist,--add-duplicate", 
-      RW },
-    { "lsp-pair-group-del", 1, 1, "PAIR-GROUP", NULL, nbctl_lsp_pair_group_del,
-      NULL, "--if-exists", RW },
-    { "lsp-pair-group-list", 1, 1, "CHAIN", NULL, nbctl_lsp_pair_group_list, 
-      NULL, "", RO },
-    { "lsp-pair-group-add-port-pair", 2, 2, "PAIR-GROUP LSP-PAIR",
-      NULL, nbctl_lsp_pair_group_add_port_pair, NULL, "--may-exist", RW },
-    { "lsp-pair-group-del-port-pair", 2, 2, "PAIR-GROUP LSP-PAIR",
-      NULL, nbctl_lsp_pair_group_del_port_pair, NULL, "--if-exists", RW },
-
-    /* lsp-chain-classifier commands. */
-    { "lsp-chain-classifier-add", 6, 7, "SWITCH, CHAIN, PORT, DIRECTION, PATH, MATCH, [NAME]",
-      NULL, nbctl_lsp_chain_classifier_add, NULL, "--may-exist,--add-duplicate", 
-      RW },
-    { "lsp-chain-classifier-del", 1, 1, "CHAIN", NULL, 
-      nbctl_lsp_chain_classifier_del, NULL, "--if-exists", RW },
-    { "lsp-chain-classifier-list", 1, 2, "SWITCH, [CHAIN]", NULL, 
-      nbctl_lsp_chain_classifier_list, NULL, "", RO },
-
-    /* lsp-pair commands. */
-    { "lsp-pair-add", 3, 4, "SWITCH, PORT-IN, PORT-OUT [LSP-PAIR]", NULL, 
-      nbctl_lsp_pair_add,
+    { "ls-sfc-list", 0, 2, "[SWITCH [SFC]]", NULL, 
+      nbctl_ls_sfc_list, NULL, "", RO },
+  
+    /* ls-vpc commands. */
+    { "ls-vnf-add", 4, 5, 
+      "SWITCH, PORT-IN, PORT-OUT, TUNNEL_PORT, TUNNEL_TYPE [VNF]", NULL, 
+      nbctl_ls_vnf_add,
       NULL, "--may-exist,--add-duplicate", RW },
-    { "lsp-pair-del", 1, 1, "LSP-PAIR", NULL, nbctl_lsp_pair_del,
+    { "ls-vpc-del", 1, 1, "VNF", NULL, nbctl_ls_vnf_del,
       NULL, "--if-exists", RW },
-    { "lsp-pair-list", 0, 2, "[SWITCH [LSP-PAIR]]", NULL, 
-      nbctl_lsp_pair_list, NULL, "", RO },
+    { "ls-vpc-list", 0, 2, "[SWITCH [VNF]]", NULL, 
+      nbctl_ls_vnf_list, NULL, "", RO },
+
+    /* ls-ami commands. */
+    { "ls-ami-add", 4, 5, 
+      "SWITCH, PORT-IN, PORT-APP, TUNNEL_PORT, TUNNEL_TYPE [AMI]", NULL, 
+      nbctl_ls_ami_add,
+      NULL, "--may-exist,--add-duplicate", RW },
+    { "ls-ami-del", 1, 1, "AMI", NULL, nbctl_ls_ami_del,
+      NULL, "--if-exists", RW },
+    { "ls-ami-list", 0, 2, "[SWITCH [AMI]]", NULL, 
+      nbctl_ls_ami_list, NULL, "", RO },
+
+    /* ls-vpc commands. */
+    { "ls-vpc-add", 2, 3, 
+      "SWITCH, CIDR, [VPC]", NULL, 
+      nbctl_ls_vpc_add,
+      NULL, "--may-exist,--add-duplicate", RW },
+    { "ls-vpc-del", 1, 1, "VPC", NULL, nbctl_ls_vpc_del,
+      NULL, "--if-exists", RW },
+    { "ls-vpc-list", 0, 2, "[SWITCH [VPC]]", NULL, 
+      nbctl_ls_vpc_list, NULL, "", RO },
 
     /* logical switch commands. */
     { "ls-add", 0, 1, "[SWITCH]", NULL, nbctl_ls_add, NULL,

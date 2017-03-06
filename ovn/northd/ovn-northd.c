@@ -2747,7 +2747,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         }
     }
 }
-
+#ifdef AWS
 static int
 cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
 {
@@ -2777,7 +2777,7 @@ cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
         return 0;
     }
 }
-
+#endif
 static void
 build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
 {
@@ -2796,7 +2796,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     const uint16_t ingress_outer_priority = 100;
     const uint16_t egress_inner_priority = 150;
     const uint16_t egress_outer_priority = 100;
-
+#ifdef AWS
     struct ovn_port **input_port_array = NULL;
     struct ovn_port **output_port_array = NULL;
 
@@ -2956,7 +2956,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         free(lcc_match);
         free(lcc_action);   
     }
-#ifdef JED
+
     /* Apply last rule to send to normal path */
     if (chain_path == 0 ){ /* Path starting from ingress */
         lcc_match = xasprintf("ip4.src == "IP_FMT" && inport == %s",
@@ -2969,7 +2969,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_inner_priority,
                         lcc_match, "next");
     free(lcc_match);
-#endif
+
     }
     if (chain_direction == 1){ /* bi-directional chain */
         /*
@@ -3034,7 +3034,9 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     free(input_port_array);
     free(output_port_array);
     free(port_pair_groups);
-    }
+   }
+#endif /* AWS */
+    
 }
 static void
 build_qos(struct ovn_datapath *od, struct hmap *lflows) {
