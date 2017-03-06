@@ -33,6 +33,7 @@ Name                            Email
 =============================== ===============================================
 Aaron Conole                    aconole@redhat.com
 Aaron Rosen                     arosen@clemson.edu
+Alan Pevec                      alan.pevec@redhat.com
 Alexander Duyck                 alexander.h.duyck@redhat.com
 Alexandru Copot                 alex.mihai.c@gmail.com
 Alexei Starovoitov              ast@plumgrid.com
@@ -147,6 +148,7 @@ Ian Campbell                    Ian.Campbell@citrix.com
 Ian Stokes                      ian.stokes@intel.com
 Ilya Maximets                   i.maximets@samsung.com
 Isaku Yamahata                  yamahata@valinux.co.jp
+Jakub Libosvar                  libosvar@redhat.com
 James P.                        roampune@gmail.com
 James Page                      james.page@ubuntu.com
 Jamie Lennox                    jamielennox@gmail.com
@@ -207,6 +209,7 @@ Maxime Coquelin                 maxime.coquelin@redhat.com
 Mehak Mahajan                   mmahajan@nicira.com
 Michael Arnaldi                 arnaldimichael@gmail.com
 Michal Weglicki                 michalx.weglicki@intel.com
+Mickey Spiegel                  mickeys.dev@gmail.com
 Mijo Safradin                   mijo@linux.vnet.ibm.com
 Minoru TAKAHASHI                takahashi.minoru7@gmail.com
 Murphy McCauley                 murphy.mccauley@gmail.com
@@ -286,6 +289,7 @@ Thomas Goirand                  zigo@debian.org
 Thomas Graf                     tgraf@noironetworks.com
 Thomas Lacroix                  thomas.lacroix@citrix.com
 Timo Puha                       timox.puha@intel.com
+Timothy Redaelli                tredaelli@redhat.com
 Todd Deshane                    deshantm@gmail.com
 Tom Everman                     teverman@google.com
 Torgny Lindberg                 torgny.lindberg@ericsson.com
@@ -382,6 +386,7 @@ Eric Lopez                      elopez@nicira.com
 Frido Roose                     fr.roose@gmail.com
 Gaetano Catalli                 gaetano.catalli@gmail.com
 Gavin Remaley                   gavin_remaley@selinc.com
+Georg Schmuecking               georg.schmuecking@ericsson.com
 George Shuklin                  amarao@desunote.ru
 Gerald Rogers                   gerald.rogers@intel.com
 Ghanem Bahri                    bahri.ghanem@gmail.com
@@ -498,6 +503,7 @@ Srini Seetharaman               seethara@stanford.edu
 Sabyasachi Sengupta             Sabyasachi.Sengupta@alcatel-lucent.com
 Salvatore Cambria               salvatore.cambria@citrix.com
 Soner Sevinc                    sevincs@vmware.com
+Stepan Andrushko                stepanx.andrushko@intel.com
 Stephen Hemminger               shemminger@vyatta.com
 Stuart Cardall                  developer@it-offshore.co.uk
 Suganya Ramachandran            suganyar@vmware.com

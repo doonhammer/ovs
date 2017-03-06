@@ -2756,6 +2756,7 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     bundle_flush_macs(bundle, true);
+    mcast_snooping_flush_bundle(ofproto->ms, bundle);
     hmap_remove(&ofproto->bundles, &bundle->hmap_node);
     free(bundle->name);
     free(bundle->trunks);
@@ -2948,6 +2949,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
      * everything on this port and force flow revalidation. */
     if (need_flush) {
         bundle_flush_macs(bundle, false);
+        mcast_snooping_flush_bundle(ofproto->ms, bundle);
     }
 
     return 0;
@@ -5183,6 +5185,8 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
         .match = *match,
         .priority = priority,
         .table_id = TBL_INTERNAL,
+        .out_port = OFPP_ANY,
+        .out_group = OFPG_ANY,
         .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
         .command = OFPFC_DELETE_STRICT,
     };

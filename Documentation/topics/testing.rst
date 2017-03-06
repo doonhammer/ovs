@@ -99,7 +99,7 @@ Coverage
 
 If the build was configured with ``--enable-coverage`` and the ``lcov`` utility
 is installed, you can run the testsuite and generate a code coverage report by
-using the ``check-lcoc`` target::
+using the ``check-lcov`` target::
 
     $ make check-lcov
 
@@ -210,6 +210,8 @@ omit ``RYUDIR``
   you believe to represent bugs in Open vSwitch. Include the precise versions
   of Open vSwitch and Ryu in your bug report, plus any other information
   needed to reproduce the problem.
+
+.. _datapath-testing:
 
 Datapath testing
 ~~~~~~~~~~~~~~~~
