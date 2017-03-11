@@ -26,6 +26,8 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/types.h"
 
+struct vl_mff_map;
+
 /* List of OVS abstracted actions.
  *
  * This macro is used directly only internally by this header, but the list is
@@ -532,6 +534,7 @@ struct ofpact_metadata {
 struct ofpact_meter {
     struct ofpact ofpact;
     uint32_t meter_id;
+    uint32_t provider_meter_id;
 };
 
 /* OFPACT_WRITE_ACTIONS, OFPACT_CLONE.
@@ -554,9 +557,14 @@ ofpact_nest_get_action_len(const struct ofpact_nest *on)
 /* Bits for 'flags' in struct nx_action_conntrack.
  *
  * If NX_CT_F_COMMIT is set, then the connection entry is moved from the
- * unconfirmed to confirmed list in the tracker. */
+ * unconfirmed to confirmed list in the tracker.
+ * If NX_CT_F_FORCE is set, in addition to NX_CT_F_COMMIT, then the conntrack
+ * entry is replaced with a new one in case the original direction of the
+ * existing entry is opposite of the current packet direction.
+ */
 enum nx_conntrack_flags {
     NX_CT_F_COMMIT = 1 << 0,
+    NX_CT_F_FORCE  = 1 << 1,
 };
 
 /* Magic value for struct nx_action_conntrack 'recirc_table' field, to specify
@@ -638,11 +646,13 @@ struct ofpact_nat {
 
 /* OFPACT_RESUBMIT.
  *
- * Used for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE. */
+ * Used for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE, NXAST_RESUBMIT_TABLE_CT. */
 struct ofpact_resubmit {
     struct ofpact ofpact;
     ofp_port_t in_port;
     uint8_t table_id;
+    bool with_ct_orig;   /* Resubmit with Conntrack original direction tuple
+                          * fields in place of IP header fields. */
 };
 
 /* Bits for 'flags' in struct nx_action_learn.
@@ -952,11 +962,11 @@ ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
                                    const struct vl_mff_map *vl_mff_map,
                                    struct ofpbuf *ofpacts);
 enum ofperr ofpacts_check(struct ofpact[], size_t ofpacts_len,
-                          struct flow *, ofp_port_t max_ports,
+                          struct match *, ofp_port_t max_ports,
                           uint8_t table_id, uint8_t n_tables,
                           enum ofputil_protocol *usable_protocols);
 enum ofperr ofpacts_check_consistency(struct ofpact[], size_t ofpacts_len,
-                                      struct flow *, ofp_port_t max_ports,
+                                      struct match *, ofp_port_t max_ports,
                                       uint8_t table_id, uint8_t n_tables,
                                       enum ofputil_protocol usable_protocols);
 enum ofperr ofpact_check_output_port(ofp_port_t port, ofp_port_t max_ports);

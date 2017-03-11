@@ -12,6 +12,7 @@ EXTRA_DIST += \
 	Documentation/intro/install/bash-completion.rst \
 	Documentation/intro/install/debian.rst \
 	Documentation/intro/install/documentation.rst \
+	Documentation/intro/install/distributions.rst \
 	Documentation/intro/install/dpdk.rst \
 	Documentation/intro/install/fedora.rst \
 	Documentation/intro/install/general.rst \
@@ -80,6 +81,7 @@ EXTRA_DIST += \
 	Documentation/internals/release-process.rst \
 	Documentation/internals/security.rst \
 	Documentation/internals/contributing/index.rst \
+	Documentation/internals/contributing/backporting-patches.rst \
 	Documentation/internals/contributing/coding-style.rst \
 	Documentation/internals/contributing/coding-style-windows.rst \
 	Documentation/internals/contributing/documentation-style.rst \

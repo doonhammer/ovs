@@ -263,6 +263,11 @@ static inline void __skb_fill_page_desc(struct sk_buff *skb, int i,
 int rpl_skb_ensure_writable(struct sk_buff *skb, int write_len);
 #endif
 
+#ifndef HAVE___SKB_VLAN_POP
+#define __skb_vlan_pop rpl___skb_vlan_pop
+int rpl___skb_vlan_pop(struct sk_buff *skb, u16 *vlan_tci);
+#endif
+
 #ifndef HAVE_SKB_VLAN_POP
 #define skb_vlan_pop rpl_skb_vlan_pop
 int rpl_skb_vlan_pop(struct sk_buff *skb);
@@ -369,6 +374,17 @@ static inline __wsum lco_csum(struct sk_buff *skb)
 	 * adjustment filled in by caller) and return result.
 	 */
 	return csum_partial(l4_hdr, csum_start - l4_hdr, partial);
+}
+#endif
+
+#ifndef HAVE_SKB_NFCT
+static inline struct nf_conntrack *skb_nfct(const struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_NF_CONNTRACK)
+       return skb->nfct;
+#else
+       return NULL;
+#endif
 }
 #endif
 #endif

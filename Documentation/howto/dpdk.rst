@@ -40,8 +40,7 @@ Bridges should be created with a ``datapath_type=netdev``::
 
     $ ovs-vsctl add-br br0 -- set bridge br0 datapath_type=netdev
 
-ovs-vsctl can also be used to add DPDK devices. OVS expects DPDK device names
-to start with ``dpdk`` and end with a portid. ovs-vswitchd should print the
+ovs-vsctl can also be used to add DPDK devices. ovs-vswitchd should print the
 number of dpdk devices found in the log file::
 
     $ ovs-vsctl add-port br0 dpdk-p0 -- set Interface dpdk-p0 type=dpdk \
@@ -299,6 +298,33 @@ physical ports which in turn effects the non-tunnel traffic performance.
 So it is advised to turn off the Rx checksum offload for non-tunnel traffic use
 cases to achieve the best performance.
 
+.. _extended-statistics:
+
+Extended Statistics
+-------------------
+
+DPDK Extended Statistics API allows PMD to expose unique set of statistics.
+The Extended statistics are implemented and supported only for DPDK physical
+and vHost ports.
+
+To enable statistics, you have to enable OpenFlow 1.4 support for OVS.
+Configure bridge br0 to support OpenFlow version 1.4::
+
+    $ ovs-vsctl set bridge br0 datapath_type=netdev \
+      protocols=OpenFlow10,OpenFlow11,OpenFlow12,OpenFlow13,OpenFlow14
+
+Check the OVSDB protocols column in the bridge table if OpenFlow 1.4 support
+is enabled for OVS::
+
+    $ ovsdb-client dump Bridge protocols
+
+Query the port statistics by explicitly specifying -O OpenFlow14 option::
+
+    $ ovs-ofctl -O OpenFlow14 dump-ports br0
+
+Note: vHost ports supports only partial statistics. RX packet size based
+counter are only supported and doesn't include TX packet size counters.
+
 .. _port-hotplug:
 
 Port Hotplug
@@ -353,6 +379,26 @@ the `DPDK documentation
 <http://dpdk.org/doc/guides/nics/overview.html>`__.
 
 Note: Not all DPDK virtual PMD drivers have been tested and verified to work.
+
+EMC Insertion Probability
+-------------------------
+By default 1 in every 100 flows are inserted into the Exact Match Cache (EMC).
+It is possible to change this insertion probability by setting the
+``emc-insert-inv-prob`` option::
+
+    $ ovs-vsctl --no-wait set Open_vSwitch . other_config:emc-insert-inv-prob=N
+
+where:
+
+``N``
+  is a positive integer representing the inverse probability of insertion ie.
+  on average 1 in every N packets with a unique flow will generate an EMC
+  insertion.
+
+If ``N`` is set to 1, an insertion will be performed for every flow. If set to
+0, no insertions will be performed and the EMC will effectively be disabled.
+
+For more information on the EMC refer to :doc:`/intro/install/dpdk` .
 
 .. _dpdk-ovs-in-guest:
 

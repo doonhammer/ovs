@@ -37,6 +37,7 @@
 #include "openvswitch/vlog.h"
 #include "unaligned.h"
 #include "util.h"
+#include "vl-mff-map.h"
 
 VLOG_DEFINE_THIS_MODULE(ofp_actions);
 
@@ -264,6 +265,8 @@ enum ofp_raw_action_type {
     NXAST_RAW_RESUBMIT,
     /* NX1.0+(14): struct nx_action_resubmit. */
     NXAST_RAW_RESUBMIT_TABLE,
+    /* NX1.0+(44): struct nx_action_resubmit. */
+    NXAST_RAW_RESUBMIT_TABLE_CT,
 
     /* NX1.0+(2): uint32_t. */
     NXAST_RAW_SET_TUNNEL,
@@ -2804,9 +2807,11 @@ set_field_to_legacy_openflow(const struct ofpact_set_field *sf,
         put_OFPAT_SET_NW_TOS(out, ofp_version, sf->value->u8 << 2);
         break;
 
-    case MFF_IP_ECN:
-        put_OFPAT11_SET_NW_ECN(out, sf->value->u8);
+    case MFF_IP_ECN: {
+        struct ofpact_ecn ip_ecn = { .ecn = sf->value->u8 };
+        encode_SET_IP_ECN(&ip_ecn, ofp_version, out);
         break;
+    }
 
     case MFF_TCP_SRC:
     case MFF_UDP_SRC:
@@ -3849,19 +3854,20 @@ format_FIN_TIMEOUT(const struct ofpact_fin_timeout *a, struct ds *s)
     ds_put_format(s, "%s)%s", colors.paren, colors.end);
 }
 
-/* Action structures for NXAST_RESUBMIT and NXAST_RESUBMIT_TABLE.
+/* Action structures for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE, and
+ * NXAST_RESUBMIT_TABLE_CT.
  *
  * These actions search one of the switch's flow tables:
  *
- *    - For NXAST_RESUBMIT_TABLE only, if the 'table' member is not 255, then
- *      it specifies the table to search.
+ *    - For NXAST_RESUBMIT_TABLE and NXAST_RESUBMIT_TABLE_CT, if the
+ *      'table' member is not 255, then it specifies the table to search.
  *
- *    - Otherwise (for NXAST_RESUBMIT_TABLE with a 'table' of 255, or for
- *      NXAST_RESUBMIT regardless of 'table'), it searches the current flow
- *      table, that is, the OpenFlow flow table that contains the flow from
- *      which this action was obtained.  If this action did not come from a
- *      flow table (e.g. it came from an OFPT_PACKET_OUT message), then table 0
- *      is the current table.
+ *    - Otherwise (for NXAST_RESUBMIT_TABLE or NXAST_RESUBMIT_TABLE_CT with a
+ *      'table' of 255, or for NXAST_RESUBMIT regardless of 'table'), it
+ *      searches the current flow table, that is, the OpenFlow flow table that
+ *      contains the flow from which this action was obtained.  If this action
+ *      did not come from a flow table (e.g. it came from an OFPT_PACKET_OUT
+ *      message), then table 0 is the current table.
  *
  * The flow table lookup uses a flow that may be slightly modified from the
  * original lookup:
@@ -3869,9 +3875,12 @@ format_FIN_TIMEOUT(const struct ofpact_fin_timeout *a, struct ds *s)
  *    - For NXAST_RESUBMIT, the 'in_port' member of struct nx_action_resubmit
  *      is used as the flow's in_port.
  *
- *    - For NXAST_RESUBMIT_TABLE, if the 'in_port' member is not OFPP_IN_PORT,
- *      then its value is used as the flow's in_port.  Otherwise, the original
- *      in_port is used.
+ *    - For NXAST_RESUBMIT_TABLE and NXAST_RESUBMIT_TABLE_CT, if the 'in_port'
+ *      member is not OFPP_IN_PORT, then its value is used as the flow's
+ *      in_port.  Otherwise, the original in_port is used.
+ *
+ *    - For NXAST_RESUBMIT_TABLE_CT the Conntrack 5-tuple fields are used as
+ *      the packets IP header fields during the lookup.
  *
  *    - If actions that modify the flow (e.g. OFPAT_SET_VLAN_VID) precede the
  *      resubmit action, then the flow is updated with the new values.
@@ -3904,11 +3913,12 @@ format_FIN_TIMEOUT(const struct ofpact_fin_timeout *a, struct ds *s)
  *      a total limit of 4,096 resubmits per flow translation (earlier versions
  *      did not impose any total limit).
  *
- * NXAST_RESUBMIT ignores 'table' and 'pad'.  NXAST_RESUBMIT_TABLE requires
- * 'pad' to be all-bits-zero.
+ * NXAST_RESUBMIT ignores 'table' and 'pad'.  NXAST_RESUBMIT_TABLE and
+ * NXAST_RESUBMIT_TABLE_CT require 'pad' to be all-bits-zero.
  *
  * Open vSwitch 1.0.1 and earlier did not support recursion.  Open vSwitch
- * before 1.2.90 did not support NXAST_RESUBMIT_TABLE.
+ * before 1.2.90 did not support NXAST_RESUBMIT_TABLE.  Open vSwitch before
+ * 2.8.0 did not support NXAST_RESUBMIT_TABLE_CT.
  */
 struct nx_action_resubmit {
     ovs_be16 type;                  /* OFPAT_VENDOR. */
@@ -3953,6 +3963,21 @@ decode_NXAST_RAW_RESUBMIT_TABLE(const struct nx_action_resubmit *nar,
     return 0;
 }
 
+static enum ofperr
+decode_NXAST_RAW_RESUBMIT_TABLE_CT(const struct nx_action_resubmit *nar,
+                                   enum ofp_version ofp_version OVS_UNUSED,
+                                   struct ofpbuf *out)
+{
+    enum ofperr error = decode_NXAST_RAW_RESUBMIT_TABLE(nar, ofp_version, out);
+    if (error) {
+        return error;
+    }
+    struct ofpact_resubmit *resubmit = out->header;
+    resubmit->ofpact.raw = NXAST_RAW_RESUBMIT_TABLE_CT;
+    resubmit->with_ct_orig = true;
+    return 0;
+}
+
 static void
 encode_RESUBMIT(const struct ofpact_resubmit *resubmit,
                 enum ofp_version ofp_version OVS_UNUSED, struct ofpbuf *out)
@@ -3960,10 +3985,12 @@ encode_RESUBMIT(const struct ofpact_resubmit *resubmit,
     uint16_t in_port = ofp_to_u16(resubmit->in_port);
 
     if (resubmit->table_id == 0xff
-        && resubmit->ofpact.raw != NXAST_RAW_RESUBMIT_TABLE) {
+        && resubmit->ofpact.raw == NXAST_RAW_RESUBMIT) {
         put_NXAST_RESUBMIT(out, in_port);
     } else {
-        struct nx_action_resubmit *nar = put_NXAST_RESUBMIT_TABLE(out);
+        struct nx_action_resubmit *nar;
+        nar = resubmit->with_ct_orig
+            ? put_NXAST_RESUBMIT_TABLE_CT(out) : put_NXAST_RESUBMIT_TABLE(out);
         nar->table = resubmit->table_id;
         nar->in_port = htons(in_port);
     }
@@ -3974,7 +4001,7 @@ parse_RESUBMIT(char *arg, struct ofpbuf *ofpacts,
                enum ofputil_protocol *usable_protocols OVS_UNUSED)
 {
     struct ofpact_resubmit *resubmit;
-    char *in_port_s, *table_s;
+    char *in_port_s, *table_s, *ct_s;
 
     resubmit = ofpact_put_RESUBMIT(ofpacts);
 
@@ -4001,6 +4028,16 @@ parse_RESUBMIT(char *arg, struct ofpbuf *ofpacts,
         resubmit->table_id = 255;
     }
 
+    ct_s = strsep(&arg, ",");
+    if (ct_s && ct_s[0]) {
+        if (strcmp(ct_s, "ct")) {
+            return xasprintf("%s: unknown parameter", ct_s);
+        }
+        resubmit->with_ct_orig = true;
+    } else {
+        resubmit->with_ct_orig = false;
+    }
+
     if (resubmit->in_port == OFPP_IN_PORT && resubmit->table_id == 255) {
         return xstrdup("at least one \"in_port\" or \"table\" must be "
                        "specified  on resubmit");
@@ -4022,6 +4059,9 @@ format_RESUBMIT(const struct ofpact_resubmit *a, struct ds *s)
         ds_put_char(s, ',');
         if (a->table_id != 255) {
             ds_put_format(s, "%"PRIu8, a->table_id);
+        }
+        if (a->with_ct_orig) {
+            ds_put_cstr(s, ",ct");
         }
         ds_put_format(s, "%s)%s", colors.paren, colors.end);
     }
@@ -5227,6 +5267,15 @@ format_DEBUG_RECIRC(const struct ofpact_null *a OVS_UNUSED, struct ds *s)
  *      tracker, and the state of the connection will be stored beyond the
  *      lifetime of packet processing.
  *
+ *      A committed connection always has the directionality of the packet that
+ *      caused the connection to be committed in the first place.  This is the
+ *      "original direction" of the connection, and the opposite direction is
+ *      the "reply direction".  If a connection is already committed, but it is
+ *      then decided that the original direction should be the opposite of the
+ *      existing connection, NX_CT_F_FORCE flag may be used in addition to
+ *      NX_CT_F_COMMIT flag to in effect terminate the existing connection and
+ *      start a new one in the current direction.
+ *
  *      Connections may transition back into the uncommitted state due to
  *      external timers, or due to the contents of packets that are sent to the
  *      connection tracker. This behaviour is outside of the scope of the
@@ -5288,7 +5337,7 @@ format_DEBUG_RECIRC(const struct ofpact_null *a OVS_UNUSED, struct ds *s)
  *
  * Zero or more actions may immediately follow this action. These actions will
  * be executed within the context of the connection tracker, and they require
- * the NX_CT_F_COMMIT flag to be set.
+ * NX_CT_F_COMMIT flag be set.
  */
 struct nx_action_conntrack {
     ovs_be16 type;              /* OFPAT_VENDOR. */
@@ -5353,9 +5402,16 @@ decode_NXAST_RAW_CT(const struct nx_action_conntrack *nac,
 {
     const size_t ct_offset = ofpacts_pull(out);
     struct ofpact_conntrack *conntrack = ofpact_put_CT(out);
-    conntrack->flags = ntohs(nac->flags);
+    int error;
 
-    int error = decode_ct_zone(nac, conntrack, vl_mff_map);
+    conntrack->flags = ntohs(nac->flags);
+    if (conntrack->flags & NX_CT_F_FORCE &&
+        !(conntrack->flags & NX_CT_F_COMMIT)) {
+        error = OFPERR_OFPBAC_BAD_ARGUMENT;
+        goto out;
+    }
+
+    error = decode_ct_zone(nac, conntrack, vl_mff_map);
     if (error) {
         goto out;
     }
@@ -5451,6 +5507,8 @@ parse_CT(char *arg, struct ofpbuf *ofpacts,
     while (ofputil_parse_key_value(&arg, &key, &value)) {
         if (!strcmp(key, "commit")) {
             oc->flags |= NX_CT_F_COMMIT;
+        } else if (!strcmp(key, "force")) {
+            oc->flags |= NX_CT_F_FORCE;
         } else if (!strcmp(key, "table")) {
             error = str_to_u8(value, "recirc_table", &oc->recirc_table);
             if (!error && oc->recirc_table == NX_CT_RECIRC_NONE) {
@@ -5496,7 +5554,9 @@ parse_CT(char *arg, struct ofpbuf *ofpacts,
             break;
         }
     }
-
+    if (oc->flags & NX_CT_F_FORCE && !(oc->flags & NX_CT_F_COMMIT)) {
+        error = xasprintf("\"force\" flag requires \"commit\" flag.");
+    }
     ofpact_finish_CT(ofpacts, &oc);
     ofpbuf_push_uninit(ofpacts, ct_offset);
     return error;
@@ -5529,6 +5589,9 @@ format_CT(const struct ofpact_conntrack *a, struct ds *s)
     ds_put_format(s, "%sct(%s", colors.paren, colors.end);
     if (a->flags & NX_CT_F_COMMIT) {
         ds_put_format(s, "%scommit%s,", colors.value, colors.end);
+    }
+    if (a->flags & NX_CT_F_FORCE) {
+        ds_put_format(s, "%sforce%s,", colors.value, colors.end);
     }
     if (a->recirc_table != NX_CT_RECIRC_NONE) {
         ds_put_format(s, "%stable=%s%"PRIu8",",
@@ -6937,6 +7000,7 @@ ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
 
         om = ofpact_put_METER(ofpacts);
         om->meter_id = ntohl(oim->meter_id);
+        om->provider_meter_id = UINT32_MAX; /* No provider meter ID. */
     }
     if (insts[OVSINST_OFPIT11_APPLY_ACTIONS]) {
         const struct ofp_action_header *actions;
@@ -7064,9 +7128,10 @@ inconsistent_match(enum ofputil_protocol *usable_protocols)
  * without context. */
 static enum ofperr
 ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
-               struct flow *flow, ofp_port_t max_ports,
+               struct match *match, ofp_port_t max_ports,
                uint8_t table_id, uint8_t n_tables)
 {
+    struct flow *flow = &match->flow;
     const struct ofpact_enqueue *enqueue;
     const struct mf_field *mf;
 
@@ -7088,14 +7153,14 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         return 0;
 
     case OFPACT_OUTPUT_REG:
-        return mf_check_src(&ofpact_get_OUTPUT_REG(a)->src, flow);
+        return mf_check_src(&ofpact_get_OUTPUT_REG(a)->src, match);
 
     case OFPACT_OUTPUT_TRUNC:
         return ofpact_check_output_port(ofpact_get_OUTPUT_TRUNC(a)->port,
                                         max_ports);
 
     case OFPACT_BUNDLE:
-        return bundle_check(ofpact_get_BUNDLE(a), max_ports, flow);
+        return bundle_check(ofpact_get_BUNDLE(a), max_ports, match);
 
     case OFPACT_SET_VLAN_VID:
         /* Remember if we saw a vlan tag in the flow to aid translating to
@@ -7178,7 +7243,7 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         return 0;
 
     case OFPACT_REG_MOVE:
-        return nxm_reg_move_check(ofpact_get_REG_MOVE(a), flow);
+        return nxm_reg_move_check(ofpact_get_REG_MOVE(a), match);
 
     case OFPACT_SET_FIELD:
         mf = ofpact_get_SET_FIELD(a)->field;
@@ -7201,10 +7266,10 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         return 0;
 
     case OFPACT_STACK_PUSH:
-        return nxm_stack_push_check(ofpact_get_STACK_PUSH(a), flow);
+        return nxm_stack_push_check(ofpact_get_STACK_PUSH(a), match);
 
     case OFPACT_STACK_POP:
-        return nxm_stack_pop_check(ofpact_get_STACK_POP(a), flow);
+        return nxm_stack_pop_check(ofpact_get_STACK_POP(a), match);
 
     case OFPACT_SET_MPLS_LABEL:
     case OFPACT_SET_MPLS_TC:
@@ -7218,9 +7283,16 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
     case OFPACT_SET_TUNNEL:
     case OFPACT_SET_QUEUE:
     case OFPACT_POP_QUEUE:
-    case OFPACT_RESUBMIT:
         return 0;
 
+    case OFPACT_RESUBMIT: {
+        struct ofpact_resubmit *resubmit = ofpact_get_RESUBMIT(a);
+
+        if (resubmit->with_ct_orig && !is_ct_valid(flow, &match->wc, NULL)) {
+            return OFPERR_OFPBAC_MATCH_INCONSISTENT;
+        }
+        return 0;
+    }
     case OFPACT_FIN_TIMEOUT:
         if (flow->nw_proto != IPPROTO_TCP) {
             inconsistent_match(usable_protocols);
@@ -7228,13 +7300,13 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         return 0;
 
     case OFPACT_LEARN:
-        return learn_check(ofpact_get_LEARN(a), flow);
+        return learn_check(ofpact_get_LEARN(a), match);
 
     case OFPACT_CONJUNCTION:
         return 0;
 
     case OFPACT_MULTIPATH:
-        return multipath_check(ofpact_get_MULTIPATH(a), flow);
+        return multipath_check(ofpact_get_MULTIPATH(a), match);
 
     case OFPACT_NOTE:
     case OFPACT_EXIT:
@@ -7261,7 +7333,7 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
     case OFPACT_CLONE: {
         struct ofpact_nest *on = ofpact_get_CLONE(a);
         return ofpacts_check(on->actions, ofpact_nest_get_action_len(on),
-                             flow, max_ports, table_id, n_tables,
+                             match, max_ports, table_id, n_tables,
                              usable_protocols);
     }
 
@@ -7279,11 +7351,11 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         }
 
         if (oc->zone_src.field) {
-            return mf_check_src(&oc->zone_src, flow);
+            return mf_check_src(&oc->zone_src, match);
         }
 
         return ofpacts_check(oc->actions, ofpact_ct_get_action_len(oc),
-                             flow, max_ports, table_id, n_tables,
+                             match, max_ports, table_id, n_tables,
                              usable_protocols);
     }
 
@@ -7311,7 +7383,7 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
         struct ofpact_nest *on = ofpact_get_WRITE_ACTIONS(a);
         enum ofputil_protocol p = *usable_protocols;
         return ofpacts_check(on->actions, ofpact_nest_get_action_len(on),
-                             flow, max_ports, table_id, n_tables, &p);
+                             match, max_ports, table_id, n_tables, &p);
     }
 
     case OFPACT_WRITE_METADATA:
@@ -7359,32 +7431,33 @@ ofpact_check__(enum ofputil_protocol *usable_protocols, struct ofpact *a,
  * example of an inconsistency between match and actions is a flow that does
  * not match on an MPLS Ethertype but has an action that pops an MPLS label.)
  *
- * May annotate ofpacts with information gathered from the 'flow'.
+ * May annotate ofpacts with information gathered from the 'match'.
  *
- * May temporarily modify 'flow', but restores the changes before returning. */
+ * May temporarily modify 'match', but restores the changes before
+ * returning. */
 enum ofperr
 ofpacts_check(struct ofpact ofpacts[], size_t ofpacts_len,
-              struct flow *flow, ofp_port_t max_ports,
+              struct match *match, ofp_port_t max_ports,
               uint8_t table_id, uint8_t n_tables,
               enum ofputil_protocol *usable_protocols)
 {
     struct ofpact *a;
-    ovs_be16 dl_type = flow->dl_type;
-    ovs_be16 vlan_tci = flow->vlan_tci;
-    uint8_t nw_proto = flow->nw_proto;
+    ovs_be16 dl_type = match->flow.dl_type;
+    ovs_be16 vlan_tci = match->flow.vlan_tci;
+    uint8_t nw_proto = match->flow.nw_proto;
     enum ofperr error = 0;
 
     OFPACT_FOR_EACH (a, ofpacts, ofpacts_len) {
-        error = ofpact_check__(usable_protocols, a, flow,
+        error = ofpact_check__(usable_protocols, a, match,
                                max_ports, table_id, n_tables);
         if (error) {
             break;
         }
     }
     /* Restore fields that may have been modified. */
-    flow->dl_type = dl_type;
-    flow->vlan_tci = vlan_tci;
-    flow->nw_proto = nw_proto;
+    match->flow.dl_type = dl_type;
+    match->flow.vlan_tci = vlan_tci;
+    match->flow.nw_proto = nw_proto;
     return error;
 }
 
@@ -7392,14 +7465,14 @@ ofpacts_check(struct ofpact ofpacts[], size_t ofpacts_len,
  * OFPERR_OFPBAC_MATCH_INCONSISTENT rather than clearing bits. */
 enum ofperr
 ofpacts_check_consistency(struct ofpact ofpacts[], size_t ofpacts_len,
-                          struct flow *flow, ofp_port_t max_ports,
+                          struct match *match, ofp_port_t max_ports,
                           uint8_t table_id, uint8_t n_tables,
                           enum ofputil_protocol usable_protocols)
 {
     enum ofputil_protocol p = usable_protocols;
     enum ofperr error;
 
-    error = ofpacts_check(ofpacts, ofpacts_len, flow, max_ports,
+    error = ofpacts_check(ofpacts, ofpacts_len, match, max_ports,
                           table_id, n_tables, &p);
     return (error ? error
             : p != usable_protocols ? OFPERR_OFPBAC_MATCH_INCONSISTENT

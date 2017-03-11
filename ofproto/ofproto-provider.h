@@ -52,6 +52,7 @@
 #include "timeval.h"
 #include "tun-metadata.h"
 #include "versions.h"
+#include "vl-mff-map.h"
 
 struct match;
 struct ofputil_flow_mod;
@@ -59,7 +60,6 @@ struct bfd_cfg;
 struct meter;
 struct ofoperation;
 struct ofproto_packet_out;
-struct vl_mff_map;
 struct smap;
 
 extern struct ovs_mutex ofproto_mutex;
@@ -1772,16 +1772,17 @@ struct ofproto_class {
      * leaving '*id' unchanged.  On failure, the existing meter configuration
      * is left intact. */
     enum ofperr (*meter_set)(struct ofproto *ofproto, ofproto_meter_id *id,
-                             const struct ofputil_meter_config *config);
+                             struct ofputil_meter_config *config);
 
     /* Gets the meter and meter band packet and byte counts for maximum of
-     * 'stats->n_bands' bands for the meter with provider ID 'id' within
-     * 'ofproto'.  The caller fills in the other stats values.  The band stats
-     * are copied to memory at 'stats->bands' provided by the caller.  The
-     * number of returned band stats is returned in 'stats->n_bands'. */
+     * 'n_bands' bands for the meter with provider ID 'id' within 'ofproto'.
+     * The caller fills in the other stats values.  The band stats are copied
+     * to memory at 'stats->bands' provided by the caller.  The number of
+     * returned band stats is returned in 'stats->n_bands'. */
     enum ofperr (*meter_get)(const struct ofproto *ofproto,
                              ofproto_meter_id id,
-                             struct ofputil_meter_stats *stats);
+                             struct ofputil_meter_stats *stats,
+                             uint16_t n_bands);
 
     /* Deletes a meter, making the 'ofproto_meter_id' invalid for any
      * further calls. */
@@ -1948,7 +1949,8 @@ void ofproto_flush_flows(struct ofproto *);
 
 enum ofperr ofproto_check_ofpacts(struct ofproto *,
                                   const struct ofpact ofpacts[],
-                                  size_t ofpacts_len);
+                                  size_t ofpacts_len)
+    OVS_REQUIRES(ofproto_mutex);
 
 static inline const struct rule_actions *
 rule_get_actions(const struct rule *rule)

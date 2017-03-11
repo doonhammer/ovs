@@ -15,16 +15,16 @@
 import functools
 import uuid
 
-import six
-
-import ovs.jsonrpc
 import ovs.db.data as data
 import ovs.db.parser
 import ovs.db.schema
-from ovs.db import error
+import ovs.jsonrpc
 import ovs.ovsuuid
 import ovs.poller
 import ovs.vlog
+from ovs.db import error
+
+import six
 
 vlog = ovs.vlog.Vlog("idl")
 
@@ -649,6 +649,7 @@ class Idl(object):
         txn = self._outstanding_txns.pop(msg.id, None)
         if txn:
             txn._process_reply(msg)
+            return True
 
 
 def _uuid_to_row(atom, base):

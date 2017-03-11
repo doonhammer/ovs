@@ -29,9 +29,6 @@ This document describes how to build and install Open vSwitch using a DPDK
 datapath. Open vSwitch can use the DPDK library to operate entirely in
 userspace.
 
-.. warning::
-  The DPDK support of Open vSwitch is considered 'experimental'.
-
 Build requirements
 ------------------
 
@@ -67,9 +64,9 @@ Install DPDK
 #. Download the `DPDK sources`_, extract the file and set ``DPDK_DIR``::
 
        $ cd /usr/src/
-       $ wget http://fast.dpdk.org/rel/dpdk-16.11.tar.xz
-       $ tar xf dpdk-16.11.tar.xz
-       $ export DPDK_DIR=/usr/src/dpdk-16.11
+       $ wget http://fast.dpdk.org/rel/dpdk-16.11.1.tar.xz
+       $ tar xf dpdk-16.11.1.tar.xz
+       $ export DPDK_DIR=/usr/src/dpdk-stable-16.11.1
        $ cd $DPDK_DIR
 
 #. (Optional) Configure DPDK as a shared library

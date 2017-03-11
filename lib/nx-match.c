@@ -36,6 +36,7 @@
 #include "tun-metadata.h"
 #include "unaligned.h"
 #include "util.h"
+#include "vl-mff-map.h"
 
 VLOG_DEFINE_THIS_MODULE(nx_match);
 
@@ -503,6 +504,9 @@ nx_pull_match_entry(struct ofpbuf *b, bool allow_cookie,
     return 0;
 }
 
+/* Prerequisites will only be checked when 'strict' is 'true'.  This allows
+ * decoding conntrack original direction 5-tuple IP addresses without the
+ * ethertype being present, when decoding metadata only. */
 static enum ofperr
 nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
             struct match *match, ovs_be64 *cookie, ovs_be64 *cookie_mask,
@@ -538,7 +542,7 @@ nx_pull_raw(const uint8_t *p, unsigned int match_len, bool strict,
                 *cookie = value.be64;
                 *cookie_mask = mask.be64;
             }
-        } else if (!mf_are_prereqs_ok(field, &match->flow, NULL)) {
+        } else if (strict && !mf_are_match_prereqs_ok(field, match)) {
             error = OFPERR_OFPBMC_BAD_PREREQ;
         } else if (!mf_is_all_wild(field, &match->wc)) {
             error = OFPERR_OFPBMC_DUP_FIELD;
@@ -606,7 +610,8 @@ nx_pull_match(struct ofpbuf *b, unsigned int match_len, struct match *match,
 }
 
 /* Behaves the same as nx_pull_match(), but skips over unknown NXM headers,
- * instead of failing with an error. */
+ * instead of failing with an error, and does not check for field
+ * prerequisities. */
 enum ofperr
 nx_pull_match_loose(struct ofpbuf *b, unsigned int match_len,
                     struct match *match,
@@ -663,8 +668,9 @@ oxm_pull_match(struct ofpbuf *b, const struct tun_table *tun_table,
     return oxm_pull_match__(b, true, tun_table, match);
 }
 
-/* Behaves the same as oxm_pull_match() with one exception.  Skips over unknown
- * OXM headers instead of failing with an error when they are encountered. */
+/* Behaves the same as oxm_pull_match() with two exceptions.  Skips over
+ * unknown OXM headers instead of failing with an error when they are
+ * encountered, and does not check for field prerequisities. */
 enum ofperr
 oxm_pull_match_loose(struct ofpbuf *b, const struct tun_table *tun_table,
                      struct match *match)
@@ -675,14 +681,16 @@ oxm_pull_match_loose(struct ofpbuf *b, const struct tun_table *tun_table,
 /* Parses the OXM match description in the 'oxm_len' bytes in 'oxm'.  Stores
  * the result in 'match'.
  *
- * Fails with an error when encountering unknown OXM headers.
+ * Returns 0 if successful, otherwise an OpenFlow error code.
  *
- * Returns 0 if successful, otherwise an OpenFlow error code. */
+ * Encountering unknown OXM headers or missing field prerequisites are not
+ * considered as error conditions.
+ */
 enum ofperr
-oxm_decode_match(const void *oxm, size_t oxm_len,
-                 const struct tun_table *tun_table, struct match *match)
+oxm_decode_match_loose(const void *oxm, size_t oxm_len,
+                       const struct tun_table *tun_table, struct match *match)
 {
-    return nx_pull_raw(oxm, oxm_len, true, match, NULL, NULL, tun_table);
+    return nx_pull_raw(oxm, oxm_len, false, match, NULL, NULL, tun_table);
 }
 
 /* Verify an array of OXM TLVs treating value of each TLV as a mask,
@@ -962,7 +970,7 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     int match_len;
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 37);
 
     /* Metadata. */
     if (match->wc.masks.dp_hash) {
@@ -1110,7 +1118,21 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
                 htonl(match->wc.masks.ct_mark));
     nxm_put_128m(b, MFF_CT_LABEL, oxm, hton128(flow->ct_label),
                  hton128(match->wc.masks.ct_label));
-
+    nxm_put_32m(b, MFF_CT_NW_SRC, oxm,
+                flow->ct_nw_src, match->wc.masks.ct_nw_src);
+    nxm_put_ipv6(b, MFF_CT_IPV6_SRC, oxm,
+                 &flow->ct_ipv6_src, &match->wc.masks.ct_ipv6_src);
+    nxm_put_32m(b, MFF_CT_NW_DST, oxm,
+                flow->ct_nw_dst, match->wc.masks.ct_nw_dst);
+    nxm_put_ipv6(b, MFF_CT_IPV6_DST, oxm,
+                 &flow->ct_ipv6_dst, &match->wc.masks.ct_ipv6_dst);
+    if (flow->ct_nw_proto) {
+        nxm_put_8(b, MFF_CT_NW_PROTO, oxm, flow->ct_nw_proto);
+        nxm_put_16m(b, MFF_CT_TP_SRC, oxm,
+                    flow->ct_tp_src, match->wc.masks.ct_tp_src);
+        nxm_put_16m(b, MFF_CT_TP_DST, oxm,
+                    flow->ct_tp_dst, match->wc.masks.ct_tp_dst);
+    }
     /* OpenFlow 1.1+ Metadata. */
     nxm_put_64m(b, MFF_METADATA, oxm,
                 flow->metadata, match->wc.masks.metadata);
@@ -1662,16 +1684,17 @@ nxm_format_reg_move(const struct ofpact_reg_move *move, struct ds *s)
 
 
 enum ofperr
-nxm_reg_move_check(const struct ofpact_reg_move *move, const struct flow *flow)
+nxm_reg_move_check(const struct ofpact_reg_move *move,
+                   const struct match *match)
 {
     enum ofperr error;
 
-    error = mf_check_src(&move->src, flow);
+    error = mf_check_src(&move->src, match);
     if (error) {
         return error;
     }
 
-    return mf_check_dst(&move->dst, flow);
+    return mf_check_dst(&move->dst, match);
 }
 
 /* nxm_execute_reg_move(). */
@@ -1733,16 +1756,16 @@ nxm_format_stack_pop(const struct ofpact_stack *pop, struct ds *s)
 
 enum ofperr
 nxm_stack_push_check(const struct ofpact_stack *push,
-                     const struct flow *flow)
+                     const struct match *match)
 {
-    return mf_check_src(&push->subfield, flow);
+    return mf_check_src(&push->subfield, match);
 }
 
 enum ofperr
 nxm_stack_pop_check(const struct ofpact_stack *pop,
-                    const struct flow *flow)
+                    const struct match *match)
 {
-    return mf_check_dst(&pop->subfield, flow);
+    return mf_check_dst(&pop->subfield, match);
 }
 
 /* nxm_execute_stack_push(), nxm_execute_stack_pop().

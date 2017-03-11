@@ -822,7 +822,7 @@ check_recirc(struct dpif_backer *backer)
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
     odp_flow_key_from_flow(&odp_parms, &key);
     enable_recirc = dpif_probe_feature(backer->dpif, "recirculation", &key,
-                                       NULL);
+                                       NULL, NULL);
 
     if (enable_recirc) {
         VLOG_INFO("%s: Datapath supports recirculation",
@@ -859,7 +859,7 @@ check_ufid(struct dpif_backer *backer)
     odp_flow_key_from_flow(&odp_parms, &key);
     dpif_flow_hash(backer->dpif, key.data, key.size, &ufid);
 
-    enable_ufid = dpif_probe_feature(backer->dpif, "UFID", &key, &ufid);
+    enable_ufid = dpif_probe_feature(backer->dpif, "UFID", &key, NULL, &ufid);
 
     if (enable_ufid) {
         VLOG_INFO("%s: Datapath supports unique flow ids",
@@ -973,12 +973,69 @@ check_max_mpls_depth(struct dpif_backer *backer)
 
         ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
         odp_flow_key_from_flow(&odp_parms, &key);
-        if (!dpif_probe_feature(backer->dpif, "MPLS", &key, NULL)) {
+        if (!dpif_probe_feature(backer->dpif, "MPLS", &key, NULL, NULL)) {
             break;
         }
     }
 
     VLOG_INFO("%s: MPLS label stack length probed as %d",
+              dpif_name(backer->dpif), n);
+    return n;
+}
+
+static void
+add_sample_actions(struct ofpbuf *actions, int nesting)
+{
+    if (nesting == 0) {
+        nl_msg_put_odp_port(actions, OVS_ACTION_ATTR_OUTPUT, u32_to_odp(1));
+        return;
+    }
+
+    size_t start, actions_start;
+
+    start = nl_msg_start_nested(actions, OVS_ACTION_ATTR_SAMPLE);
+    actions_start = nl_msg_start_nested(actions, OVS_SAMPLE_ATTR_ACTIONS);
+    add_sample_actions(actions, nesting - 1);
+    nl_msg_end_nested(actions, actions_start);
+    nl_msg_put_u32(actions, OVS_SAMPLE_ATTR_PROBABILITY, UINT32_MAX);
+    nl_msg_end_nested(actions, start);
+}
+
+/* Tests the nested sample actions levels supported by 'backer''s datapath.
+ *
+ * Returns the number of nested sample actions accepted by the datapath.  */
+static size_t
+check_max_sample_nesting(struct dpif_backer *backer)
+{
+    struct odputil_keybuf keybuf;
+    struct ofpbuf key;
+    struct flow flow;
+    int n;
+
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+    };
+
+    memset(&flow, 0, sizeof flow);
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&odp_parms, &key);
+
+    /* OVS datapath has always supported at least 3 nested levels.  */
+    for (n = 3; n < FLOW_MAX_SAMPLE_NESTING; n++) {
+        struct ofpbuf actions;
+        bool ok;
+
+        ofpbuf_init(&actions, 300);
+        add_sample_actions(&actions, n);
+        ok = dpif_probe_feature(backer->dpif, "Sample action nesting", &key,
+                                &actions, NULL);
+        ofpbuf_uninit(&actions);
+        if (!ok) {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: Max sample nesting level probed as %d",
               dpif_name(backer->dpif), n);
     return n;
 }
@@ -1166,7 +1223,7 @@ check_##NAME(struct dpif_backer *backer)                                    \
                                                                             \
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);                         \
     odp_flow_key_from_flow(&odp_parms, &key);                               \
-    enable = dpif_probe_feature(backer->dpif, #NAME, &key, NULL);           \
+    enable = dpif_probe_feature(backer->dpif, #NAME, &key, NULL, NULL);     \
                                                                             \
     if (enable) {                                                           \
         VLOG_INFO("%s: Datapath supports "#NAME, dpif_name(backer->dpif));  \
@@ -1184,6 +1241,7 @@ CHECK_FEATURE(ct_zone)
 CHECK_FEATURE(ct_mark)
 CHECK_FEATURE__(ct_label, ct_label, ct_label.u64.lo, 1)
 CHECK_FEATURE__(ct_state_nat, ct_state, ct_state, CS_TRACKED|CS_SRC_NAT)
+CHECK_FEATURE__(ct_orig_tuple, ct_orig_tuple, ct_nw_proto, 1)
 
 #undef CHECK_FEATURE
 #undef CHECK_FEATURE__
@@ -1202,6 +1260,7 @@ check_support(struct dpif_backer *backer)
     backer->support.ufid = check_ufid(backer);
     backer->support.tnl_push_pop = dpif_supports_tnl_push_pop(backer->dpif);
     backer->support.clone = check_clone(backer);
+    backer->support.sample_nesting = check_max_sample_nesting(backer);
 
     /* Flow fields. */
     backer->support.odp.ct_state = check_ct_state(backer);
@@ -1210,6 +1269,7 @@ check_support(struct dpif_backer *backer)
     backer->support.odp.ct_label = check_ct_label(backer);
 
     backer->support.odp.ct_state_nat = check_ct_state_nat(backer);
+    backer->support.odp.ct_orig_tuple = check_ct_orig_tuple(backer);
 }
 
 static int
@@ -2756,6 +2816,7 @@ bundle_destroy(struct ofbundle *bundle)
     }
 
     bundle_flush_macs(bundle, true);
+    mcast_snooping_flush_bundle(ofproto->ms, bundle);
     hmap_remove(&ofproto->bundles, &bundle->hmap_node);
     free(bundle->name);
     free(bundle->trunks);
@@ -2948,6 +3009,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
      * everything on this port and force flow revalidation. */
     if (need_flush) {
         bundle_flush_macs(bundle, false);
+        mcast_snooping_flush_bundle(ofproto->ms, bundle);
     }
 
     return 0;
@@ -3994,7 +4056,7 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
     uint32_t ct_mark;
 
     support = &ofproto->backer->support.odp;
-    ct_state = MINIFLOW_GET_U16(flow, ct_state);
+    ct_state = MINIFLOW_GET_U8(flow, ct_state);
     if (support->ct_state && support->ct_zone && support->ct_mark
         && support->ct_label && support->ct_state_nat) {
         return ct_state & CS_UNSUPPORTED_MASK ? OFPERR_OFPBMC_BAD_MASK : 0;
@@ -5183,6 +5245,8 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
         .match = *match,
         .priority = priority,
         .table_id = TBL_INTERNAL,
+        .out_port = OFPP_ANY,
+        .out_group = OFPG_ANY,
         .flags = OFPUTIL_FF_HIDDEN_FIELDS | OFPUTIL_FF_NO_READONLY,
         .command = OFPFC_DELETE_STRICT,
     };
@@ -5195,6 +5259,58 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
     }
 
     return 0;
+}
+
+static void
+meter_get_features(const struct ofproto *ofproto_,
+                   struct ofputil_meter_features *features)
+{
+    const struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    dpif_meter_get_features(ofproto->backer->dpif, features);
+}
+
+static enum ofperr
+meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
+          struct ofputil_meter_config *config)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    switch (dpif_meter_set(ofproto->backer->dpif, meter_id, config)) {
+    case 0:
+        return 0;
+    case EFBIG: /* meter_id out of range */
+    case ENOMEM: /* Cannot allocate meter */
+        return OFPERR_OFPMMFC_OUT_OF_METERS;
+    case EBADF: /* Unsupported flags */
+        return OFPERR_OFPMMFC_BAD_FLAGS;
+    case EINVAL: /* Too many bands */
+        return OFPERR_OFPMMFC_OUT_OF_BANDS;
+    case ENODEV: /* Unsupported band type */
+        return OFPERR_OFPMMFC_BAD_BAND;
+    default:
+        return OFPERR_OFPMMFC_UNKNOWN;
+    }
+}
+
+static enum ofperr
+meter_get(const struct ofproto *ofproto_, ofproto_meter_id meter_id,
+          struct ofputil_meter_stats *stats, uint16_t n_bands)
+{
+    const struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    if (!dpif_meter_get(ofproto->backer->dpif, meter_id, stats, n_bands)) {
+        return 0;
+    }
+    return OFPERR_OFPMMFC_UNKNOWN_METER;
+}
+
+static void
+meter_del(struct ofproto *ofproto_, ofproto_meter_id meter_id)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    dpif_meter_del(ofproto->backer->dpif, meter_id, NULL, 0);
 }
 
 const struct ofproto_class ofproto_dpif_class = {
@@ -5285,10 +5401,10 @@ const struct ofproto_class ofproto_dpif_class = {
     set_mac_table_config,
     set_mcast_snooping,
     set_mcast_snooping_port,
-    NULL,                       /* meter_get_features */
-    NULL,                       /* meter_set */
-    NULL,                       /* meter_get */
-    NULL,                       /* meter_del */
+    meter_get_features,
+    meter_set,
+    meter_get,
+    meter_del,
     group_alloc,                /* group_alloc */
     group_construct,            /* group_construct */
     group_destruct,             /* group_destruct */

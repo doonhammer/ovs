@@ -1180,6 +1180,41 @@ tag_alloc_create_new_tag(struct hmap *tag_alloc_table,
 }
 
 
+/*
+ * This function checks if the MAC in "address" parameter (if present) is
+ * different from the one stored in Logical_Switch_Port.dynamic_addresses
+ * and updates it.
+ */
+static void
+check_and_update_mac_in_dynamic_addresses(
+    const char *address,
+    const struct nbrec_logical_switch_port *nbsp)
+{
+    if (!nbsp->dynamic_addresses) {
+        return;
+    }
+    int buf_index = 0;
+    struct eth_addr ea;
+    if (!ovs_scan_len(address, &buf_index,
+                      ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(ea))) {
+        return;
+    }
+
+    struct eth_addr present_ea;
+    buf_index = 0;
+    if (ovs_scan_len(nbsp->dynamic_addresses, &buf_index,
+                     ETH_ADDR_SCAN_FMT, ETH_ADDR_SCAN_ARGS(present_ea))
+        && !eth_addr_equals(ea, present_ea)) {
+        /* MAC address has changed. Update it */
+        char *new_addr =  xasprintf(
+            ETH_ADDR_FMT"%s", ETH_ADDR_ARGS(ea),
+            &nbsp->dynamic_addresses[buf_index]);
+        nbrec_logical_switch_port_set_dynamic_addresses(
+            nbsp, new_addr);
+        free(new_addr);
+    }
+}
+
 static void
 join_logical_ports(struct northd_context *ctx,
                    struct hmap *datapaths, struct hmap *ports,
@@ -1244,6 +1279,8 @@ join_logical_ports(struct northd_context *ctx,
                     }
                     if (is_dynamic_lsp_address(nbsp->addresses[j])) {
                         if (nbsp->dynamic_addresses) {
+                            check_and_update_mac_in_dynamic_addresses(
+                                nbsp->addresses[j], nbsp);
                             if (!extract_lsp_addresses(nbsp->dynamic_addresses,
                                             &op->lsp_addrs[op->n_lsp_addrs])) {
                                 static struct vlog_rate_limit rl
@@ -1437,6 +1474,86 @@ join_logical_ports(struct northd_context *ctx,
 }
 
 static void
+ip_address_and_port_from_lb_key(const char *key, char **ip_address,
+                                uint16_t *port);
+
+static void
+get_router_load_balancer_ips(const struct ovn_datapath *od,
+                             struct sset *all_ips)
+{
+    if (!od->nbr) {
+        return;
+    }
+
+    for (int i = 0; i < od->nbr->n_load_balancer; i++) {
+        struct nbrec_load_balancer *lb = od->nbr->load_balancer[i];
+        struct smap *vips = &lb->vips;
+        struct smap_node *node;
+
+        SMAP_FOR_EACH (node, vips) {
+            /* node->key contains IP:port or just IP. */
+            char *ip_address = NULL;
+            uint16_t port;
+
+            ip_address_and_port_from_lb_key(node->key, &ip_address, &port);
+            if (!ip_address) {
+                continue;
+            }
+
+            if (!sset_contains(all_ips, ip_address)) {
+                sset_add(all_ips, ip_address);
+            }
+
+            free(ip_address);
+        }
+    }
+}
+
+/* Returns a string consisting of the port's MAC address followed by the
+ * external IP addresses of all NAT rules defined on that router and the
+ * VIPs of all load balancers defined on that router.
+ *
+ * The caller must free the returned string with free(). */
+static char *
+get_nat_addresses(const struct ovn_port *op)
+{
+    struct eth_addr mac;
+    if (!op->nbrp || !op->od || !op->od->nbr
+        || (!op->od->nbr->n_nat && !op->od->nbr->n_load_balancer)
+        || !eth_addr_from_string(op->nbrp->mac, &mac)) {
+        return NULL;
+    }
+
+    struct ds addresses = DS_EMPTY_INITIALIZER;
+    ds_put_format(&addresses, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+
+    /* Get NAT IP addresses. */
+    for (int i = 0; i < op->od->nbr->n_nat; i++) {
+        const struct nbrec_nat *nat = op->od->nbr->nat[i];
+        ovs_be32 ip, mask;
+
+        char *error = ip_parse_masked(nat->external_ip, &ip, &mask);
+        if (error || mask != OVS_BE32_MAX) {
+            free(error);
+            continue;
+        }
+        ds_put_format(&addresses, " %s", nat->external_ip);
+    }
+
+    /* A set to hold all load-balancer vips. */
+    struct sset all_ips = SSET_INITIALIZER(&all_ips);
+    get_router_load_balancer_ips(op->od, &all_ips);
+
+    const char *ip_address;
+    SSET_FOR_EACH (ip_address, &all_ips) {
+        ds_put_format(&addresses, " %s", ip_address);
+    }
+    sset_destroy(&all_ips);
+
+    return ds_steal_cstr(&addresses);
+}
+
+static void
 ovn_port_update_sbrec(const struct ovn_port *op,
                       struct hmap *chassis_qdisc_queues)
 {
@@ -1525,7 +1642,15 @@ ovn_port_update_sbrec(const struct ovn_port *op,
 
             const char *nat_addresses = smap_get(&op->nbsp->options,
                                            "nat-addresses");
-            if (nat_addresses) {
+            if (nat_addresses && !strcmp(nat_addresses, "router")) {
+                if (op->peer && op->peer->nbrp) {
+                    char *nats = get_nat_addresses(op->peer);
+                    if (nats) {
+                        smap_add(&new, "nat-addresses", nats);
+                        free(nats);
+                    }
+                }
+            } else if (nat_addresses) {
                 struct lport_addresses laddrs;
                 if (!extract_lsp_addresses(nat_addresses, &laddrs)) {
                     static struct vlog_rate_limit rl =
@@ -4189,29 +4314,7 @@ build_lrouter_flows(struct hmap *datapaths, struct hmap *ports,
 
         /* A set to hold all load-balancer vips that need ARP responses. */
         struct sset all_ips = SSET_INITIALIZER(&all_ips);
-
-        for (int i = 0; i < op->od->nbr->n_load_balancer; i++) {
-            struct nbrec_load_balancer *lb = op->od->nbr->load_balancer[i];
-            struct smap *vips = &lb->vips;
-            struct smap_node *node;
-
-            SMAP_FOR_EACH (node, vips) {
-                /* node->key contains IP:port or just IP. */
-                char *ip_address = NULL;
-                uint16_t port;
-
-                ip_address_and_port_from_lb_key(node->key, &ip_address, &port);
-                if (!ip_address) {
-                    continue;
-                }
-
-                if (!sset_contains(&all_ips, ip_address)) {
-                    sset_add(&all_ips, ip_address);
-                }
-
-                free(ip_address);
-            }
-        }
+        get_router_load_balancer_ips(op->od, &all_ips);
 
         const char *ip_address;
         SSET_FOR_EACH(ip_address, &all_ips) {

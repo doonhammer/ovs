@@ -38,6 +38,7 @@
 #include "util.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/vlog.h"
+#include "vl-mff-map.h"
 
 VLOG_DEFINE_THIS_MODULE(meta_flow);
 
@@ -245,6 +246,20 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
         return !wc->masks.ct_mark;
     case MFF_CT_LABEL:
         return ovs_u128_is_zero(wc->masks.ct_label);
+    case MFF_CT_NW_PROTO:
+        return !wc->masks.ct_nw_proto;
+    case MFF_CT_NW_SRC:
+        return !wc->masks.ct_nw_src;
+    case MFF_CT_NW_DST:
+        return !wc->masks.ct_nw_dst;
+    case MFF_CT_TP_SRC:
+        return !wc->masks.ct_tp_src;
+    case MFF_CT_TP_DST:
+        return !wc->masks.ct_tp_dst;
+    case MFF_CT_IPV6_SRC:
+        return ipv6_mask_is_any(&wc->masks.ct_ipv6_src);
+    case MFF_CT_IPV6_DST:
+        return ipv6_mask_is_any(&wc->masks.ct_ipv6_dst);
     CASE_MFF_REGS:
         return !wc->masks.regs[mf->id - MFF_REG0];
     CASE_MFF_XREGS:
@@ -378,10 +393,12 @@ mf_is_mask_valid(const struct mf_field *mf, const union mf_value *mask)
 }
 
 /* Returns true if 'flow' meets the prerequisites for 'mf', false otherwise.
+ * If a non-NULL 'mask' is passed, zero-valued matches can also be verified.
  * Sets inspected bits in 'wc', if non-NULL. */
-bool
-mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
-                  struct flow_wildcards *wc)
+static bool
+mf_are_prereqs_ok__(const struct mf_field *mf, const struct flow *flow,
+                    const struct flow_wildcards *mask,
+                    struct flow_wildcards *wc)
 {
     switch (mf->prereqs) {
     case MFP_NONE:
@@ -399,7 +416,16 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
         return eth_type_mpls(flow->dl_type);
     case MFP_IP_ANY:
         return is_ip_any(flow);
+    case MFP_CT_VALID:
+        return is_ct_valid(flow, mask, wc);
+    case MFP_CTV4_VALID:
+        return flow->dl_type == htons(ETH_TYPE_IP)
+            && is_ct_valid(flow, mask, wc);
+    case MFP_CTV6_VALID:
+        return flow->dl_type == htons(ETH_TYPE_IPV6)
+            && is_ct_valid(flow, mask, wc);
     case MFP_TCP:
+        /* Matching !FRAG_LATER is not enforced (mask is not checked). */
         return is_tcp(flow, wc) && !(flow->nw_frag & FLOW_NW_FRAG_LATER);
     case MFP_UDP:
         return is_udp(flow, wc) && !(flow->nw_frag & FLOW_NW_FRAG_LATER);
@@ -418,6 +444,23 @@ mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
     }
 
     OVS_NOT_REACHED();
+}
+
+/* Returns true if 'flow' meets the prerequisites for 'mf', false otherwise.
+ * Sets inspected bits in 'wc', if non-NULL. */
+bool
+mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
+                  struct flow_wildcards *wc)
+{
+    return mf_are_prereqs_ok__(mf, flow, NULL, wc);
+}
+
+/* Returns true if 'match' meets the prerequisites for 'mf', false otherwise.
+ */
+bool
+mf_are_match_prereqs_ok(const struct mf_field *mf, const struct match *match)
+{
+    return mf_are_prereqs_ok__(mf, &match->flow, &match->wc, NULL);
 }
 
 /* Returns true if 'value' may be a valid value *as part of a masked match*,
@@ -454,6 +497,13 @@ mf_is_value_valid(const struct mf_field *mf, const union mf_value *value)
     case MFF_CT_ZONE:
     case MFF_CT_MARK:
     case MFF_CT_LABEL:
+    case MFF_CT_NW_PROTO:
+    case MFF_CT_NW_SRC:
+    case MFF_CT_NW_DST:
+    case MFF_CT_IPV6_SRC:
+    case MFF_CT_IPV6_DST:
+    case MFF_CT_TP_SRC:
+    case MFF_CT_TP_DST:
     CASE_MFF_REGS:
     CASE_MFF_XREGS:
     CASE_MFF_XXREGS:
@@ -626,6 +676,34 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
 
     case MFF_CT_LABEL:
         value->be128 = hton128(flow->ct_label);
+        break;
+
+    case MFF_CT_NW_PROTO:
+        value->u8 = flow->ct_nw_proto;
+        break;
+
+    case MFF_CT_NW_SRC:
+        value->be32 = flow->ct_nw_src;
+        break;
+
+    case MFF_CT_NW_DST:
+        value->be32 = flow->ct_nw_dst;
+        break;
+
+    case MFF_CT_IPV6_SRC:
+        value->ipv6 = flow->ct_ipv6_src;
+        break;
+
+    case MFF_CT_IPV6_DST:
+        value->ipv6 = flow->ct_ipv6_dst;
+        break;
+
+    case MFF_CT_TP_SRC:
+        value->be16 = flow->ct_tp_src;
+        break;
+
+    case MFF_CT_TP_DST:
+        value->be16 = flow->ct_tp_dst;
         break;
 
     CASE_MFF_REGS:
@@ -888,6 +966,34 @@ mf_set_value(const struct mf_field *mf,
 
     case MFF_CT_LABEL:
         match_set_ct_label(match, ntoh128(value->be128));
+        break;
+
+    case MFF_CT_NW_PROTO:
+        match_set_ct_nw_proto(match, value->u8);
+        break;
+
+    case MFF_CT_NW_SRC:
+        match_set_ct_nw_src(match, value->be32);
+        break;
+
+    case MFF_CT_NW_DST:
+        match_set_ct_nw_dst(match, value->be32);
+        break;
+
+    case MFF_CT_IPV6_SRC:
+        match_set_ct_ipv6_src(match, &value->ipv6);
+        break;
+
+    case MFF_CT_IPV6_DST:
+        match_set_ct_ipv6_dst(match, &value->ipv6);
+        break;
+
+    case MFF_CT_TP_SRC:
+        match_set_ct_tp_src(match, value->be16);
+        break;
+
+    case MFF_CT_TP_DST:
+        match_set_ct_tp_dst(match, value->be16);
         break;
 
     CASE_MFF_REGS:
@@ -1221,6 +1327,34 @@ mf_set_flow_value(const struct mf_field *mf,
         flow->ct_label = ntoh128(value->be128);
         break;
 
+    case MFF_CT_NW_PROTO:
+        flow->ct_nw_proto = value->u8;
+        break;
+
+    case MFF_CT_NW_SRC:
+        flow->ct_nw_src = value->be32;
+        break;
+
+    case MFF_CT_NW_DST:
+        flow->ct_nw_dst = value->be32;
+        break;
+
+    case MFF_CT_IPV6_SRC:
+        flow->ct_ipv6_src = value->ipv6;
+        break;
+
+    case MFF_CT_IPV6_DST:
+        flow->ct_ipv6_dst = value->ipv6;
+        break;
+
+    case MFF_CT_TP_SRC:
+        flow->ct_tp_src = value->be16;
+        break;
+
+    case MFF_CT_TP_DST:
+        flow->ct_tp_dst = value->be16;
+        break;
+
     CASE_MFF_REGS:
         flow->regs[mf->id - MFF_REG0] = ntohl(value->be32);
         break;
@@ -1550,6 +1684,41 @@ mf_set_wild(const struct mf_field *mf, struct match *match, char **err_str)
         memset(&match->wc.masks.ct_label, 0, sizeof(match->wc.masks.ct_label));
         break;
 
+    case MFF_CT_NW_PROTO:
+        match->flow.ct_nw_proto = 0;
+        match->wc.masks.ct_nw_proto = 0;
+        break;
+
+    case MFF_CT_NW_SRC:
+        match->flow.ct_nw_src = 0;
+        match->wc.masks.ct_nw_src = 0;
+        break;
+
+    case MFF_CT_NW_DST:
+        match->flow.ct_nw_dst = 0;
+        match->wc.masks.ct_nw_dst = 0;
+        break;
+
+    case MFF_CT_IPV6_SRC:
+        memset(&match->flow.ct_ipv6_src, 0, sizeof(match->flow.ct_ipv6_src));
+        WC_UNMASK_FIELD(&match->wc, ct_ipv6_src);
+        break;
+
+    case MFF_CT_IPV6_DST:
+        memset(&match->flow.ct_ipv6_dst, 0, sizeof(match->flow.ct_ipv6_dst));
+        WC_UNMASK_FIELD(&match->wc, ct_ipv6_dst);
+        break;
+
+    case MFF_CT_TP_SRC:
+        match->flow.ct_tp_src = 0;
+        match->wc.masks.ct_tp_src = 0;
+        break;
+
+    case MFF_CT_TP_DST:
+        match->flow.ct_tp_dst = 0;
+        match->wc.masks.ct_tp_dst = 0;
+        break;
+
     CASE_MFF_REGS:
         match_set_reg_masked(match, mf->id - MFF_REG0, 0, 0);
         break;
@@ -1752,6 +1921,13 @@ mf_set(const struct mf_field *mf,
 
     switch (mf->id) {
     case MFF_CT_ZONE:
+    case MFF_CT_NW_PROTO:
+    case MFF_CT_NW_SRC:
+    case MFF_CT_NW_DST:
+    case MFF_CT_IPV6_SRC:
+    case MFF_CT_IPV6_DST:
+    case MFF_CT_TP_SRC:
+    case MFF_CT_TP_DST:
     case MFF_RECIRC_ID:
     case MFF_CONJ_ID:
     case MFF_IN_PORT:
@@ -1947,7 +2123,7 @@ mf_set(const struct mf_field *mf,
 }
 
 static enum ofperr
-mf_check__(const struct mf_subfield *sf, const struct flow *flow,
+mf_check__(const struct mf_subfield *sf, const struct match *match,
            const char *type)
 {
     if (!sf->field) {
@@ -1965,7 +2141,7 @@ mf_check__(const struct mf_subfield *sf, const struct flow *flow,
                      "of %s field %s", sf->ofs, sf->n_bits,
                      sf->field->n_bits, type, sf->field->name);
         return OFPERR_OFPBAC_BAD_SET_LEN;
-    } else if (flow && !mf_are_prereqs_ok(sf->field, flow, NULL)) {
+    } else if (match && !mf_are_match_prereqs_ok(sf->field, match)) {
         VLOG_WARN_RL(&rl, "%s field %s lacks correct prerequisites",
                      type, sf->field->name);
         return OFPERR_OFPBAC_MATCH_INCONSISTENT;
@@ -2052,18 +2228,18 @@ mf_subfield_swap(const struct mf_subfield *a,
  * 0 if so, otherwise an OpenFlow error code (e.g. as returned by
  * ofp_mkerr()).  */
 enum ofperr
-mf_check_src(const struct mf_subfield *sf, const struct flow *flow)
+mf_check_src(const struct mf_subfield *sf, const struct match *match)
 {
-    return mf_check__(sf, flow, "source");
+    return mf_check__(sf, match, "source");
 }
 
 /* Checks whether 'sf' is valid for writing a subfield into 'flow'.  Returns 0
  * if so, otherwise an OpenFlow error code (e.g. as returned by
  * ofp_mkerr()). */
 enum ofperr
-mf_check_dst(const struct mf_subfield *sf, const struct flow *flow)
+mf_check_dst(const struct mf_subfield *sf, const struct match *match)
 {
-    int error = mf_check__(sf, flow, "destination");
+    int error = mf_check__(sf, match, "destination");
     if (!error && !sf->field->writable) {
         VLOG_WARN_RL(&rl, "destination field %s is not writable",
                      sf->field->name);
@@ -2641,6 +2817,13 @@ field_array_set(enum mf_field_id id, const union mf_value *value,
     memcpy(fa->values + offset, value, value_size);
 }
 
+/* A wrapper for variable length mf_fields that is maintained by
+ * struct vl_mff_map.*/
+struct vl_mf_field {
+    struct mf_field mf;
+    struct cmap_node cmap_node; /* In ofproto->vl_mff_map->cmap. */
+};
+
 static inline uint32_t
 mf_field_hash(uint32_t key)
 {
@@ -2651,23 +2834,24 @@ void
 mf_vl_mff_map_clear(struct vl_mff_map *vl_mff_map)
     OVS_REQUIRES(vl_mff_map->mutex)
 {
-    struct mf_field *mf;
+    struct vl_mf_field *vmf;
 
-    CMAP_FOR_EACH (mf, cmap_node, &vl_mff_map->cmap) {
-        cmap_remove(&vl_mff_map->cmap, &mf->cmap_node, mf_field_hash(mf->id));
-        ovsrcu_postpone(free, mf);
+    CMAP_FOR_EACH (vmf, cmap_node, &vl_mff_map->cmap) {
+        cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
+                    mf_field_hash(vmf->mf.id));
+        ovsrcu_postpone(free, vmf);
     }
 }
 
-static struct mf_field *
+static struct vl_mf_field *
 mf_get_vl_mff__(uint32_t id, const struct vl_mff_map *vl_mff_map)
 {
-    struct mf_field *field;
+    struct vl_mf_field *vmf;
 
-    CMAP_FOR_EACH_WITH_HASH (field, cmap_node, mf_field_hash(id),
+    CMAP_FOR_EACH_WITH_HASH (vmf, cmap_node, mf_field_hash(id),
                              &vl_mff_map->cmap) {
-        if (field->id == id) {
-            return field;
+        if (vmf->mf.id == id) {
+            return vmf;
         }
     }
 
@@ -2682,7 +2866,7 @@ mf_get_vl_mff(const struct mf_field *mff,
               const struct vl_mff_map *vl_mff_map)
 {
     if (mff && mff->variable_len && vl_mff_map) {
-        return mf_get_vl_mff__(mff->id, vl_mff_map);
+        return &mf_get_vl_mff__(mff->id, vl_mff_map)->mf;
     }
 
     return NULL;
@@ -2704,7 +2888,7 @@ mf_vl_mff_map_mod_from_tun_metadata(struct vl_mff_map *vl_mff_map,
 
     LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
         unsigned int idx = MFF_TUN_METADATA0 + tlv_map->index;
-        struct mf_field *mf;
+        struct vl_mf_field *vmf;
 
         if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
             return OFPERR_NXTTMFC_BAD_FIELD_IDX;
@@ -2712,21 +2896,22 @@ mf_vl_mff_map_mod_from_tun_metadata(struct vl_mff_map *vl_mff_map,
 
         switch (ttm->command) {
         case NXTTMC_ADD:
-            mf = xmalloc(sizeof *mf);
-            *mf = mf_fields[idx];
-            mf->n_bytes = tlv_map->option_len;
-            mf->n_bits = tlv_map->option_len * 8;
-            mf->mapped = true;
+            vmf = xmalloc(sizeof *vmf);
+            vmf->mf = mf_fields[idx];
+            vmf->mf.n_bytes = tlv_map->option_len;
+            vmf->mf.n_bits = tlv_map->option_len * 8;
+            vmf->mf.mapped = true;
 
-            cmap_insert(&vl_mff_map->cmap, &mf->cmap_node, mf_field_hash(idx));
+            cmap_insert(&vl_mff_map->cmap, &vmf->cmap_node,
+                        mf_field_hash(idx));
             break;
 
         case NXTTMC_DELETE:
-            mf = mf_get_vl_mff__(idx, vl_mff_map);
-            if (mf) {
-                cmap_remove(&vl_mff_map->cmap, &mf->cmap_node,
+            vmf = mf_get_vl_mff__(idx, vl_mff_map);
+            if (vmf) {
+                cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
                             mf_field_hash(idx));
-                ovsrcu_postpone(free, mf);
+                ovsrcu_postpone(free, vmf);
             }
             break;
 

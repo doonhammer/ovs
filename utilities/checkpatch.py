@@ -68,6 +68,7 @@ __regex_is_for_if_single_line_bracket = \
     re.compile(r'^ +(if|for|while) \(.*\)')
 __regex_ends_with_bracket = \
     re.compile(r'[^\s]\) {(\s+/\*[\s\Sa-zA-Z0-9\.,\?\*/+-]*)?$')
+__regex_ptr_declaration_missing_whitespace = re.compile(r'[a-zA-Z0-9]\*')
 
 skip_leading_whitespace_check = False
 skip_trailing_whitespace_check = False
@@ -157,6 +158,12 @@ def if_and_for_end_with_bracket_check(line):
     return True
 
 
+def pointer_whitespace_check(line):
+    """Return TRUE if there is no space between a pointer name and the
+       asterisk that denotes this is a apionter type, ie: 'struct foo*'"""
+    return __regex_ptr_declaration_missing_whitespace.search(line) is not None
+
+
 def ovs_checkpatch_parse(text):
     global print_file_name
     lineno = 0
@@ -175,7 +182,7 @@ def ovs_checkpatch_parse(text):
                               re.I | re.M | re.S)
     skip_line_length_check = False
 
-    for line in text.split('\n'):
+    for line in text.decode().split('\n'):
         if current_file != previous_file:
             previous_file = current_file
             if any([fmt in current_file for fmt in line_length_blacklist]):
@@ -257,6 +264,10 @@ def ovs_checkpatch_parse(text):
             if not if_and_for_end_with_bracket_check(cmp_line):
                 print_line = True
                 print_error("Inappropriate bracing around statement", lineno)
+            if pointer_whitespace_check(cmp_line):
+                print_line = True
+                print_error("Inappropriate spacing in pointer declaration",
+                            lineno)
             if print_line:
                 print("\n%s\n" % line)
     if __errors or __warnings:

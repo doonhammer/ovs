@@ -34,6 +34,7 @@ struct ofpact_stack;
 struct ofpbuf;
 struct nx_action_reg_load;
 struct nx_action_reg_move;
+struct vl_mff_map;
 
 
 /* Nicira Extended Match (NXM) flexible flow match helper functions.
@@ -60,8 +61,8 @@ enum ofperr oxm_pull_match(struct ofpbuf *, const struct tun_table *,
                            struct match *);
 enum ofperr oxm_pull_match_loose(struct ofpbuf *, const struct tun_table *,
                                  struct match *);
-enum ofperr oxm_decode_match(const void *, size_t, const struct tun_table *,
-                             struct match *);
+enum ofperr oxm_decode_match_loose(const void *, size_t,
+                                   const struct tun_table *, struct match *);
 enum ofperr oxm_pull_field_array(const void *, size_t fields_len,
                                  struct field_array *);
 
@@ -115,7 +116,7 @@ char *nxm_parse_reg_move(struct ofpact_reg_move *, const char *)
 void nxm_format_reg_move(const struct ofpact_reg_move *, struct ds *);
 
 enum ofperr nxm_reg_move_check(const struct ofpact_reg_move *,
-                               const struct flow *);
+                               const struct match *);
 
 void nxm_reg_load(const struct mf_subfield *, uint64_t src_data,
                   struct flow *, struct flow_wildcards *);
@@ -127,9 +128,9 @@ void nxm_format_stack_push(const struct ofpact_stack *, struct ds *);
 void nxm_format_stack_pop(const struct ofpact_stack *, struct ds *);
 
 enum ofperr nxm_stack_push_check(const struct ofpact_stack *,
-                                 const  struct flow *);
+                                 const  struct match *);
 enum ofperr nxm_stack_pop_check(const struct ofpact_stack *,
-                               const struct flow *);
+                                const struct match *);
 void nx_stack_push(struct ofpbuf *stack, const void *v, uint8_t bytes);
 void nx_stack_push_bottom(struct ofpbuf *stack, const void *v, uint8_t bytes);
 void *nx_stack_pop(struct ofpbuf *stack, uint8_t *bytes);

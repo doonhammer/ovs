@@ -944,6 +944,13 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         }
         reply = jsonrpc_create_reply(json_array_create(dbs, n_dbs),
                                      request->id);
+    } else if (!strcmp(request->method, "get_server_id")) {
+        const struct uuid *uuid = &s->up.server->uuid;
+        struct json *result;
+
+        result = json_string_create_nocopy(xasprintf(UUID_FMT,
+                                                    UUID_ARGS(uuid)));
+        reply = jsonrpc_create_reply(result, request->id);
     } else if (!strcmp(request->method, "lock")) {
         reply = ovsdb_jsonrpc_session_lock(s, request, OVSDB_LOCK_WAIT);
     } else if (!strcmp(request->method, "steal")) {
@@ -1573,6 +1580,12 @@ ovsdb_jsonrpc_create_notify(const struct ovsdb_jsonrpc_monitor *m,
     }
 
     return jsonrpc_create_notify(method, params);
+}
+
+const struct uuid *
+ovsdb_jsonrpc_server_get_uuid(const struct ovsdb_jsonrpc_server *s)
+{
+    return &s->up.uuid;
 }
 
 static void
