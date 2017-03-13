@@ -3005,7 +3005,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                  * available. Until LB is available just take the first
                  * PP in the PPG. */
                 if (k > 0) {
-                    static struct vlog_rate_limit rl = 
+                    static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 1);
                     VLOG_WARN_RL(&rl,
                         "Currently lacking support for more than \
