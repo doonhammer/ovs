@@ -1652,7 +1652,7 @@ nbctl_lsp_pair_add(struct ctl_context *ctx)
     const struct nbrec_logical_port_pair *lsp_pair;
 
     const bool may_exist = shash_find(&ctx->options, "--may-exist") != NULL;
-    const bool add_duplicate = shash_find(&ctx->options, 
+    const bool add_duplicate = shash_find(&ctx->options,
                                            "--add-duplicate") != NULL;
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
@@ -1708,9 +1708,9 @@ remove_lsp_pair(const struct nbrec_logical_switch *lswitch, size_t idx)
 {
     const struct nbrec_logical_port_pair *lsp_pair = lswitch->port_pairs[idx];
 
-    /* First remove 'lsp-pair' from the array of port-pairs.  
-     * This is what will actually cause the logical port-pair to be deleted 
-     * when the transaction is sent to the database server 
+    /* First remove 'lsp-pair' from the array of port-pairs.
+     * This is what will actually cause the logical port-pair to be deleted
+     * when the transaction is sent to the database server
      * (due to garbage collection). */
     struct nbrec_logical_port_pair **new_port_pair
         = xmemdup(lswitch->port_pairs,
@@ -1809,7 +1809,7 @@ nbctl_lsp_pair_list(struct ctl_context *ctx)
     const struct nbrec_logical_switch *lswitch;
     const struct nbrec_logical_port_pair *lsp_pair;
 
-    if (pair_name_filter!= NULL){
+    if (pair_name_filter!= NULL) {
       lsp_pair = lsp_pair_by_name_or_uuid(ctx, ctx->argv[2], true);
       if (!lsp_pair) {
            ctl_fatal("%s: an lsp_pair with this name does not exist",
@@ -4430,7 +4430,7 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_lsp_get_dhcpv4_options, NULL, "", RO },
 
           /* lsp-chain-classifier commands. */
-    { "lsp-chain-classifier-add", 6, 7, 
+    { "lsp-chain-classifier-add", 6, 7,
                        "SWITCH, CHAIN, PORT, DIRECTION, PATH, MATCH, [NAME]",
       NULL, nbctl_lsp_chain_classifier_add, NULL,
                        "--may-exist,--add-duplicate", RW },
