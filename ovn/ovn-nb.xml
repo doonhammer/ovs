@@ -129,7 +129,7 @@
         chain is applied to flows in one or both directions.
       </p>
     </column>
-    
+
     <column name="port_chains">
       <p>
         The logical port-chains connected to the logical switch. Port chains
@@ -140,9 +140,7 @@
         logical switches.
       </p>
     </column>
-       
-  
-    
+
     <column name="port_pairs">
       <p>
         The logical chains that define the service path.
@@ -151,7 +149,7 @@
         Logical port pairs cannot currently cross logical switch boundaries.
       </p>
     </column>
-    
+
     <column name="load_balancer">
       Load balance a virtual ipv4 address to a set of logical port endpoint
       ipv4 addresses.
@@ -193,10 +191,10 @@
     </p>
     <column name="name">
       <p>
-        A name for the logical chain classifer. This name has no special 
-        meaning or purpose other than to provide convenience for human 
-        interaction with the ovn-nb database.  There is no requirement for 
-        the name to be unique.  The logical chain classifier's UUID should 
+        A name for the logical chain classifer. This name has no special
+        meaning or purpose other than to provide convenience for human
+        interaction with the ovn-nb database.  There is no requirement for
+        the name to be unique.  The logical chain classifier's UUID should
         be used as the unique identifier.
       </p>
     </column>
@@ -212,7 +210,7 @@
     <column name="chain">
       <p>
         The port chain for the flows to traverse. The port chain can be
-        reused in multiple classifiers. 
+        reused in multiple classifiers.
       </p>
     </column>
     <column name="direction">
@@ -224,21 +222,23 @@
     <column name="path">
       <p>
        The path of the flow from or to the logical port. The valid values are
-       "entry-lport" or "exit-lport". If the path is "entry-lport" the rules are applied to traffic leaving the entry-lport, if the path is "exit-lport" the port-chain is applied to traffic going to the lport.
+       "entry-lport" or "exit-lport". If the path is "entry-lport" the rules
+       are applied to traffic leaving the entry-lport, if the path is
+       "exit-lport" the port-chain is applied to traffic going to the lport.
       </p>
     </column>
     <column name="match">
       <p>
        The match is an optional match statement that will filter flows going
-       to the chain as defined by any valid openvswitch matches. 
+       to the chain as defined by any valid openvswitch matches.
       </p>
       <p>
         Care should be taken using match statements to ensure they do not
-        conflicit with in logical port the is the src or dst of flows. In 
+        conflicit with in logical port the is the src or dst of flows. In
         addition when operating on "bi-directional" flows care shoudl be taken
         to only use match statements that work in both directions.
       </p>
-    </column>    
+    </column>
     <group title="Common Columns">
       <column name="external_ids">
         See <em>External IDs</em> at the beginning of this document.
@@ -252,13 +252,14 @@
 
     <column name="name">
       <p>
-        A name for the logical chain.  This name has no special meaning or purpose
-        other than to provide convenience for human interaction with the ovn-nb
-        database.  There is no requirement for the name to be unique.  The
-        logical chains's UUID should be used as the unique identifier.
+        A name for the logical chain.  This name has no special meaning or
+        purpose other than to provide convenience for human interaction with
+        the ovn-nb database.  There is no requirement for the name to be
+        unique. The logical chains's UUID should be used as the unique
+        identifier.
       </p>
     </column>
-    
+
     <column name="port_pair_groups">
       <p>
         The logical list of port pairs that the flow goes through.
@@ -294,8 +295,9 @@
 
     <column name="sortkey">
       <p>
-        An integer used for ordering instances of <ref table="Logical_Port_Pair_Group"/>
-        in the <ref column="port_pairs" table="Logical_Port_Chain"/> column
+        An integer used for ordering instances of
+        <ref table="Logical_Port_Pair_Group"/> in the
+        <ref column="port_pairs" table="Logical_Port_Chain"/> column
         of <ref table="Logical_Port_Chain"/>.
       </p>
     </column>
@@ -1093,9 +1095,9 @@
 
         <li>
           <code>sfc</code>: Forward the packet into a logical port chain.
-          The chain to be used -- as well as any other attributes that determine
-          the behavior of the packet while in the chain -- are provided
-          via <ref column="options"/>.
+          The chain to be used -- as well as any other attributes that
+          determine the behavior of the packet while in the chain -- are
+          provided via <ref column="options"/>.
         </li>
       </ul>
     </column>
