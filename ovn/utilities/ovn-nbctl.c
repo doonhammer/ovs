@@ -2374,10 +2374,9 @@ nbctl_acl_add(struct ctl_context *ctx)
 
     /* Validate action. */
     if (strcmp(action, "allow") && strcmp(action, "allow-related")
-        && strcmp(action, "drop") && strcmp(action, "reject")
-        && strcmp(action, "sfc")) {
+        && strcmp(action, "drop") && strcmp(action, "reject")) {
         ctl_fatal("%s: action must be one of \"allow\", \"allow-related\", "
-                  "\"drop\", \"reject\" and \"sfc\"", action);
+                  "\"drop\", and \"reject\"", action);
         return;
     }
 
@@ -4395,8 +4394,8 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "ls-list", 0, 0, "", NULL, nbctl_ls_list, NULL, "", RO },
 
     /* acl commands. */
-    { "acl-add", 5, 5, "SWITCH DIRECTION PRIORITY MATCH ACTION", 
-      NULL, nbctl_acl_add, NULL, "--log,--may-exist", RW },
+    { "acl-add", 5, 5, "SWITCH DIRECTION PRIORITY MATCH ACTION", NULL,
+      nbctl_acl_add, NULL, "--log,--may-exist", RW },
     { "acl-del", 1, 4, "SWITCH [DIRECTION [PRIORITY MATCH]]", NULL,
       nbctl_acl_del, NULL, "", RW },
     { "acl-list", 1, 1, "SWITCH", NULL, nbctl_acl_list, NULL, "", RO },
