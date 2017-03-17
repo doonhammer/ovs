@@ -423,6 +423,10 @@ struct rule {
 
     /* Must hold 'mutex' for both read/write, 'ofproto_mutex' not needed. */
     long long int modified OVS_GUARDED; /* Time of last modification. */
+
+    /* 1-bit for each present TLV in flow match / action. */
+    uint64_t match_tlv_bitmap;
+    uint64_t ofpacts_tlv_bitmap;
 };
 
 void ofproto_rule_ref(struct rule *);
@@ -1772,16 +1776,17 @@ struct ofproto_class {
      * leaving '*id' unchanged.  On failure, the existing meter configuration
      * is left intact. */
     enum ofperr (*meter_set)(struct ofproto *ofproto, ofproto_meter_id *id,
-                             const struct ofputil_meter_config *config);
+                             struct ofputil_meter_config *config);
 
     /* Gets the meter and meter band packet and byte counts for maximum of
-     * 'stats->n_bands' bands for the meter with provider ID 'id' within
-     * 'ofproto'.  The caller fills in the other stats values.  The band stats
-     * are copied to memory at 'stats->bands' provided by the caller.  The
-     * number of returned band stats is returned in 'stats->n_bands'. */
+     * 'n_bands' bands for the meter with provider ID 'id' within 'ofproto'.
+     * The caller fills in the other stats values.  The band stats are copied
+     * to memory at 'stats->bands' provided by the caller.  The number of
+     * returned band stats is returned in 'stats->n_bands'. */
     enum ofperr (*meter_get)(const struct ofproto *ofproto,
                              ofproto_meter_id id,
-                             struct ofputil_meter_stats *stats);
+                             struct ofputil_meter_stats *stats,
+                             uint16_t n_bands);
 
     /* Deletes a meter, making the 'ofproto_meter_id' invalid for any
      * further calls. */
@@ -1929,7 +1934,8 @@ enum ofperr ofproto_flow_mod_init_for_learn(struct ofproto *,
                                             const struct ofputil_flow_mod *,
                                             struct ofproto_flow_mod *)
     OVS_EXCLUDED(ofproto_mutex);
-enum ofperr ofproto_flow_mod_learn(struct ofproto_flow_mod *, bool keep_ref)
+enum ofperr ofproto_flow_mod_learn(struct ofproto_flow_mod *, bool keep_ref,
+                                   unsigned limit, bool *below_limit)
     OVS_EXCLUDED(ofproto_mutex);
 enum ofperr ofproto_flow_mod_learn_refresh(struct ofproto_flow_mod *ofm);
 enum ofperr ofproto_flow_mod_learn_start(struct ofproto_flow_mod *ofm)
@@ -1948,7 +1954,8 @@ void ofproto_flush_flows(struct ofproto *);
 
 enum ofperr ofproto_check_ofpacts(struct ofproto *,
                                   const struct ofpact ofpacts[],
-                                  size_t ofpacts_len);
+                                  size_t ofpacts_len)
+    OVS_REQUIRES(ofproto_mutex);
 
 static inline const struct rule_actions *
 rule_get_actions(const struct rule *rule)

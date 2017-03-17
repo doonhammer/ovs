@@ -356,6 +356,8 @@ enum ovs_key_attr {
 	OVS_KEY_ATTR_CT_ZONE,	/* u16 connection tracking zone. */
 	OVS_KEY_ATTR_CT_MARK,	/* u32 connection tracking mark */
 	OVS_KEY_ATTR_CT_LABELS,	/* 16-octet connection tracking labels */
+	OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4,   /* struct ovs_key_ct_tuple_ipv4 */
+	OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6,   /* struct ovs_key_ct_tuple_ipv6 */
 
 #ifdef __KERNEL__
 	/* Only used within kernel data path. */
@@ -472,9 +474,13 @@ struct ovs_key_nd {
 	__u8	nd_tll[ETH_ALEN];
 };
 
-#define OVS_CT_LABELS_LEN	16
+#define OVS_CT_LABELS_LEN_32	4
+#define OVS_CT_LABELS_LEN	(OVS_CT_LABELS_LEN_32 * sizeof(__u32))
 struct ovs_key_ct_labels {
-	__u8	ct_labels[OVS_CT_LABELS_LEN];
+	union {
+		__u8	ct_labels[OVS_CT_LABELS_LEN];
+		__u32	ct_labels_32[OVS_CT_LABELS_LEN_32];
+	};
 };
 
 /* OVS_KEY_ATTR_CT_STATE flags */
@@ -491,6 +497,22 @@ struct ovs_key_ct_labels {
 					   was mangled by NAT. */
 
 #define OVS_CS_F_NAT_MASK (OVS_CS_F_SRC_NAT | OVS_CS_F_DST_NAT)
+
+struct ovs_key_ct_tuple_ipv4 {
+	__be32 ipv4_src;
+	__be32 ipv4_dst;
+	__be16 src_port;
+	__be16 dst_port;
+	__u8   ipv4_proto;
+};
+
+struct ovs_key_ct_tuple_ipv6 {
+	__be32 ipv6_src[4];
+	__be32 ipv6_dst[4];
+	__be16 src_port;
+	__be16 dst_port;
+	__u8   ipv6_proto;
+};
 
 /**
  * enum ovs_flow_attr - attributes for %OVS_FLOW_* commands.
@@ -696,6 +718,12 @@ struct ovs_action_push_tnl {
  * mask. For each bit set in the mask, the corresponding bit in the value is
  * copied to the connection tracking label field in the connection.
  * @OVS_CT_ATTR_HELPER: variable length string defining conntrack ALG.
+ * @OVS_CT_ATTR_NAT: Nested OVS_NAT_ATTR_* for performing L3 network address
+ * translation (NAT) on the packet.
+ * @OVS_CT_ATTR_FORCE_COMMIT: Like %OVS_CT_ATTR_COMMIT, but instead of doing
+ * nothing if the connection is already committed will check that the current
+ * packet is in conntrack entry's original direction.  If directionality does
+ * not match, will delete the existing conntrack entry and create a new one.
  */
 enum ovs_ct_attr {
 	OVS_CT_ATTR_UNSPEC,
@@ -706,6 +734,7 @@ enum ovs_ct_attr {
 	OVS_CT_ATTR_HELPER,     /* netlink helper to assist detection of
 				   related connections. */
 	OVS_CT_ATTR_NAT,        /* Nested OVS_NAT_ATTR_* */
+	OVS_CT_ATTR_FORCE_COMMIT,  /* No argument */
 	__OVS_CT_ATTR_MAX
 };
 
@@ -801,13 +830,14 @@ enum ovs_nat_attr {
  * fields within a header are modifiable, e.g. the IPv4 protocol and fragment
  * type may not be changed.
  *
- *
  * @OVS_ACTION_ATTR_SET_TO_MASKED: Kernel internal masked set action translated
  * from the @OVS_ACTION_ATTR_SET.
  * @OVS_ACTION_ATTR_TUNNEL_PUSH: Push tunnel header described by struct
  * ovs_action_push_tnl.
  * @OVS_ACTION_ATTR_TUNNEL_POP: Lookup tunnel port by port-no passed and pop
  * tunnel header.
+ * @OVS_ACTION_ATTR_METER: Run packet through a meter, which may drop the
+ * packet, or modify the packet (e.g., change the DSCP field).
  */
 
 enum ovs_action_attr {
@@ -835,6 +865,7 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
 	OVS_ACTION_ATTR_CLONE,         /* Nested OVS_CLONE_ATTR_*.  */
+	OVS_ACTION_ATTR_METER,         /* u32 meter number. */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */

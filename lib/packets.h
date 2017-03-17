@@ -99,10 +99,15 @@ struct pkt_metadata {
                                    action. */
     uint32_t skb_priority;      /* Packet priority for QoS. */
     uint32_t pkt_mark;          /* Packet mark. */
-    uint16_t ct_state;          /* Connection state. */
+    uint8_t  ct_state;          /* Connection state. */
+    bool ct_orig_tuple_ipv6;
     uint16_t ct_zone;           /* Connection zone. */
     uint32_t ct_mark;           /* Connection mark. */
     ovs_u128 ct_label;          /* Connection label. */
+    union {                     /* Populated only for non-zero 'ct_state'. */
+        struct ovs_key_ct_tuple_ipv4 ipv4;
+        struct ovs_key_ct_tuple_ipv6 ipv6;   /* Used only if                */
+    } ct_orig_tuple;                         /* 'ct_orig_tuple_ipv6' is set */
     union flow_in_port in_port; /* Input port. */
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. Note that
                                  * if 'ip_dst' == 0, the rest of the fields may
@@ -1100,6 +1105,10 @@ void packet_set_ipv4_addr(struct dp_packet *packet, ovs_16aligned_be32 *addr,
 void packet_set_ipv6(struct dp_packet *, const struct in6_addr *src,
                      const struct in6_addr *dst, uint8_t tc,
                      ovs_be32 fl, uint8_t hlmit);
+void packet_set_ipv6_addr(struct dp_packet *packet, uint8_t proto,
+                          ovs_16aligned_be32 addr[4],
+                          const struct in6_addr *new_addr,
+                          bool recalculate_csum);
 void packet_set_tcp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_udp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_sctp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);

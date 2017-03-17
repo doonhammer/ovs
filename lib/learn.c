@@ -29,24 +29,25 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
+#include "vl-mff-map.h"
 #include "unaligned.h"
 
 
 /* Checks that 'learn' is a valid action on 'flow'.  Returns 0 if it is valid,
  * otherwise an OFPERR_*. */
 enum ofperr
-learn_check(const struct ofpact_learn *learn, const struct flow *flow)
+learn_check(const struct ofpact_learn *learn, const struct match *src_match)
 {
     const struct ofpact_learn_spec *spec;
-    struct match match;
+    struct match dst_match;
 
-    match_init_catchall(&match);
+    match_init_catchall(&dst_match);
     OFPACT_LEARN_SPEC_FOR_EACH (spec, learn) {
         enum ofperr error;
 
         /* Check the source. */
         if (spec->src_type == NX_LEARN_SRC_FIELD) {
-            error = mf_check_src(&spec->src, flow);
+            error = mf_check_src(&spec->src, src_match);
             if (error) {
                 return error;
             }
@@ -55,18 +56,19 @@ learn_check(const struct ofpact_learn *learn, const struct flow *flow)
         /* Check the destination. */
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
-            error = mf_check_src(&spec->dst, &match.flow);
+            error = mf_check_src(&spec->dst, &dst_match);
             if (error) {
                 return error;
             }
             if (spec->src_type & NX_LEARN_SRC_IMMEDIATE) {
                 mf_write_subfield_value(&spec->dst,
-                                        ofpact_learn_spec_imm(spec), &match);
+                                        ofpact_learn_spec_imm(spec),
+                                        &dst_match);
             }
             break;
 
         case NX_LEARN_DST_LOAD:
-            error = mf_check_dst(&spec->dst, &match.flow);
+            error = mf_check_dst(&spec->dst, &dst_match);
             if (error) {
                 return error;
             }
@@ -107,6 +109,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
     fm->importance = 0;
     fm->buffer_id = UINT32_MAX;
     fm->out_port = OFPP_NONE;
+    fm->ofpacts_tlv_bitmap = 0;
     fm->flags = 0;
     if (learn->flags & NX_LEARN_F_SEND_FLOW_REM) {
         fm->flags |= OFPUTIL_FF_SEND_FLOW_REM;
@@ -136,6 +139,8 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
             mf_write_subfield(&spec->dst, &value, &fm->match);
+            mf_vl_mff_set_tlv_bitmap(
+                spec->dst.field, &fm->match.flow.tunnel.metadata.present.map);
             break;
 
         case NX_LEARN_DST_LOAD:
@@ -145,6 +150,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
                          spec->n_bits);
             bitwise_one(ofpact_set_field_mask(sf), spec->dst.field->n_bytes,
                         spec->dst.ofs, spec->n_bits);
+            mf_vl_mff_set_tlv_bitmap(spec->dst.field, &fm->ofpacts_tlv_bitmap);
             break;
 
         case NX_LEARN_DST_OUTPUT:
@@ -406,6 +412,22 @@ learn_parse__(char *orig, char *arg, struct ofpbuf *ofpacts)
             learn->flags |= NX_LEARN_F_SEND_FLOW_REM;
         } else if (!strcmp(name, "delete_learned")) {
             learn->flags |= NX_LEARN_F_DELETE_LEARNED;
+        } else if (!strcmp(name, "limit")) {
+            learn->limit = atoi(value);
+        } else if (!strcmp(name, "result_dst")) {
+            char *error;
+            learn->flags |= NX_LEARN_F_WRITE_RESULT;
+            error = mf_parse_subfield(&learn->result_dst, value);
+            if (error) {
+                return error;
+            }
+            if (!learn->result_dst.field->writable) {
+                return xasprintf("%s is read-only", value);
+            }
+            if (learn->result_dst.n_bits != 1) {
+                return xasprintf("result_dst in 'learn' action must be a "
+                                 "single bit");
+            }
         } else {
             struct ofpact_learn_spec *spec;
             char *error;
@@ -486,6 +508,14 @@ learn_format(const struct ofpact_learn *learn, struct ds *s)
     if (learn->cookie != 0) {
         ds_put_format(s, ",%scookie=%s%#"PRIx64,
                       colors.param, colors.end, ntohll(learn->cookie));
+    }
+    if (learn->limit != 0) {
+        ds_put_format(s, ",%slimit=%s%"PRIu32,
+                      colors.param, colors.end, learn->limit);
+    }
+    if (learn->flags & NX_LEARN_F_WRITE_RESULT) {
+        ds_put_format(s, ",%sresult_dst=%s", colors.param, colors.end);
+        mf_format_subfield(&learn->result_dst, s);
     }
 
     OFPACT_LEARN_SPEC_FOR_EACH (spec, learn) {

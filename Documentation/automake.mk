@@ -12,6 +12,7 @@ EXTRA_DIST += \
 	Documentation/intro/install/bash-completion.rst \
 	Documentation/intro/install/debian.rst \
 	Documentation/intro/install/documentation.rst \
+	Documentation/intro/install/distributions.rst \
 	Documentation/intro/install/dpdk.rst \
 	Documentation/intro/install/fedora.rst \
 	Documentation/intro/install/general.rst \
@@ -23,6 +24,7 @@ EXTRA_DIST += \
 	Documentation/intro/install/xenserver.rst \
 	Documentation/tutorials/index.rst \
 	Documentation/tutorials/ovs-advanced.rst \
+	Documentation/tutorials/ovn-sandbox.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/bonding.rst \
 	Documentation/topics/datapath.rst \

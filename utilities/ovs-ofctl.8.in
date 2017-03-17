@@ -963,10 +963,22 @@ only known to be implemented by Open vSwitch:
 .
 .IP \fBresubmit\fB:\fIport\fR
 .IQ \fBresubmit\fB(\fR[\fIport\fR]\fB,\fR[\fItable\fR]\fB)
+.IQ \fBresubmit\fB(\fR[\fIport\fR]\fB,\fR[\fItable\fR]\fB,ct)
 Re-searches this OpenFlow flow table (or the table whose number is
 specified by \fItable\fR) with the \fBin_port\fR field replaced by
-\fIport\fR (if \fIport\fR is specified) and executes the actions
-found, if any, in addition to any other actions in this flow entry.
+\fIport\fR (if \fIport\fR is specified) and the packet 5-tuple fields
+swapped with the corresponding conntrack original direction tuple
+fields (if \fBct\fR is specified, see \fBct_nw_src\fR above), and
+executes the actions found, if any, in addition to any other actions
+in this flow entry.  The \fBin_port\fR and swapped 5-tuple fields are
+restored immediately after the search, before any actions are
+executed.
+.IP
+The \fBct\fR option requires a valid connection tracking state as a
+match prerequisite in the flow where this action is placed.  Examples
+of valid connection tracking state matches include
+\fBct_state=+new\fR, \fBct_state=+est\fR, \fBct_state=+rel\fR, and
+\fBct_state=+trk-inv\fR.
 .IP
 Recursive \fBresubmit\fR actions are obeyed up to
 implementation-defined limits:
@@ -991,7 +1003,8 @@ exception: \fBresubmit\fR from table \fIx\fR to any table \fIy\fR >
 \fIx\fR does not count against the recursion limit.
 .RE
 .IP
-Open vSwitch before 1.2.90 did not support \fItable\fR.
+Open vSwitch before 1.2.90 did not support \fItable\fR.  Open vSwitch
+before 2.7 did not support \fBct\fR.
 .
 .IP \fBset_tunnel\fB:\fIid\fR
 .IQ \fBset_tunnel64\fB:\fIid\fR
@@ -1023,6 +1036,18 @@ arguments are supported:
 Commit the connection to the connection tracking module. Information about the
 connection will be stored beyond the lifetime of the packet in the pipeline.
 Some \fBct_state\fR flags are only available for committed connections.
+.RE
+.IP \fBforce\fR
+.RS
+A committed connection always has the directionality of the packet
+that caused the connection to be committed in the first place.  This
+is the ``original direction'' of the connection, and the opposite
+direction is the ``reply direction''.  If a connection is already
+committed, but it is in the wrong direction, \fBforce\fR flag may be
+used in addition to \fBcommit\fR flag to effectively terminate the
+existing connection and start a new one in the current direction.
+This flag has no effect if the original direction of the connection is
+already the same as that of the current packet.
 .RE
 .IP \fBtable=\fInumber\fR
 Fork pipeline processing in two. The original instance of the packet will
@@ -1431,6 +1456,22 @@ the specified table with the specified cookie.
 .
 .IP
 This flag was added in Open vSwitch 2.4.
+.
+.IP \fBlimit=\fInumber\fR
+If the number of flows in table \fBtable\fR with cookie id \fBcookie\fR exceeds
+\fInumber\fR, a new flow will not be learned by this action.  By default
+there's no limit.
+.
+.IP
+This flag was added in Open vSwitch 2.8.
+.
+.IP \fBresult_dst=\fIfield\fB[\fIbit\fB]\fR
+If learning failed (because the number of flows exceeds \fBlimit\fR),
+the action sets \fIfield\fB[\fIbit\fB]\fR to 0, otherwise it will be set to 1.
+\fIfield\fB[\fIbit\fB]\fR must be a single bit.
+.
+.IP
+This flag was added in Open vSwitch 2.8.
 .
 .IP \fIfield\fB=\fIvalue\fR
 .IQ \fIfield\fB[\fIstart\fB..\fIend\fB]=\fIsrc\fB[\fIstart\fB..\fIend\fB]\fR

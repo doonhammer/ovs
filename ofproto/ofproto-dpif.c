@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,9 +94,11 @@ struct ofbundle {
     /* Configuration. */
     struct ovs_list ports;      /* Contains "struct ofport"s. */
     enum port_vlan_mode vlan_mode; /* VLAN mode */
+    uint16_t qinq_ethtype;
     int vlan;                   /* -1=trunk port, else a 12-bit VLAN ID. */
     unsigned long *trunks;      /* Bitmap of trunked VLANs, if 'vlan' == -1.
                                  * NULL if all VLANs are trunked. */
+    unsigned long *cvlans;
     struct lacp *lacp;          /* LACP if LACP is enabled, otherwise NULL. */
     struct bond *bond;          /* Nonnull iff more than one port. */
     bool use_priority_tags;     /* Use 802.1p tag for frames in VLAN 0? */
@@ -449,8 +451,9 @@ type_run(const char *type)
 
             HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
                 xlate_bundle_set(ofproto, bundle, bundle->name,
-                                 bundle->vlan_mode, bundle->vlan,
-                                 bundle->trunks, bundle->use_priority_tags,
+                                 bundle->vlan_mode, bundle->qinq_ethtype,
+                                 bundle->vlan, bundle->trunks, bundle->cvlans,
+                                 bundle->use_priority_tags,
                                  bundle->bond, bundle->lacp,
                                  bundle->floodable, bundle->protected);
             }
@@ -822,7 +825,7 @@ check_recirc(struct dpif_backer *backer)
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
     odp_flow_key_from_flow(&odp_parms, &key);
     enable_recirc = dpif_probe_feature(backer->dpif, "recirculation", &key,
-                                       NULL);
+                                       NULL, NULL);
 
     if (enable_recirc) {
         VLOG_INFO("%s: Datapath supports recirculation",
@@ -859,7 +862,7 @@ check_ufid(struct dpif_backer *backer)
     odp_flow_key_from_flow(&odp_parms, &key);
     dpif_flow_hash(backer->dpif, key.data, key.size, &ufid);
 
-    enable_ufid = dpif_probe_feature(backer->dpif, "UFID", &key, &ufid);
+    enable_ufid = dpif_probe_feature(backer->dpif, "UFID", &key, NULL, &ufid);
 
     if (enable_ufid) {
         VLOG_INFO("%s: Datapath supports unique flow ids",
@@ -947,6 +950,41 @@ check_variable_length_userdata(struct dpif_backer *backer)
     }
 }
 
+/* Tests number of 802.1q VLAN headers supported by 'backer''s datapath.
+ *
+ * Returns the number of elements in a struct flow's vlan
+ * if the datapath supports at least that many VLAN headers. */
+static size_t
+check_max_vlan_headers(struct dpif_backer *backer)
+{
+    struct flow flow;
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+        .probe = true,
+    };
+    int n;
+
+    memset(&flow, 0, sizeof flow);
+    flow.dl_type = htons(ETH_TYPE_IP);
+    for (n = 0; n < FLOW_MAX_VLAN_HEADERS; n++) {
+        struct odputil_keybuf keybuf;
+        struct ofpbuf key;
+
+        flow_push_vlan_uninit(&flow, NULL);
+        flow.vlans[0].tpid = htons(ETH_TYPE_VLAN);
+        flow.vlans[0].tci = htons(1) | htons(VLAN_CFI);
+
+        ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+        odp_flow_key_from_flow(&odp_parms, &key);
+        if (!dpif_probe_feature(backer->dpif, "VLAN", &key, NULL, NULL)) {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: VLAN header stack length probed as %d",
+              dpif_name(backer->dpif), n);
+    return n;
+}
 /* Tests the MPLS label stack depth supported by 'backer''s datapath.
  *
  * Returns the number of elements in a struct flow's mpls_lse field
@@ -973,12 +1011,69 @@ check_max_mpls_depth(struct dpif_backer *backer)
 
         ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
         odp_flow_key_from_flow(&odp_parms, &key);
-        if (!dpif_probe_feature(backer->dpif, "MPLS", &key, NULL)) {
+        if (!dpif_probe_feature(backer->dpif, "MPLS", &key, NULL, NULL)) {
             break;
         }
     }
 
     VLOG_INFO("%s: MPLS label stack length probed as %d",
+              dpif_name(backer->dpif), n);
+    return n;
+}
+
+static void
+add_sample_actions(struct ofpbuf *actions, int nesting)
+{
+    if (nesting == 0) {
+        nl_msg_put_odp_port(actions, OVS_ACTION_ATTR_OUTPUT, u32_to_odp(1));
+        return;
+    }
+
+    size_t start, actions_start;
+
+    start = nl_msg_start_nested(actions, OVS_ACTION_ATTR_SAMPLE);
+    actions_start = nl_msg_start_nested(actions, OVS_SAMPLE_ATTR_ACTIONS);
+    add_sample_actions(actions, nesting - 1);
+    nl_msg_end_nested(actions, actions_start);
+    nl_msg_put_u32(actions, OVS_SAMPLE_ATTR_PROBABILITY, UINT32_MAX);
+    nl_msg_end_nested(actions, start);
+}
+
+/* Tests the nested sample actions levels supported by 'backer''s datapath.
+ *
+ * Returns the number of nested sample actions accepted by the datapath.  */
+static size_t
+check_max_sample_nesting(struct dpif_backer *backer)
+{
+    struct odputil_keybuf keybuf;
+    struct ofpbuf key;
+    struct flow flow;
+    int n;
+
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+    };
+
+    memset(&flow, 0, sizeof flow);
+    ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+    odp_flow_key_from_flow(&odp_parms, &key);
+
+    /* OVS datapath has always supported at least 3 nested levels.  */
+    for (n = 3; n < FLOW_MAX_SAMPLE_NESTING; n++) {
+        struct ofpbuf actions;
+        bool ok;
+
+        ofpbuf_init(&actions, 300);
+        add_sample_actions(&actions, n);
+        ok = dpif_probe_feature(backer->dpif, "Sample action nesting", &key,
+                                &actions, NULL);
+        ofpbuf_uninit(&actions);
+        if (!ok) {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: Max sample nesting level probed as %d",
               dpif_name(backer->dpif), n);
     return n;
 }
@@ -1166,7 +1261,7 @@ check_##NAME(struct dpif_backer *backer)                                    \
                                                                             \
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);                         \
     odp_flow_key_from_flow(&odp_parms, &key);                               \
-    enable = dpif_probe_feature(backer->dpif, #NAME, &key, NULL);           \
+    enable = dpif_probe_feature(backer->dpif, #NAME, &key, NULL, NULL);     \
                                                                             \
     if (enable) {                                                           \
         VLOG_INFO("%s: Datapath supports "#NAME, dpif_name(backer->dpif));  \
@@ -1184,6 +1279,7 @@ CHECK_FEATURE(ct_zone)
 CHECK_FEATURE(ct_mark)
 CHECK_FEATURE__(ct_label, ct_label, ct_label.u64.lo, 1)
 CHECK_FEATURE__(ct_state_nat, ct_state, ct_state, CS_TRACKED|CS_SRC_NAT)
+CHECK_FEATURE__(ct_orig_tuple, ct_orig_tuple, ct_nw_proto, 1)
 
 #undef CHECK_FEATURE
 #undef CHECK_FEATURE__
@@ -1196,12 +1292,14 @@ check_support(struct dpif_backer *backer)
 
     /* Actions. */
     backer->support.odp.recirc = check_recirc(backer);
+    backer->support.odp.max_vlan_headers = check_max_vlan_headers(backer);
     backer->support.odp.max_mpls_depth = check_max_mpls_depth(backer);
     backer->support.masked_set_action = check_masked_set_action(backer);
     backer->support.trunc = check_trunc_action(backer);
     backer->support.ufid = check_ufid(backer);
     backer->support.tnl_push_pop = dpif_supports_tnl_push_pop(backer->dpif);
     backer->support.clone = check_clone(backer);
+    backer->support.sample_nesting = check_max_sample_nesting(backer);
 
     /* Flow fields. */
     backer->support.odp.ct_state = check_ct_state(backer);
@@ -1210,6 +1308,7 @@ check_support(struct dpif_backer *backer)
     backer->support.odp.ct_label = check_ct_label(backer);
 
     backer->support.odp.ct_state_nat = check_ct_state_nat(backer);
+    backer->support.odp.ct_orig_tuple = check_ct_orig_tuple(backer);
 }
 
 static int
@@ -2760,6 +2859,7 @@ bundle_destroy(struct ofbundle *bundle)
     hmap_remove(&ofproto->bundles, &bundle->hmap_node);
     free(bundle->name);
     free(bundle->trunks);
+    free(bundle->cvlans);
     lacp_unref(bundle->lacp);
     bond_unref(bundle->bond);
     free(bundle);
@@ -2773,7 +2873,8 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     bool need_flush = false;
     struct ofport_dpif *port;
     struct ofbundle *bundle;
-    unsigned long *trunks;
+    unsigned long *trunks = NULL;
+    unsigned long *cvlans = NULL;
     int vlan;
     size_t i;
     bool ok;
@@ -2798,8 +2899,10 @@ bundle_set(struct ofproto *ofproto_, void *aux,
 
         ovs_list_init(&bundle->ports);
         bundle->vlan_mode = PORT_VLAN_TRUNK;
+        bundle->qinq_ethtype = ETH_TYPE_VLAN_8021AD;
         bundle->vlan = -1;
         bundle->trunks = NULL;
+        bundle->cvlans = NULL;
         bundle->use_priority_tags = s->use_priority_tags;
         bundle->lacp = NULL;
         bundle->bond = NULL;
@@ -2864,6 +2967,11 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         need_flush = true;
     }
 
+    if (s->qinq_ethtype != bundle->qinq_ethtype) {
+        bundle->qinq_ethtype = s->qinq_ethtype;
+        need_flush = true;
+    }
+
     /* Set VLAN tag. */
     vlan = (s->vlan_mode == PORT_VLAN_TRUNK ? -1
             : s->vlan >= 0 && s->vlan <= 4095 ? s->vlan
@@ -2901,6 +3009,10 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         }
         break;
 
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        cvlans = CONST_CAST(unsigned long *, s->cvlans);
+        break;
+
     default:
         OVS_NOT_REACHED();
     }
@@ -2916,6 +3028,20 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     }
     if (trunks != s->trunks) {
         free(trunks);
+    }
+
+    if (!vlan_bitmap_equal(cvlans, bundle->cvlans)) {
+        free(bundle->cvlans);
+        if (cvlans == s->cvlans) {
+            bundle->cvlans = vlan_bitmap_clone(cvlans);
+        } else {
+            bundle->cvlans = cvlans;
+            cvlans = NULL;
+        }
+        need_flush = true;
+    }
+    if (cvlans != s->cvlans) {
+        free(cvlans);
     }
 
     /* Bonding. */
@@ -3996,7 +4122,7 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
     uint32_t ct_mark;
 
     support = &ofproto->backer->support.odp;
-    ct_state = MINIFLOW_GET_U16(flow, ct_state);
+    ct_state = MINIFLOW_GET_U8(flow, ct_state);
     if (support->ct_state && support->ct_zone && support->ct_mark
         && support->ct_label && support->ct_state_nat) {
         return ct_state & CS_UNSUPPORTED_MASK ? OFPERR_OFPBMC_BAD_MASK : 0;
@@ -4831,6 +4957,38 @@ ofproto_unixctl_dpif_dump_dps(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+show_dp_feature_b(struct ds *ds, const char *feature, bool b)
+{
+    ds_put_format(ds, "%s: %s\n", feature, b ? "Yes" : "No");
+}
+
+static void
+show_dp_feature_s(struct ds *ds, const char *feature, size_t s)
+{
+    ds_put_format(ds, "%s: %"PRIuSIZE"\n", feature, s);
+}
+
+static void
+dpif_show_support(const struct dpif_backer_support *support, struct ds *ds)
+{
+    show_dp_feature_b(ds, "Variable length userdata",
+                      support->variable_length_userdata);
+    show_dp_feature_b(ds, "Masked set action",  support->masked_set_action);
+    show_dp_feature_b(ds, "Tunnel push pop",    support->tnl_push_pop);
+    show_dp_feature_b(ds, "Ufid",               support->ufid);
+    show_dp_feature_b(ds, "Trunc action",       support->trunc);
+    show_dp_feature_b(ds, "Clone action",       support->clone);
+    show_dp_feature_s(ds, "Max MPLS depth",     support->odp.max_mpls_depth);
+    show_dp_feature_b(ds, "Recirc",             support->odp.recirc);
+    show_dp_feature_b(ds, "CT state",           support->odp.ct_state);
+    show_dp_feature_b(ds, "CT zone",            support->odp.ct_zone);
+    show_dp_feature_b(ds, "CT mark",            support->odp.ct_mark);
+    show_dp_feature_b(ds, "CT label",           support->odp.ct_label);
+    show_dp_feature_b(ds, "CT State NAT",       support->odp.ct_state_nat);
+    show_dp_feature_s(ds, "Max sample nesting", support->sample_nesting);
+}
+
+static void
 dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
 {
     const struct shash_node **ofprotos;
@@ -4839,7 +4997,6 @@ dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
     size_t i;
 
     dpif_get_dp_stats(backer->dpif, &dp_stats);
-
     ds_put_format(ds, "%s: hit:%"PRIu64" missed:%"PRIu64"\n",
                   dpif_name(backer->dpif), dp_stats.n_hit, dp_stats.n_missed);
 
@@ -5059,6 +5216,24 @@ disable_datapath_clone(struct unixctl_conn *conn OVS_UNUSED,
 }
 
 static void
+ofproto_unixctl_dpif_show_dp_features(struct unixctl_conn *conn,
+                                      int argc, const char *argv[],
+                                      void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    const char *br = argv[argc -1];
+    struct ofproto_dpif *ofproto = ofproto_dpif_lookup(br);
+
+    if (!ofproto) {
+        unixctl_command_reply_error(conn, "no such bridge");
+        return;
+    }
+
+    dpif_show_support(&ofproto->backer->support, &ds);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+}
+
+static void
 ofproto_unixctl_init(void)
 {
     static bool registered;
@@ -5079,6 +5254,8 @@ ofproto_unixctl_init(void)
                              ofproto_unixctl_dpif_dump_dps, NULL);
     unixctl_command_register("dpif/show", "", 0, 0, ofproto_unixctl_dpif_show,
                              NULL);
+    unixctl_command_register("dpif/show-dp-features", "bridge", 1, 1,
+                             ofproto_unixctl_dpif_show_dp_features, NULL);
     unixctl_command_register("dpif/dump-flows", "[-m] bridge", 1, 2,
                              ofproto_unixctl_dpif_dump_flows, NULL);
 
@@ -5201,6 +5378,58 @@ ofproto_dpif_delete_internal_flow(struct ofproto_dpif *ofproto,
     return 0;
 }
 
+static void
+meter_get_features(const struct ofproto *ofproto_,
+                   struct ofputil_meter_features *features)
+{
+    const struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    dpif_meter_get_features(ofproto->backer->dpif, features);
+}
+
+static enum ofperr
+meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
+          struct ofputil_meter_config *config)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    switch (dpif_meter_set(ofproto->backer->dpif, meter_id, config)) {
+    case 0:
+        return 0;
+    case EFBIG: /* meter_id out of range */
+    case ENOMEM: /* Cannot allocate meter */
+        return OFPERR_OFPMMFC_OUT_OF_METERS;
+    case EBADF: /* Unsupported flags */
+        return OFPERR_OFPMMFC_BAD_FLAGS;
+    case EINVAL: /* Too many bands */
+        return OFPERR_OFPMMFC_OUT_OF_BANDS;
+    case ENODEV: /* Unsupported band type */
+        return OFPERR_OFPMMFC_BAD_BAND;
+    default:
+        return OFPERR_OFPMMFC_UNKNOWN;
+    }
+}
+
+static enum ofperr
+meter_get(const struct ofproto *ofproto_, ofproto_meter_id meter_id,
+          struct ofputil_meter_stats *stats, uint16_t n_bands)
+{
+    const struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    if (!dpif_meter_get(ofproto->backer->dpif, meter_id, stats, n_bands)) {
+        return 0;
+    }
+    return OFPERR_OFPMMFC_UNKNOWN_METER;
+}
+
+static void
+meter_del(struct ofproto *ofproto_, ofproto_meter_id meter_id)
+{
+    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+
+    dpif_meter_del(ofproto->backer->dpif, meter_id, NULL, 0);
+}
+
 const struct ofproto_class ofproto_dpif_class = {
     init,
     enumerate_types,
@@ -5289,10 +5518,10 @@ const struct ofproto_class ofproto_dpif_class = {
     set_mac_table_config,
     set_mcast_snooping,
     set_mcast_snooping_port,
-    NULL,                       /* meter_get_features */
-    NULL,                       /* meter_set */
-    NULL,                       /* meter_get */
-    NULL,                       /* meter_del */
+    meter_get_features,
+    meter_set,
+    meter_get,
+    meter_del,
     group_alloc,                /* group_alloc */
     group_construct,            /* group_construct */
     group_destruct,             /* group_destruct */

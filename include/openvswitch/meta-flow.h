@@ -740,6 +740,139 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_CT_LABEL,
 
+    /* "ct_nw_proto".
+     *
+     * The "protocol" byte in the IPv4 or IPv6 header for the original
+     * direction conntrack tuple, or of the master conntrack entry, if the
+     * current connection is a related connection.
+     *
+     * The value is initially zero and populated by the CT action.  The value
+     * remains zero after the CT action only if the packet can not be
+     * associated with a valid connection, in which case the prerequisites
+     * for matching this field ("CT") are not met.
+     *
+     * Type: u8.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: CT.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_NW_PROTO(119) since v2.8.
+     * OXM: none.
+     */
+    MFF_CT_NW_PROTO,
+
+    /* "ct_nw_src".
+     *
+     * IPv4 source address of the original direction tuple of the conntrack
+     * entry, or of the master conntrack entry, if the current connection is a
+     * related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: IPv4.
+     * Prerequisites: CTv4.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_NW_SRC(120) since v2.8.
+     * OXM: none.
+     * Prefix lookup member: ct_nw_src.
+     */
+    MFF_CT_NW_SRC,
+
+    /* "ct_nw_dst".
+     *
+     * IPv4 destination address of the original direction tuple of the
+     * conntrack entry, or of the master conntrack entry, if the current
+     * connection is a related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: IPv4.
+     * Prerequisites: CTv4.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_NW_DST(121) since v2.8.
+     * OXM: none.
+     * Prefix lookup member: ct_nw_dst.
+     */
+    MFF_CT_NW_DST,
+
+    /* "ct_ipv6_src".
+     *
+     * IPv6 source address of the original direction tuple of the conntrack
+     * entry, or of the master conntrack entry, if the current connection is a
+     * related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be128.
+     * Maskable: bitwise.
+     * Formatting: IPv6.
+     * Prerequisites: CTv6.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_IPV6_SRC(122) since v2.8.
+     * OXM: none.
+     * Prefix lookup member: ct_ipv6_src.
+     */
+    MFF_CT_IPV6_SRC,
+
+    /* "ct_ipv6_dst".
+     *
+     * IPv6 destination address of the original direction tuple of the
+     * conntrack entry, or of the master conntrack entry, if the current
+     * connection is a related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be128.
+     * Maskable: bitwise.
+     * Formatting: IPv6.
+     * Prerequisites: CTv6.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_IPV6_DST(123) since v2.8.
+     * OXM: none.
+     * Prefix lookup member: ct_ipv6_dst.
+     */
+    MFF_CT_IPV6_DST,
+
+    /* "ct_tp_src".
+     *
+     * Transport layer source port of the original direction tuple of the
+     * conntrack entry, or of the master conntrack entry, if the current
+     * connection is a related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be16.
+     * Maskable: bitwise.
+     * Formatting: decimal.
+     * Prerequisites: CT.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_TP_SRC(124) since v2.8.
+     * OXM: none.
+     */
+    MFF_CT_TP_SRC,
+
+    /* "ct_tp_dst".
+     *
+     * Transport layer destination port of the original direction tuple of the
+     * conntrack entry, or of the master conntrack entry, if the current
+     * connection is a related connection.
+     *
+     * The value is populated by the CT action.
+     *
+     * Type: be16.
+     * Maskable: bitwise.
+     * Formatting: decimal.
+     * Prerequisites: CT.
+     * Access: read-only.
+     * NXM: NXM_NX_CT_TP_DST(125) since v2.8.
+     * OXM: none.
+     */
+    MFF_CT_TP_DST,
+
 #if FLOW_N_REGS == 16
     /* "reg<N>".
      *
@@ -1221,6 +1354,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Access: read/write.
      * NXM: NXM_NX_IP_ECN(28) since v1.4.
      * OXM: OXM_OF_IP_ECN(9) since OF1.2 and v1.7.
+     * OF1.1: exact match.
      */
     MFF_IP_ECN,
 
@@ -1689,6 +1823,9 @@ enum OVS_PACKED_ENUM mf_prereqs {
     MFP_SCTP,                   /* On IPv4 or IPv6. */
     MFP_ICMPV4,
     MFP_ICMPV6,
+    MFP_CT_VALID,               /* Implies IPv4 or IPv6. */
+    MFP_CTV4_VALID,             /* MFP_CT_VALID and IPv4. */
+    MFP_CTV6_VALID,             /* MFP_CT_VALID and IPv6. */
 
     /* L2+L3+L4 requirements. */
     MFP_ND,
@@ -1898,6 +2035,7 @@ void mf_get_mask(const struct mf_field *, const struct flow_wildcards *,
 /* Prerequisites. */
 bool mf_are_prereqs_ok(const struct mf_field *mf, const struct flow *flow,
                        struct flow_wildcards *wc);
+bool mf_are_match_prereqs_ok(const struct mf_field *, const struct match *);
 
 static inline bool
 mf_is_l3_or_higher(const struct mf_field *mf)
@@ -1959,8 +2097,8 @@ void mf_subfield_swap(const struct mf_subfield *,
                       const struct mf_subfield *,
                       struct flow *flow, struct flow_wildcards *);
 
-enum ofperr mf_check_src(const struct mf_subfield *, const struct flow *);
-enum ofperr mf_check_dst(const struct mf_subfield *, const struct flow *);
+enum ofperr mf_check_src(const struct mf_subfield *, const struct match *);
+enum ofperr mf_check_dst(const struct mf_subfield *, const struct match *);
 
 /* Parsing and formatting. */
 char *mf_parse(const struct mf_field *, const char *,

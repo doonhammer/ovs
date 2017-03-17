@@ -183,6 +183,7 @@ Kyle Upton                      kupton@baymicrosystems.com
 Lance Richardson                lrichard@redhat.com
 Lars Kellogg-Stedman            lars@redhat.com
 Lei Huang                       huang.f.lei@gmail.com
+Leif Madsen                     lmadsen@redhat.com
 Leo Alterman                    lalterman@nicira.com
 Lilijun                         jerry.lilijun@huawei.com
 Linda Sun                       lsun@vmware.com
@@ -211,6 +212,7 @@ Michael Arnaldi                 arnaldimichael@gmail.com
 Michal Weglicki                 michalx.weglicki@intel.com
 Mickey Spiegel                  mickeys.dev@gmail.com
 Mijo Safradin                   mijo@linux.vnet.ibm.com
+Mika Vaisanen                   mika.vaisanen@gmail.com
 Minoru TAKAHASHI                takahashi.minoru7@gmail.com
 Murphy McCauley                 murphy.mccauley@gmail.com
 Natasha Gude                    natasha@nicira.com
@@ -246,6 +248,7 @@ Rich Lane                       rlane@bigswitch.com
 Rishi Bamba                     rishi.bamba@tcs.com
 Rob Adams                       readams@readams.net
 Robert Åkerblom-Andersson       Robert.nr1@gmail.com
+Robert Wojciechowicz            robertx.wojciechowicz@intel.com
 Rob Hoes                        rob.hoes@citrix.com
 Roi Dayan                       roid@mellanox.com
 Romain Lenglet                  romain.lenglet@berabera.info
@@ -296,6 +299,7 @@ Torgny Lindberg                 torgny.lindberg@ericsson.com
 Tsvi Slonim                     tsvi@toroki.com
 Tuan Nguyen                     tuan.nguyen@veriksystems.com
 Tyler Coumbes                   coumbes@gmail.com
+Tony van der Peet               tony.vanderpeet@alliedtelesis.co.nz
 Valient Gough                   vgough@pobox.com
 Vivien Bernet-Rollande          vbr@soprive.net
 Wang Sheng-Hui                  shhuiw@gmail.com
@@ -304,6 +308,7 @@ Wei Yongjun                     yjwei@cn.fujitsu.com
 Wenyu Zhang                     wenyuz@vmware.com
 William Fulton
 William Tu                      u9012063@gmail.com
+Xiao Liang                      shaw.leon@gmail.com
 YAMAMOTO Takashi                yamamoto@midokura.com
 Yasuhito Takamiya               yasuhito@gmail.com
 Yi-Hung Wei                     yihung.wei@gmail.com

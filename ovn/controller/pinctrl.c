@@ -153,8 +153,9 @@ pinctrl_handle_arp(const struct flow *ip_flow, const struct match *md,
     arp->ar_tha = eth_addr_zero;
     put_16aligned_be32(&arp->ar_tpa, ip_flow->nw_dst);
 
-    if (ip_flow->vlan_tci & htons(VLAN_CFI)) {
-        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN_8021Q), ip_flow->vlan_tci);
+    if (ip_flow->vlans[0].tci & htons(VLAN_CFI)) {
+        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN_8021Q),
+                      ip_flow->vlans[0].tci);
     }
 
     /* Compose actions.
@@ -168,7 +169,8 @@ pinctrl_handle_arp(const struct flow *ip_flow, const struct match *md,
 
     reload_metadata(&ofpacts, md);
     enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, &ofpacts);
+                                                      version, NULL, NULL,
+                                                      &ofpacts);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "failed to parse arp actions (%s)",
@@ -665,7 +667,7 @@ process_packet_in(const struct ofp_header *msg)
 
     struct ofputil_packet_in pin;
     struct ofpbuf continuation;
-    enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, &pin,
+    enum ofperr error = ofputil_decode_packet_in(msg, true, NULL, NULL, &pin,
                                                  NULL, NULL, &continuation);
 
     if (error) {
@@ -1398,7 +1400,8 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
     reload_metadata(&ofpacts, md);
 
     enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, &ofpacts);
+                                                      version, NULL, NULL,
+                                                      &ofpacts);
     if (error) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "failed to parse actions for 'na' (%s)",

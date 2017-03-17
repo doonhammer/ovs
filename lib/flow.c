@@ -52,6 +52,8 @@ const uint8_t flow_segment_u64s[4] = {
     FLOW_U64S
 };
 
+int flow_vlan_limit = FLOW_MAX_VLAN_HEADERS;
+
 /* Asserts that field 'f1' follows immediately after 'f0' in struct flow,
  * without any intervening padding. */
 #define ASSERT_SEQUENTIAL(f0, f1)                       \
@@ -73,8 +75,6 @@ const uint8_t flow_segment_u64s[4] = {
 
 /* miniflow_extract() assumes the following to be true to optimize the
  * extraction process. */
-ASSERT_SEQUENTIAL_SAME_WORD(dl_type, vlan_tci);
-
 ASSERT_SEQUENTIAL_SAME_WORD(nw_frag, nw_tos);
 ASSERT_SEQUENTIAL_SAME_WORD(nw_tos, nw_ttl);
 ASSERT_SEQUENTIAL_SAME_WORD(nw_ttl, nw_proto);
@@ -125,7 +125,7 @@ struct mf_ctx {
  * away.  Some GCC versions gave warnings on ALWAYS_INLINE, so these are
  * defined as macros. */
 
-#if (FLOW_WC_SEQ != 36)
+#if (FLOW_WC_SEQ != 38)
 #define MINIFLOW_ASSERT(X) ovs_assert(X)
 BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
                "assertions enabled. Consider updating FLOW_WC_SEQ after "
@@ -312,6 +312,11 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 #define miniflow_push_macs(MF, FIELD, VALUEP)                       \
     miniflow_push_macs_(MF, offsetof(struct flow, FIELD), VALUEP)
 
+/* Return the pointer to the miniflow data when called BEFORE the corresponding
+ * push. */
+#define miniflow_pointer(MF, FIELD)                                     \
+    (void *)((uint8_t *)MF.data + ((offsetof(struct flow, FIELD)) % 8))
+
 /* Pulls the MPLS headers at '*datap' and returns the count of them. */
 static inline int
 parse_mpls(const void **datap, size_t *sizep)
@@ -328,26 +333,29 @@ parse_mpls(const void **datap, size_t *sizep)
     return MIN(count, FLOW_MAX_MPLS_LABELS);
 }
 
-static inline ALWAYS_INLINE ovs_be16
-parse_vlan(const void **datap, size_t *sizep)
+/* passed vlan_hdrs arg must be at least size FLOW_MAX_VLAN_HEADERS. */
+static inline ALWAYS_INLINE size_t
+parse_vlan(const void **datap, size_t *sizep, union flow_vlan_hdr *vlan_hdrs)
 {
-    const struct eth_header *eth = *datap;
+    const ovs_be16 *eth_type;
 
-    struct qtag_prefix {
-        ovs_be16 eth_type;      /* ETH_TYPE_VLAN */
-        ovs_be16 tci;
-    };
-
+    memset(vlan_hdrs, 0, sizeof(union flow_vlan_hdr) * FLOW_MAX_VLAN_HEADERS);
     data_pull(datap, sizep, ETH_ADDR_LEN * 2);
 
-    if (eth->eth_type == htons(ETH_TYPE_VLAN)) {
-        if (OVS_LIKELY(*sizep
-                       >= sizeof(struct qtag_prefix) + sizeof(ovs_be16))) {
-            const struct qtag_prefix *qp = data_pull(datap, sizep, sizeof *qp);
-            return qp->tci | htons(VLAN_CFI);
+    eth_type = *datap;
+
+    size_t n;
+    for (n = 0; eth_type_vlan(*eth_type) && n < flow_vlan_limit; n++) {
+        if (OVS_UNLIKELY(*sizep < sizeof(ovs_be32) + sizeof(ovs_be16))) {
+            break;
         }
+
+        const ovs_16aligned_be32 *qp = data_pull(datap, sizep, sizeof *qp);
+        vlan_hdrs[n].qtag = get_16aligned_be32(qp);
+        vlan_hdrs[n].tci |= htons(VLAN_CFI);
+        eth_type = *datap;
     }
-    return 0;
+    return n;
 }
 
 static inline ALWAYS_INLINE ovs_be16
@@ -383,61 +391,67 @@ parse_ethertype(const void **datap, size_t *sizep)
     return htons(FLOW_DL_TYPE_NONE);
 }
 
-static inline void
+/* Returns 'true' if the packet is an ND packet. In that case the '*nd_target'
+ * and 'arp_buf[]' are filled in.  If the packet is not an ND pacet, 'false' is
+ * returned and no values are filled in on '*nd_target' or 'arp_buf[]'. */
+static inline bool
 parse_icmpv6(const void **datap, size_t *sizep, const struct icmp6_hdr *icmp,
              const struct in6_addr **nd_target,
              struct eth_addr arp_buf[2])
 {
-    if (icmp->icmp6_code == 0 &&
-        (icmp->icmp6_type == ND_NEIGHBOR_SOLICIT ||
-         icmp->icmp6_type == ND_NEIGHBOR_ADVERT)) {
-
-        *nd_target = data_try_pull(datap, sizep, sizeof **nd_target);
-        if (OVS_UNLIKELY(!*nd_target)) {
-            return;
-        }
-
-        while (*sizep >= 8) {
-            /* The minimum size of an option is 8 bytes, which also is
-             * the size of Ethernet link-layer options. */
-            const struct ovs_nd_opt *nd_opt = *datap;
-            int opt_len = nd_opt->nd_opt_len * ND_OPT_LEN;
-
-            if (!opt_len || opt_len > *sizep) {
-                return;
-            }
-
-            /* Store the link layer address if the appropriate option is
-             * provided.  It is considered an error if the same link
-             * layer option is specified twice. */
-            if (nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR
-                && opt_len == 8) {
-                if (OVS_LIKELY(eth_addr_is_zero(arp_buf[0]))) {
-                    arp_buf[0] = nd_opt->nd_opt_mac;
-                } else {
-                    goto invalid;
-                }
-            } else if (nd_opt->nd_opt_type == ND_OPT_TARGET_LINKADDR
-                       && opt_len == 8) {
-                if (OVS_LIKELY(eth_addr_is_zero(arp_buf[1]))) {
-                    arp_buf[1] = nd_opt->nd_opt_mac;
-                } else {
-                    goto invalid;
-                }
-            }
-
-            if (OVS_UNLIKELY(!data_try_pull(datap, sizep, opt_len))) {
-                return;
-            }
-        }
+    if (icmp->icmp6_code != 0 ||
+        (icmp->icmp6_type != ND_NEIGHBOR_SOLICIT &&
+         icmp->icmp6_type != ND_NEIGHBOR_ADVERT)) {
+        return false;
     }
 
-    return;
+    arp_buf[0] = eth_addr_zero;
+    arp_buf[1] = eth_addr_zero;
+    *nd_target = data_try_pull(datap, sizep, sizeof **nd_target);
+    if (OVS_UNLIKELY(!*nd_target)) {
+        return true;
+    }
+
+    while (*sizep >= 8) {
+        /* The minimum size of an option is 8 bytes, which also is
+         * the size of Ethernet link-layer options. */
+        const struct ovs_nd_opt *nd_opt = *datap;
+        int opt_len = nd_opt->nd_opt_len * ND_OPT_LEN;
+
+        if (!opt_len || opt_len > *sizep) {
+            return true;
+        }
+
+        /* Store the link layer address if the appropriate option is
+         * provided.  It is considered an error if the same link
+         * layer option is specified twice. */
+        if (nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR
+            && opt_len == 8) {
+            if (OVS_LIKELY(eth_addr_is_zero(arp_buf[0]))) {
+                arp_buf[0] = nd_opt->nd_opt_mac;
+            } else {
+                goto invalid;
+            }
+        } else if (nd_opt->nd_opt_type == ND_OPT_TARGET_LINKADDR
+                   && opt_len == 8) {
+            if (OVS_LIKELY(eth_addr_is_zero(arp_buf[1]))) {
+                arp_buf[1] = nd_opt->nd_opt_mac;
+            } else {
+                goto invalid;
+            }
+        }
+
+        if (OVS_UNLIKELY(!data_try_pull(datap, sizep, opt_len))) {
+            return true;
+        }
+    }
+    return true;
 
 invalid:
     *nd_target = NULL;
     arp_buf[0] = eth_addr_zero;
     arp_buf[1] = eth_addr_zero;
+    return true;
 }
 
 static inline bool
@@ -561,6 +575,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     const char *l2;
     ovs_be16 dl_type;
     uint8_t nw_frag, nw_tos, nw_ttl, nw_proto;
+    uint8_t *ct_nw_proto_p = NULL;
+    ovs_be16 ct_tp_src = 0, ct_tp_dst = 0;
 
     /* Metadata. */
     if (flow_tnl_dst_is_set(&md->tunnel)) {
@@ -593,7 +609,9 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     miniflow_push_uint32(mf, in_port, odp_to_u32(md->in_port.odp_port));
     if (md->recirc_id || md->ct_state) {
         miniflow_push_uint32(mf, recirc_id, md->recirc_id);
-        miniflow_push_uint16(mf, ct_state, md->ct_state);
+        miniflow_push_uint8(mf, ct_state, md->ct_state);
+        ct_nw_proto_p = miniflow_pointer(mf, ct_nw_proto);
+        miniflow_push_uint8(mf, ct_nw_proto, 0);
         miniflow_push_uint16(mf, ct_zone, md->ct_zone);
     }
 
@@ -615,16 +633,21 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     if (OVS_UNLIKELY(size < sizeof(struct eth_header))) {
         goto out;
     } else {
-        ovs_be16 vlan_tci;
-
         /* Link layer. */
         ASSERT_SEQUENTIAL(dl_dst, dl_src);
         miniflow_push_macs(mf, dl_dst, data);
-        /* dl_type, vlan_tci. */
-        vlan_tci = parse_vlan(&data, &size);
+
+        /* VLAN */
+        union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
+        size_t num_vlans = parse_vlan(&data, &size, vlans);
+
+        /* dl_type */
         dl_type = parse_ethertype(&data, &size);
         miniflow_push_be16(mf, dl_type, dl_type);
-        miniflow_push_be16(mf, vlan_tci, vlan_tci);
+        miniflow_pad_to_64(mf, dl_type);
+        if (num_vlans > 0) {
+            miniflow_push_words_32(mf, vlans, vlans, num_vlans);
+        }
     }
 
     /* Parse mpls. */
@@ -669,6 +692,15 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
         /* Push both source and destination address at once. */
         miniflow_push_words(mf, nw_src, &nh->ip_src, 1);
+        if (ct_nw_proto_p && !md->ct_orig_tuple_ipv6) {
+            *ct_nw_proto_p = md->ct_orig_tuple.ipv4.ipv4_proto;
+            if (*ct_nw_proto_p) {
+                miniflow_push_words(mf, ct_nw_src,
+                                    &md->ct_orig_tuple.ipv4.ipv4_src, 1);
+                ct_tp_src = md->ct_orig_tuple.ipv4.src_port;
+                ct_tp_dst = md->ct_orig_tuple.ipv4.dst_port;
+            }
+        }
 
         miniflow_push_be32(mf, ipv6_label, 0); /* Padding for IPv4. */
 
@@ -707,6 +739,17 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                             sizeof nh->ip6_src / 8);
         miniflow_push_words(mf, ipv6_dst, &nh->ip6_dst,
                             sizeof nh->ip6_dst / 8);
+        if (ct_nw_proto_p && md->ct_orig_tuple_ipv6) {
+            *ct_nw_proto_p = md->ct_orig_tuple.ipv6.ipv6_proto;
+            if (*ct_nw_proto_p) {
+                miniflow_push_words(mf, ct_ipv6_src,
+                                    &md->ct_orig_tuple.ipv6.ipv6_src,
+                                    2 *
+                                    sizeof md->ct_orig_tuple.ipv6.ipv6_src / 8);
+                ct_tp_src = md->ct_orig_tuple.ipv6.src_port;
+                ct_tp_dst = md->ct_orig_tuple.ipv6.dst_port;
+            }
+        }
 
         tc_flow = get_16aligned_be32(&nh->ip6_flow);
         {
@@ -769,7 +812,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                                    TCP_FLAGS_BE32(tcp->tcp_ctl));
                 miniflow_push_be16(mf, tp_src, tcp->tcp_src);
                 miniflow_push_be16(mf, tp_dst, tcp->tcp_dst);
-                miniflow_pad_to_64(mf, tp_dst);
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_UDP)) {
             if (OVS_LIKELY(size >= UDP_HEADER_LEN)) {
@@ -777,7 +821,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 miniflow_push_be16(mf, tp_src, udp->udp_src);
                 miniflow_push_be16(mf, tp_dst, udp->udp_dst);
-                miniflow_pad_to_64(mf, tp_dst);
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_SCTP)) {
             if (OVS_LIKELY(size >= SCTP_HEADER_LEN)) {
@@ -785,7 +830,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 miniflow_push_be16(mf, tp_src, sctp->sctp_src);
                 miniflow_push_be16(mf, tp_dst, sctp->sctp_dst);
-                miniflow_pad_to_64(mf, tp_dst);
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_ICMP)) {
             if (OVS_LIKELY(size >= ICMP_HEADER_LEN)) {
@@ -793,7 +839,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 miniflow_push_be16(mf, tp_src, htons(icmp->icmp_type));
                 miniflow_push_be16(mf, tp_dst, htons(icmp->icmp_code));
-                miniflow_pad_to_64(mf, tp_dst);
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_IGMP)) {
             if (OVS_LIKELY(size >= IGMP_HEADER_LEN)) {
@@ -801,25 +848,35 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 
                 miniflow_push_be16(mf, tp_src, htons(igmp->igmp_type));
                 miniflow_push_be16(mf, tp_dst, htons(igmp->igmp_code));
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
                 miniflow_push_be32(mf, igmp_group_ip4,
                                    get_16aligned_be32(&igmp->group));
+                miniflow_pad_to_64(mf, igmp_group_ip4);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_ICMPV6)) {
             if (OVS_LIKELY(size >= sizeof(struct icmp6_hdr))) {
-                const struct in6_addr *nd_target = NULL;
-                struct eth_addr arp_buf[2] = { { { { 0 } } } };
+                const struct in6_addr *nd_target;
+                struct eth_addr arp_buf[2];
                 const struct icmp6_hdr *icmp = data_pull(&data, &size,
                                                          sizeof *icmp);
-                parse_icmpv6(&data, &size, icmp, &nd_target, arp_buf);
-                if (nd_target) {
-                    miniflow_push_words(mf, nd_target, nd_target,
-                                        sizeof *nd_target / sizeof(uint64_t));
+                if (parse_icmpv6(&data, &size, icmp, &nd_target, arp_buf)) {
+                    if (nd_target) {
+                        miniflow_push_words(mf, nd_target, nd_target,
+                                            sizeof *nd_target / sizeof(uint64_t));
+                    }
+                    miniflow_push_macs(mf, arp_sha, arp_buf);
+                    miniflow_pad_to_64(mf, arp_tha);
+                    miniflow_push_be16(mf, tp_src, htons(icmp->icmp6_type));
+                    miniflow_push_be16(mf, tp_dst, htons(icmp->icmp6_code));
+                    miniflow_pad_to_64(mf, tp_dst);
+                } else {
+                    /* ICMPv6 but not ND. */
+                    miniflow_push_be16(mf, tp_src, htons(icmp->icmp6_type));
+                    miniflow_push_be16(mf, tp_dst, htons(icmp->icmp6_code));
+                    miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                    miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
                 }
-                miniflow_push_macs(mf, arp_sha, arp_buf);
-                miniflow_pad_to_64(mf, arp_tha);
-                miniflow_push_be16(mf, tp_src, htons(icmp->icmp6_type));
-                miniflow_push_be16(mf, tp_dst, htons(icmp->icmp6_code));
-                miniflow_pad_to_64(mf, tp_dst);
             }
         }
     }
@@ -831,8 +888,9 @@ ovs_be16
 parse_dl_type(const struct eth_header *data_, size_t size)
 {
     const void *data = data_;
+    union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
 
-    parse_vlan(&data, &size);
+    parse_vlan(&data, &size, vlans);
 
     return parse_ethertype(&data, &size);
 }
@@ -869,7 +927,7 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
 {
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
 
     match_init_catchall(flow_metadata);
     if (flow->tunnel.tun_id != htonll(0)) {
@@ -915,6 +973,21 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
     match_set_in_port(flow_metadata, flow->in_port.ofp_port);
     if (flow->ct_state != 0) {
         match_set_ct_state(flow_metadata, flow->ct_state);
+        if (is_ct_valid(flow, NULL, NULL) && flow->ct_nw_proto != 0) {
+            if (flow->dl_type == htons(ETH_TYPE_IP)) {
+                match_set_ct_nw_src(flow_metadata, flow->ct_nw_src);
+                match_set_ct_nw_dst(flow_metadata, flow->ct_nw_dst);
+                match_set_ct_nw_proto(flow_metadata, flow->ct_nw_proto);
+                match_set_ct_tp_src(flow_metadata, flow->ct_tp_src);
+                match_set_ct_tp_dst(flow_metadata, flow->ct_tp_dst);
+            } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+                match_set_ct_ipv6_src(flow_metadata, &flow->ct_ipv6_src);
+                match_set_ct_ipv6_dst(flow_metadata, &flow->ct_ipv6_dst);
+                match_set_ct_nw_proto(flow_metadata, flow->ct_nw_proto);
+                match_set_ct_tp_src(flow_metadata, flow->ct_tp_src);
+                match_set_ct_tp_dst(flow_metadata, flow->ct_tp_dst);
+            }
+        }
     }
     if (flow->ct_zone != 0) {
         match_set_ct_zone(flow_metadata, flow->ct_zone);
@@ -1236,6 +1309,18 @@ flow_format(struct ds *ds, const struct flow *flow)
     if (ovs_u128_is_zero(flow->ct_label)) {
         WC_UNMASK_FIELD(wc, ct_label);
     }
+    if (!is_ct_valid(flow, &match.wc, NULL) || !flow->ct_nw_proto) {
+        WC_UNMASK_FIELD(wc, ct_nw_proto);
+        WC_UNMASK_FIELD(wc, ct_tp_src);
+        WC_UNMASK_FIELD(wc, ct_tp_dst);
+        if (flow->dl_type == htons(ETH_TYPE_IP)) {
+            WC_UNMASK_FIELD(wc, ct_nw_src);
+            WC_UNMASK_FIELD(wc, ct_nw_dst);
+        } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+            WC_UNMASK_FIELD(wc, ct_ipv6_src);
+            WC_UNMASK_FIELD(wc, ct_ipv6_dst);
+        }
+    }
     for (int i = 0; i < FLOW_N_REGS; i++) {
         if (!flow->regs[i]) {
             WC_UNMASK_FIELD(wc, regs[i]);
@@ -1269,13 +1354,14 @@ flow_wildcards_init_catchall(struct flow_wildcards *wc)
  * the packet headers extracted to 'flow'.  It will not set the mask for fields
  * that do not make sense for the packet type.  OpenFlow-only metadata is
  * wildcarded, but other metadata is unconditionally exact-matched. */
-void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
-                                    const struct flow *flow)
+void
+flow_wildcards_init_for_packet(struct flow_wildcards *wc,
+                               const struct flow *flow)
 {
     memset(&wc->masks, 0x0, sizeof wc->masks);
 
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
 
     if (flow_tnl_dst_is_set(&flow->tunnel)) {
         if (flow->tunnel.flags & FLOW_TNL_F_KEY) {
@@ -1326,15 +1412,33 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
     WC_MASK_FIELD(wc, dl_dst);
     WC_MASK_FIELD(wc, dl_src);
     WC_MASK_FIELD(wc, dl_type);
-    WC_MASK_FIELD(wc, vlan_tci);
+
+    /* No need to set mask of inner VLANs that don't exist. */
+    for (int i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        /* Always show the first zero VLAN. */
+        WC_MASK_FIELD(wc, vlans[i]);
+        if (flow->vlans[i].tci == htons(0)) {
+            break;
+        }
+    }
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {
         WC_MASK_FIELD(wc, nw_src);
         WC_MASK_FIELD(wc, nw_dst);
+        WC_MASK_FIELD(wc, ct_nw_src);
+        WC_MASK_FIELD(wc, ct_nw_dst);
     } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
         WC_MASK_FIELD(wc, ipv6_src);
         WC_MASK_FIELD(wc, ipv6_dst);
         WC_MASK_FIELD(wc, ipv6_label);
+        if (is_nd(flow, wc)) {
+            WC_MASK_FIELD(wc, arp_sha);
+            WC_MASK_FIELD(wc, arp_tha);
+            WC_MASK_FIELD(wc, nd_target);
+        } else {
+            WC_MASK_FIELD(wc, ct_ipv6_src);
+            WC_MASK_FIELD(wc, ct_ipv6_dst);
+        }
     } else if (flow->dl_type == htons(ETH_TYPE_ARP) ||
                flow->dl_type == htons(ETH_TYPE_RARP)) {
         WC_MASK_FIELD(wc, nw_src);
@@ -1360,6 +1464,9 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
     WC_MASK_FIELD(wc, nw_tos);
     WC_MASK_FIELD(wc, nw_ttl);
     WC_MASK_FIELD(wc, nw_proto);
+    WC_MASK_FIELD(wc, ct_nw_proto);
+    WC_MASK_FIELD(wc, ct_tp_src);
+    WC_MASK_FIELD(wc, ct_tp_dst);
 
     /* No transport layer header in later fragments. */
     if (!(flow->nw_frag & FLOW_NW_FRAG_LATER) &&
@@ -1374,10 +1481,6 @@ void flow_wildcards_init_for_packet(struct flow_wildcards *wc,
 
         if (flow->nw_proto == IPPROTO_TCP) {
             WC_MASK_FIELD(wc, tcp_flags);
-        } else if (flow->nw_proto == IPPROTO_ICMPV6) {
-            WC_MASK_FIELD(wc, arp_sha);
-            WC_MASK_FIELD(wc, arp_tha);
-            WC_MASK_FIELD(wc, nd_target);
         } else if (flow->nw_proto == IPPROTO_IGMP) {
             WC_MASK_FIELD(wc, igmp_group_ip4);
         }
@@ -1393,7 +1496,7 @@ void
 flow_wc_map(const struct flow *flow, struct flowmap *map)
 {
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
 
     flowmap_init(map);
 
@@ -1419,7 +1522,7 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
     FLOWMAP_SET(map, dl_dst);
     FLOWMAP_SET(map, dl_src);
     FLOWMAP_SET(map, dl_type);
-    FLOWMAP_SET(map, vlan_tci);
+    FLOWMAP_SET(map, vlans);
     FLOWMAP_SET(map, ct_state);
     FLOWMAP_SET(map, ct_zone);
     FLOWMAP_SET(map, ct_mark);
@@ -1435,6 +1538,11 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
         FLOWMAP_SET(map, nw_ttl);
         FLOWMAP_SET(map, tp_src);
         FLOWMAP_SET(map, tp_dst);
+        FLOWMAP_SET(map, ct_nw_proto);
+        FLOWMAP_SET(map, ct_nw_src);
+        FLOWMAP_SET(map, ct_nw_dst);
+        FLOWMAP_SET(map, ct_tp_src);
+        FLOWMAP_SET(map, ct_tp_dst);
 
         if (OVS_UNLIKELY(flow->nw_proto == IPPROTO_IGMP)) {
             FLOWMAP_SET(map, igmp_group_ip4);
@@ -1452,11 +1560,16 @@ flow_wc_map(const struct flow *flow, struct flowmap *map)
         FLOWMAP_SET(map, tp_src);
         FLOWMAP_SET(map, tp_dst);
 
-        if (OVS_UNLIKELY(flow->nw_proto == IPPROTO_ICMPV6)) {
+        if (OVS_UNLIKELY(is_nd(flow, NULL))) {
             FLOWMAP_SET(map, nd_target);
             FLOWMAP_SET(map, arp_sha);
             FLOWMAP_SET(map, arp_tha);
         } else {
+            FLOWMAP_SET(map, ct_nw_proto);
+            FLOWMAP_SET(map, ct_ipv6_src);
+            FLOWMAP_SET(map, ct_ipv6_dst);
+            FLOWMAP_SET(map, ct_tp_src);
+            FLOWMAP_SET(map, ct_tp_dst);
             FLOWMAP_SET(map, tcp_flags);
         }
     } else if (eth_type_mpls(flow->dl_type)) {
@@ -1477,7 +1590,7 @@ void
 flow_wildcards_clear_non_packet_fields(struct flow_wildcards *wc)
 {
     /* Update this function whenever struct flow changes. */
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
 
     memset(&wc->masks.metadata, 0, sizeof wc->masks.metadata);
     memset(&wc->masks.regs, 0, sizeof wc->masks.regs);
@@ -1621,7 +1734,7 @@ flow_wildcards_set_xxreg_mask(struct flow_wildcards *wc, int idx,
 uint32_t
 miniflow_hash_5tuple(const struct miniflow *flow, uint32_t basis)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
     uint32_t hash = basis;
 
     if (flow) {
@@ -1668,7 +1781,7 @@ ASSERT_SEQUENTIAL(ipv6_src, ipv6_dst);
 uint32_t
 flow_hash_5tuple(const struct flow *flow, uint32_t basis)
 {
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 38);
     uint32_t hash = basis;
 
     if (flow) {
@@ -1727,7 +1840,9 @@ flow_hash_symmetric_l4(const struct flow *flow, uint32_t basis)
     for (i = 0; i < ARRAY_SIZE(fields.eth_addr.be16); i++) {
         fields.eth_addr.be16[i] = flow->dl_src.be16[i] ^ flow->dl_dst.be16[i];
     }
-    fields.vlan_tci = flow->vlan_tci & htons(VLAN_VID_MASK);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        fields.vlan_tci ^= flow->vlans[i].tci & htons(VLAN_VID_MASK);
+    }
     fields.eth_type = flow->dl_type;
 
     /* UDP source and destination port are not taken into account because they
@@ -1793,6 +1908,7 @@ void
 flow_random_hash_fields(struct flow *flow)
 {
     uint16_t rnd = random_uint16();
+    int i;
 
     /* Initialize to all zeros. */
     memset(flow, 0, sizeof *flow);
@@ -1800,7 +1916,11 @@ flow_random_hash_fields(struct flow *flow)
     eth_addr_random(&flow->dl_src);
     eth_addr_random(&flow->dl_dst);
 
-    flow->vlan_tci = (OVS_FORCE ovs_be16) (random_uint16() & VLAN_VID_MASK);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        uint16_t vlan = random_uint16() & VLAN_VID_MASK;
+        flow->vlans[i].tpid = htons(ETH_TYPE_VLAN_8021Q);
+        flow->vlans[i].tci = htons(vlan | VLAN_CFI);
+    }
 
     /* Make most of the random flows IPv4, some IPv6, and rest random. */
     flow->dl_type = rnd < 0x8000 ? htons(ETH_TYPE_IP) :
@@ -1833,6 +1953,7 @@ void
 flow_mask_hash_fields(const struct flow *flow, struct flow_wildcards *wc,
                       enum nx_hash_fields fields)
 {
+    int i;
     switch (fields) {
     case NX_HASH_FIELDS_ETH_SRC:
         memset(&wc->masks.dl_src, 0xff, sizeof wc->masks.dl_src);
@@ -1852,7 +1973,9 @@ flow_mask_hash_fields(const struct flow *flow, struct flow_wildcards *wc,
             memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
             flow_unwildcard_tp_ports(flow, wc);
         }
-        wc->masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+        for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+            wc->masks.vlans[i].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+        }
         break;
 
     case NX_HASH_FIELDS_SYMMETRIC_L3L4_UDP:
@@ -1952,7 +2075,7 @@ flow_hash_in_wildcards(const struct flow *flow,
 /* Sets the VLAN VID that 'flow' matches to 'vid', which is interpreted as an
  * OpenFlow 1.0 "dl_vlan" value:
  *
- *      - If it is in the range 0...4095, 'flow->vlan_tci' is set to match
+ *      - If it is in the range 0...4095, 'flow->vlans[0].tci' is set to match
  *        that VLAN.  Any existing PCP match is unchanged (it becomes 0 if
  *        'flow' previously matched packets without a VLAN header).
  *
@@ -1964,11 +2087,21 @@ void
 flow_set_dl_vlan(struct flow *flow, ovs_be16 vid)
 {
     if (vid == htons(OFP10_VLAN_NONE)) {
-        flow->vlan_tci = htons(0);
+        flow->vlans[0].tci = htons(0);
     } else {
         vid &= htons(VLAN_VID_MASK);
-        flow->vlan_tci &= ~htons(VLAN_VID_MASK);
-        flow->vlan_tci |= htons(VLAN_CFI) | vid;
+        flow->vlans[0].tci &= ~htons(VLAN_VID_MASK);
+        flow->vlans[0].tci |= htons(VLAN_CFI) | vid;
+    }
+}
+
+/* Sets the VLAN header TPID, which must be either ETH_TYPE_VLAN_8021Q or
+ * ETH_TYPE_VLAN_8021AD. */
+void
+flow_fix_vlan_tpid(struct flow *flow)
+{
+    if (flow->vlans[0].tpid == htons(0) && flow->vlans[0].tci != 0) {
+        flow->vlans[0].tpid = htons(ETH_TYPE_VLAN_8021Q);
     }
 }
 
@@ -1979,8 +2112,8 @@ void
 flow_set_vlan_vid(struct flow *flow, ovs_be16 vid)
 {
     ovs_be16 mask = htons(VLAN_VID_MASK | VLAN_CFI);
-    flow->vlan_tci &= ~mask;
-    flow->vlan_tci |= vid & mask;
+    flow->vlans[0].tci &= ~mask;
+    flow->vlans[0].tci |= vid & mask;
 }
 
 /* Sets the VLAN PCP that 'flow' matches to 'pcp', which should be in the
@@ -1994,8 +2127,68 @@ void
 flow_set_vlan_pcp(struct flow *flow, uint8_t pcp)
 {
     pcp &= 0x07;
-    flow->vlan_tci &= ~htons(VLAN_PCP_MASK);
-    flow->vlan_tci |= htons((pcp << VLAN_PCP_SHIFT) | VLAN_CFI);
+    flow->vlans[0].tci &= ~htons(VLAN_PCP_MASK);
+    flow->vlans[0].tci |= htons((pcp << VLAN_PCP_SHIFT) | VLAN_CFI);
+}
+
+/* Counts the number of VLAN headers. */
+int
+flow_count_vlan_headers(const struct flow *flow)
+{
+    int i;
+
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        if (!(flow->vlans[i].tci & htons(VLAN_CFI))) {
+            break;
+        }
+    }
+    return i;
+}
+
+/* Given '*p_an' and '*p_bn' pointing to one past the last VLAN header of
+ * 'a' and 'b' respectively, skip common VLANs so that they point to the
+ * first different VLAN counting from bottom. */
+void
+flow_skip_common_vlan_headers(const struct flow *a, int *p_an,
+                              const struct flow *b, int *p_bn)
+{
+    int an = *p_an, bn = *p_bn;
+
+    for (an--, bn--; an >= 0 && bn >= 0; an--, bn--) {
+        if (a->vlans[an].qtag != b->vlans[bn].qtag) {
+            break;
+        }
+    }
+    *p_an = an;
+    *p_bn = bn;
+}
+
+void
+flow_pop_vlan(struct flow *flow, struct flow_wildcards *wc)
+{
+    int n = flow_count_vlan_headers(flow);
+    if (n == 0) {
+        return;
+    }
+    if (wc) {
+        memset(&wc->masks.vlans[1], 0xff,
+               sizeof(union flow_vlan_hdr) * (n - 1));
+    }
+    memmove(&flow->vlans[0], &flow->vlans[1],
+            sizeof(union flow_vlan_hdr) * (n - 1));
+    memset(&flow->vlans[n - 1], 0, sizeof(union flow_vlan_hdr));
+}
+
+void
+flow_push_vlan_uninit(struct flow *flow, struct flow_wildcards *wc)
+{
+    if (wc) {
+        int n = flow_count_vlan_headers(flow);
+        memset(wc->masks.vlans, 0xff, sizeof(union flow_vlan_hdr) * n);
+    }
+    memmove(&flow->vlans[1], &flow->vlans[0],
+            sizeof(union flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
+    memset(&flow->vlans[0], 0, sizeof(union flow_vlan_hdr));
 }
 
 /* Returns the number of MPLS LSEs present in 'flow'
@@ -2136,7 +2329,7 @@ flow_push_mpls(struct flow *flow, int n, ovs_be16 mpls_eth_type,
 
         if (clear_flow_L3) {
             /* Clear all L3 and L4 fields and dp_hash. */
-            BUILD_ASSERT(FLOW_WC_SEQ == 36);
+            BUILD_ASSERT(FLOW_WC_SEQ == 38);
             memset((char *) flow + FLOW_SEGMENT_2_ENDS_AT, 0,
                    sizeof(struct flow) - FLOW_SEGMENT_2_ENDS_AT);
             flow->dp_hash = 0;
@@ -2366,8 +2559,11 @@ flow_compose(struct dp_packet *p, const struct flow *flow)
         return;
     }
 
-    if (flow->vlan_tci & htons(VLAN_CFI)) {
-        eth_push_vlan(p, htons(ETH_TYPE_VLAN), flow->vlan_tci);
+    for (int encaps = FLOW_MAX_VLAN_HEADERS - 1; encaps >= 0; encaps--) {
+        if (flow->vlans[encaps].tci & htons(VLAN_CFI)) {
+            eth_push_vlan(p, flow->vlans[encaps].tpid,
+                          flow->vlans[encaps].tci);
+        }
     }
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {
@@ -2687,4 +2883,14 @@ minimask_has_extra(const struct minimask *a, const struct minimask *b)
     }
 
     return false;
+}
+
+void
+flow_limit_vlans(int vlan_limit)
+{
+    if (vlan_limit <= 0) {
+        flow_vlan_limit = FLOW_MAX_VLAN_HEADERS;
+    } else {
+        flow_vlan_limit = MIN(vlan_limit, FLOW_MAX_VLAN_HEADERS);
+    }
 }
