@@ -997,8 +997,7 @@ nbctl_ls_sfc_add(struct ctl_context *ctx)
     struct nbrec_logical_sfc  **new_sfc = 
             xmalloc( sizeof *new_sfc * (lswitch->n_sfcs + 1));
     memcpy(new_sfc, lswitch->sfcs, 
-              sizeof *new_sfc * 
-              lswitch->n_sfcs);
+              sizeof *new_sfc * lswitch->n_sfcs);
     new_sfc[lswitch->n_sfcs] = 
               CONST_CAST(struct nbrec_logical_sfc *, ls_sfc);
     nbrec_logical_switch_set_sfcs(lswitch, 
@@ -4270,17 +4269,17 @@ static const struct ctl_command_syntax nbctl_commands[] = {
       nbctl_ls_sfc_list, NULL, "", RO },
   
     /* ls-vpc commands. */
-    { "ls-vnf-add", 4, 5, 
+    { "ls-vnf-add", 5, 6, 
       "SWITCH, PORT-IN, PORT-OUT, TUNNEL_PORT, TUNNEL_TYPE [VNF]", NULL, 
       nbctl_ls_vnf_add,
       NULL, "--may-exist,--add-duplicate", RW },
-    { "ls-vpc-del", 1, 1, "VNF", NULL, nbctl_ls_vnf_del,
+    { "ls-vnf-del", 1, 1, "VNF", NULL, nbctl_ls_vnf_del,
       NULL, "--if-exists", RW },
-    { "ls-vpc-list", 0, 2, "[SWITCH [VNF]]", NULL, 
+    { "ls-vnf-list", 0, 2, "[SWITCH [VNF]]", NULL, 
       nbctl_ls_vnf_list, NULL, "", RO },
 
     /* ls-ami commands. */
-    { "ls-ami-add", 4, 5, 
+    { "ls-ami-add", 5, 6, 
       "SWITCH, PORT-IN, PORT-APP, TUNNEL_PORT, TUNNEL_TYPE [AMI]", NULL, 
       nbctl_ls_ami_add,
       NULL, "--may-exist,--add-duplicate", RW },
