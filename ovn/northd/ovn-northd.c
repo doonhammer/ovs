@@ -2892,7 +2892,8 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     const uint16_t egress_inner_priority = 150;
     const uint16_t egress_outer_priority = 100;
 
-    const uint16_t sfc_priority = 100;
+    const uint16_t sfc_priority_low = 100;
+    const uint16_t sfc_priority_high = 150;
 
     struct ovn_port *dst_port = NULL;
     struct ovn_port *src_port = NULL;
@@ -2936,28 +2937,35 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         in_port = ovn_port_find(ports,lami->inport->name);
         vnf_in_port = ovn_port_find(ports,lvnf->inport->name);
         vnf_out_port = ovn_port_find(ports,lvnf->outport->name);
-        /*
-        * TODO Check port exists. 
         
         struct eth_addr app_port_ea, in_port_ea, vnf_in_port_ea, vnf_out_port_ea;
-        ovs_be32 app_port_ip, in_port_ip, vnf_in_port_ip, vnf_out_port_ip;
-        ovs_scan(app_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                         ETH_ADDR_SCAN_ARGS(app_port_ea), IP_SCAN_ARGS(&app_port_ip));
-        ovs_scan(in_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                         ETH_ADDR_SCAN_ARGS(in_port_ea), IP_SCAN_ARGS(&in_port_ip));
-        ovs_scan(vnf_in_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                         ETH_ADDR_SCAN_ARGS(vnf_in_port_ea), IP_SCAN_ARGS(&vnf_in_port_ip));
-        ovs_scan(vnf_out_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                         ETH_ADDR_SCAN_ARGS(vnf_out_port_ea), IP_SCAN_ARGS(&vnf_out_port_ip));
-        */
+        //ovs_be32 app_port_ip, in_port_ip, vnf_in_port_ip, vnf_out_port_ip;
+        ovs_be32 app_port_ip;
+        ovs_scan(app_port->nbsp->addresses[0],  
+                         ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
+                         ETH_ADDR_SCAN_ARGS(app_port_ea),
+                         IP_SCAN_ARGS(&app_port_ip));
+        ovs_scan(in_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT,
+                         ETH_ADDR_SCAN_ARGS(in_port_ea));
+        ovs_scan(vnf_in_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT,
+                         ETH_ADDR_SCAN_ARGS(vnf_in_port_ea));
+        ovs_scan(vnf_out_port->nbsp->addresses[0],  ETH_ADDR_SCAN_FMT,
+                         ETH_ADDR_SCAN_ARGS(vnf_out_port_ea));
+        
 
         /*
         * Rule 1: If traffic entering application from VPC send to VNF
         */
         VLOG_WARN("Rule 1 for sfc %s",lsfc->name);
-        lsfc_match =  xasprintf("inport == %s",in_port->json_key);
+        //lsfc_match =  xasprintf("ip4.dst == "IP_FMT,
+        //                        IP_ARGS(app_port_ip));
+        // "eth.src = "ETH_ADDR_FMT"; "
+        //                "arp.sha = "ETH_ADDR_FMT"; ",
+        //                ETH_ADDR_ARGS(mac),
+        lsfc_match = xasprintf("eth.dst == "ETH_ADDR_FMT,
+                        ETH_ADDR_ARGS(app_port_ea));
         lsfc_action = xasprintf("outport = %s; output;",vnf_in_port->json_key);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority_low,
                        lsfc_match, lsfc_action);
         free(lsfc_match);
         free(lsfc_action);   
@@ -2967,7 +2975,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         VLOG_WARN("Rule 2 for sfc %s",lsfc->name);
         lsfc_match =  xasprintf("inport == %s",vnf_out_port->json_key);
         lsfc_action = xasprintf("outport = %s; output;",app_port->json_key);
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority,
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority_high,
                        lsfc_match, lsfc_action);
         free(lsfc_match);
         free(lsfc_action);
@@ -2975,9 +2983,14 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         * Rule 3: If incoming traffic from app output port deliver to final destination (next)
         */
         VLOG_WARN("Rule 3 for sfc %s",lsfc->name);
-        lsfc_match =  xasprintf("inport == %s",app_port->json_key);
-        lsfc_action = xasprintf("next;");
-        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority,
+
+        //lsfc_match =  xasprintf("ip4.src == "IP_FMT,
+        //                        IP_ARGS(app_port_ip));
+        lsfc_match = xasprintf("eth.src == "ETH_ADDR_FMT,
+                        ETH_ADDR_ARGS(app_port_ea));
+        lsfc_action = xasprintf("outport = %s; output;",in_port->json_key);
+        //lsfc_action = xasprintf("next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, sfc_priority_high,
                        lsfc_match, lsfc_action);
         free(lsfc_match);
         free(lsfc_action);  
