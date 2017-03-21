@@ -1553,7 +1553,7 @@ bridge_configure_stp(struct bridge *br, bool enable_stp)
                                           STP_DEFAULT_HELLO_TIME);
 
         br_s.max_age = smap_get_ullong(&br->cfg->other_config, "stp-max-age",
-                                       STP_DEFAULT_HELLO_TIME / 1000) * 1000;
+                                       STP_DEFAULT_MAX_AGE / 1000) * 1000;
         br_s.fwd_delay = smap_get_ullong(&br->cfg->other_config,
                                          "stp-forward-delay",
                                          STP_DEFAULT_FWD_DELAY / 1000) * 1000;
@@ -2483,7 +2483,7 @@ port_refresh_stp_status(struct port *port)
 
     /* Set Status column. */
     smap_init(&smap);
-    smap_add_format(&smap, "stp_port_id", STP_PORT_ID_FMT, status.port_id);
+    smap_add_format(&smap, "stp_port_id", "%d", status.port_id);
     smap_add(&smap, "stp_state", stp_state_name(status.state));
     smap_add_format(&smap, "stp_sec_in_state", "%u", status.sec_in_state);
     smap_add(&smap, "stp_role", stp_role_name(status.role));
