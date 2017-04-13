@@ -1389,6 +1389,15 @@ join_logical_ports(struct northd_context *ctx,
                                      "on L3 gateway router", nbrp->name);
                         continue;
                     }
+                    if (od->l3dgw_port || od->l3redirect_port) {
+                        static struct vlog_rate_limit rl
+                            = VLOG_RATE_LIMIT_INIT(1, 1);
+                        VLOG_WARN_RL(&rl, "Bad configuration: multiple ports "
+                                     "with redirect-chassis on same logical "
+                                     "router %s", od->nbr->name);
+                        continue;
+                    }
+
                     char *redirect_name = chassis_redirect_name(nbrp->name);
                     struct ovn_port *crp = ovn_port_find(ports, redirect_name);
                     if (crp) {
@@ -1407,17 +1416,8 @@ join_logical_ports(struct northd_context *ctx,
 
                     /* Set l3dgw_port and l3redirect_port in od, for later
                      * use during flow creation. */
-                    if (od->l3dgw_port || od->l3redirect_port) {
-                        static struct vlog_rate_limit rl
-                            = VLOG_RATE_LIMIT_INIT(1, 1);
-                        VLOG_WARN_RL(&rl, "Bad configuration: multiple ports "
-                                     "with redirect-chassis on same logical "
-                                     "router %s", od->nbr->name);
-                        continue;
-                    } else {
-                        od->l3dgw_port = op;
-                        od->l3redirect_port = crp;
-                    }
+                    od->l3dgw_port = op;
+                    od->l3redirect_port = crp;
                 }
             }
         }
@@ -1513,26 +1513,37 @@ get_router_load_balancer_ips(const struct ovn_datapath *od,
     }
 }
 
-/* Returns a string consisting of the port's MAC address followed by the
- * external IP addresses of all NAT rules defined on that router and the
- * VIPs of all load balancers defined on that router.
+/* Returns an array of strings, each consisting of a MAC address followed
+ * by one or more IP addresses, and if the port is a distributed gateway
+ * port, followed by 'is_chassis_resident("LPORT_NAME")', where the
+ * LPORT_NAME is the name of the L3 redirect port or the name of the
+ * logical_port specified in a NAT rule.  These strings include the
+ * external IP addresses of all NAT rules defined on that router, and all
+ * of the IP addresses used in load balancer VIPs defined on that router.
  *
- * The caller must free the returned string with free(). */
-static char *
-get_nat_addresses(const struct ovn_port *op)
+ * The caller must free each of the n returned strings with free(),
+ * and must free the returned array when it is no longer needed. */
+static char **
+get_nat_addresses(const struct ovn_port *op, size_t *n)
 {
+    size_t n_nats = 0;
     struct eth_addr mac;
     if (!op->nbrp || !op->od || !op->od->nbr
         || (!op->od->nbr->n_nat && !op->od->nbr->n_load_balancer)
         || !eth_addr_from_string(op->nbrp->mac, &mac)) {
+        *n = n_nats;
         return NULL;
     }
 
-    struct ds addresses = DS_EMPTY_INITIALIZER;
-    ds_put_format(&addresses, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+    struct ds c_addresses = DS_EMPTY_INITIALIZER;
+    ds_put_format(&c_addresses, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+    bool central_ip_address = false;
+
+    char **addresses;
+    addresses = xmalloc(sizeof *addresses * (op->od->nbr->n_nat + 1));
 
     /* Get NAT IP addresses. */
-    for (int i = 0; i < op->od->nbr->n_nat; i++) {
+    for (size_t i = 0; i < op->od->nbr->n_nat; i++) {
         const struct nbrec_nat *nat = op->od->nbr->nat[i];
         ovs_be32 ip, mask;
 
@@ -1541,7 +1552,26 @@ get_nat_addresses(const struct ovn_port *op)
             free(error);
             continue;
         }
-        ds_put_format(&addresses, " %s", nat->external_ip);
+
+        /* Determine whether this NAT rule satisfies the conditions for
+         * distributed NAT processing. */
+        if (op->od->l3redirect_port && !strcmp(nat->type, "dnat_and_snat")
+            && nat->logical_port && nat->external_mac) {
+            /* Distributed NAT rule. */
+            if (eth_addr_from_string(nat->external_mac, &mac)) {
+                struct ds address = DS_EMPTY_INITIALIZER;
+                ds_put_format(&address, ETH_ADDR_FMT, ETH_ADDR_ARGS(mac));
+                ds_put_format(&address, " %s", nat->external_ip);
+                ds_put_format(&address, " is_chassis_resident(\"%s\")",
+                              nat->logical_port);
+                addresses[n_nats++] = ds_steal_cstr(&address);
+            }
+        } else {
+            /* Centralized NAT rule, either on gateway router or distributed
+             * router. */
+            ds_put_format(&c_addresses, " %s", nat->external_ip);
+            central_ip_address = true;
+        }
     }
 
     /* A set to hold all load-balancer vips. */
@@ -1550,11 +1580,25 @@ get_nat_addresses(const struct ovn_port *op)
 
     const char *ip_address;
     SSET_FOR_EACH (ip_address, &all_ips) {
-        ds_put_format(&addresses, " %s", ip_address);
+        ds_put_format(&c_addresses, " %s", ip_address);
+        central_ip_address = true;
     }
     sset_destroy(&all_ips);
 
-    return ds_steal_cstr(&addresses);
+    if (central_ip_address) {
+        /* Gratuitous ARP for centralized NAT rules on distributed gateway
+         * ports should be restricted to the "redirect-chassis". */
+        if (op->od->l3redirect_port) {
+            ds_put_format(&c_addresses, " is_chassis_resident(%s)",
+                          op->od->l3redirect_port->json_key);
+        }
+
+        addresses[n_nats++] = ds_steal_cstr(&c_addresses);
+    }
+
+    *n = n_nats;
+
+    return addresses;
 }
 
 static void
@@ -1643,30 +1687,46 @@ ovn_port_update_sbrec(const struct ovn_port *op,
             if (chassis) {
                 smap_add(&new, "l3gateway-chassis", chassis);
             }
+            sbrec_port_binding_set_options(op->sb, &new);
+            smap_destroy(&new);
 
             const char *nat_addresses = smap_get(&op->nbsp->options,
                                            "nat-addresses");
             if (nat_addresses && !strcmp(nat_addresses, "router")) {
-                if (op->peer && op->peer->nbrp) {
-                    char *nats = get_nat_addresses(op->peer);
-                    if (nats) {
-                        smap_add(&new, "nat-addresses", nats);
+                if (op->peer && op->peer->od
+                    && (chassis || op->peer->od->l3redirect_port)) {
+                    size_t n_nats;
+                    char **nats = get_nat_addresses(op->peer, &n_nats);
+                    if (n_nats) {
+                        sbrec_port_binding_set_nat_addresses(op->sb,
+                            (const char **) nats, n_nats);
+                        for (size_t i = 0; i < n_nats; i++) {
+                            free(nats[i]);
+                        }
                         free(nats);
+                    } else {
+                        sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
                     }
+                } else {
+                    sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
                 }
-            } else if (nat_addresses) {
+            /* Only accept manual specification of ethernet address
+             * followed by IPv4 addresses on type "l3gateway" ports. */
+            } else if (nat_addresses && chassis) {
                 struct lport_addresses laddrs;
                 if (!extract_lsp_addresses(nat_addresses, &laddrs)) {
                     static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 1);
                     VLOG_WARN_RL(&rl, "Error extracting nat-addresses.");
+                    sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
                 } else {
-                    smap_add(&new, "nat-addresses", nat_addresses);
+                    sbrec_port_binding_set_nat_addresses(op->sb,
+                                                         &nat_addresses, 1);
                     destroy_lport_addresses(&laddrs);
                 }
+            } else {
+                sbrec_port_binding_set_nat_addresses(op->sb, NULL, 0);
             }
-            sbrec_port_binding_set_options(op->sb, &new);
-            smap_destroy(&new);
         }
         sbrec_port_binding_set_parent_port(op->sb, op->nbsp->parent_name);
         sbrec_port_binding_set_tag(op->sb, op->nbsp->tag, op->nbsp->n_tag);
@@ -2284,11 +2344,9 @@ build_dhcpv4_action(struct ovn_port *op, ovs_be32 offer_ip,
         &op->nbsp->dhcpv4_options->options, "server_mac");
     const char *lease_time = smap_get(
         &op->nbsp->dhcpv4_options->options, "lease_time");
-    const char *router = smap_get(
-            &op->nbsp->dhcpv4_options->options, "router");
 
-    if (!(server_ip && server_mac && lease_time && router)) {
-        /* "server_id", "server_mac", "lease_time" and "router" should be
+    if (!(server_ip && server_mac && lease_time)) {
+        /* "server_id", "server_mac" and "lease_time" should be
          * present in the dhcp_options. */
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
         VLOG_WARN_RL(&rl, "Required DHCPv4 options not defined for lport - %s",
@@ -2831,9 +2889,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
                 &od->nbs->ports[i]->dhcpv4_options->options, "server_mac");
             const char *lease_time = smap_get(
                 &od->nbs->ports[i]->dhcpv4_options->options, "lease_time");
-            const char *router = smap_get(
-                &od->nbs->ports[i]->dhcpv4_options->options, "router");
-            if (server_id && server_mac && lease_time && router) {
+            if (server_id && server_mac && lease_time) {
                 struct ds match = DS_EMPTY_INITIALIZER;
                 const char *actions =
                     has_stateful ? "ct_commit; next;" : "next;";
@@ -5950,6 +6006,8 @@ main(int argc, char *argv[])
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_type);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_options);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_port_binding_col_mac);
+    add_column_noalert(ovnsb_idl_loop.idl,
+                       &sbrec_port_binding_col_nat_addresses);
     ovsdb_idl_add_column(ovnsb_idl_loop.idl, &sbrec_port_binding_col_chassis);
     ovsdb_idl_add_table(ovnsb_idl_loop.idl, &sbrec_table_mac_binding);
     add_column_noalert(ovnsb_idl_loop.idl, &sbrec_mac_binding_col_datapath);

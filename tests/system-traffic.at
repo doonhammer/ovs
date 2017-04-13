@@ -1524,6 +1524,59 @@ NS_CHECK_EXEC([at_ns0], [ping -s 3200 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([conntrack - IPv4 fragmentation + cvlan])
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_FRAG()
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24")
+ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
+
+ADD_SVLAN(p0, at_ns0, 4094, "10.255.2.1/24")
+ADD_SVLAN(p1, at_ns1, 4094, "10.255.2.2/24")
+
+ADD_CVLAN(p0.4094, at_ns0, 100, "10.2.2.1/24")
+ADD_CVLAN(p1.4094, at_ns1, 100, "10.2.2.2/24")
+
+dnl Sending ping through conntrack
+AT_DATA([flows.txt], [dnl
+priority=1,action=drop
+priority=10,arp,action=normal
+priority=100,in_port=1,icmp,action=ct(commit,zone=9),2
+priority=100,in_port=2,ct_state=-trk,icmp,action=ct(table=0,zone=9)
+priority=100,in_port=2,ct_state=+trk+est-new,icmp,action=1
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.2.2.2])
+
+dnl Ipv4 fragmentation connectivity check.
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv4 fragmentation connectivity check. (outer svlan)
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.255.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv4 larger fragmentation connectivity check.
+NS_CHECK_EXEC([at_ns0], [ping -s 3200 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv4 larger fragmentation connectivity check. (outer svlan)
+NS_CHECK_EXEC([at_ns0], [ping -s 3200 -q -c 3 -i 0.3 -w 2 10.255.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
 AT_SETUP([conntrack - IPv6 fragmentation])
 CHECK_CONNTRACK()
 CHECK_CONNTRACK_FRAG()
@@ -1642,6 +1695,60 @@ NS_CHECK_EXEC([at_ns0], [ping6 -s 1600 -q -c 3 -i 0.3 -w 2 fc00:1::4 | FORMAT_PI
 
 dnl Ipv4 larger fragmentation connectivity check.
 NS_CHECK_EXEC([at_ns0], [ping6 -s 3200 -q -c 3 -i 0.3 -w 2 fc00:1::4 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([conntrack - IPv6 fragmentation + cvlan])
+CHECK_CONNTRACK()
+CHECK_CONNTRACK_FRAG()
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "fc00::1/96")
+ADD_VETH(p1, at_ns1, br0, "fc00::2/96")
+
+ADD_SVLAN(p0, at_ns0, 4094, "fc00:ffff::3/96")
+ADD_SVLAN(p1, at_ns1, 4094, "fc00:ffff::4/96")
+
+ADD_CVLAN(p0.4094, at_ns0, 100, "fc00:1::3/96")
+ADD_CVLAN(p1.4094, at_ns1, 100, "fc00:1::4/96")
+
+dnl Sending ping through conntrack
+AT_DATA([flows.txt], [dnl
+priority=1,action=drop
+priority=10,in_port=1,ipv6,action=ct(commit,zone=9),2
+priority=10,in_port=2,ct_state=-trk,ipv6,action=ct(table=0,zone=9)
+priority=10,in_port=2,ct_state=+trk+est-new,ipv6,action=1
+priority=100,icmp6,icmp_type=135,action=normal
+priority=100,icmp6,icmp_type=136,action=normal
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping6 -c 1 fc00:1::4])
+
+dnl Ipv6 fragmentation connectivity check.
+NS_CHECK_EXEC([at_ns0], [ping6 -s 1600 -q -c 3 -i 0.3 -w 2 fc00:1::4 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv6 fragmentation connectivity check. (outer svlan)
+NS_CHECK_EXEC([at_ns0], [ping6 -s 1600 -q -c 3 -i 0.3 -w 2 fc00:ffff::4 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv6 larger fragmentation connectivity check.
+NS_CHECK_EXEC([at_ns0], [ping6 -s 3200 -q -c 3 -i 0.3 -w 2 fc00:1::4 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl Ipv6 larger fragmentation connectivity check. (outer svlan)
+NS_CHECK_EXEC([at_ns0], [ping6 -s 3200 -q -c 3 -i 0.3 -w 2 fc00:ffff::4 | FORMAT_PING], [0], [dnl
 3 packets transmitted, 3 received, 0% packet loss, time 0ms
 ])
 
@@ -2937,7 +3044,7 @@ dnl Non-REPLY/RELATED packets get the ACL lookup with the packet headers
 dnl in the actual packet direction in reg0 (IN=1, OUT=2).  REPLY packets
 dnl get the ACL lookup using the conntrack tuple and the inverted direction.
 dnl RELATED packets get ACL lookup using the conntrack tuple in the direction
-dnl of the master connection, as storted in ct_mark.
+dnl of the master connection, as stored in ct_label[0].
 dnl
 dnl Incoming non-related packet in the original direction (ACL IN)
 table=1 reg3=1, ip, ct_state=-rel-rpl+trk-inv action=set_field:1->reg0,resubmit(,3),goto_table:5
@@ -2949,7 +3056,7 @@ dnl Outgoing non-related reply packet (CT ACL IN)
 table=1 reg3=2, ip, ct_state=-rel+rpl+trk-inv action=set_field:1->reg0,resubmit(,3,ct),goto_table:4
 dnl
 dnl Related packet (CT ACL in the direction of the master connection.)
-table=1 ip, ct_state=+rel+trk-inv, action=move:NXM_NX_CT_MARK[[]]->NXM_NX_REG0[[]],resubmit(,3,ct),goto_table:4
+table=1 ip, ct_state=+rel+trk-inv, action=move:NXM_NX_CT_LABEL[[0]]->NXM_NX_REG0[[0]],resubmit(,3,ct),goto_table:4
 dnl Drop everything else.
 table=1 priority=0, action=drop
 dnl
@@ -2981,15 +3088,15 @@ table=5 reg2=0 priority=1000 action=drop
 dnl
 dnl Commit new incoming FTP control connections with SNAT range.  Must match on
 dnl 'tcp' when setting 'alg=ftp'.  Store the directionality of non-related
-dnl connections to ct_mark.  Store the rule ID to labels.
-table=5 priority=100 reg2=1 reg3=1 ct_state=+new-rel, tcp, tp_dst=21, action=ct(zone=NXM_NX_REG4[[0..15]],alg=ftp,commit,nat(src=$2),exec(move:NXM_NX_REG3[[0..31]]->NXM_NX_CT_MARK[[0..31]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
+dnl connections to ct_label[0]  Store the rule ID to ct_label[96..127].
+table=5 priority=100 reg2=1 reg3=1 ct_state=+new-rel, tcp, tp_dst=21, action=ct(zone=NXM_NX_REG4[[0..15]],alg=ftp,commit,nat(src=$2),exec(move:NXM_NX_REG3[[0]]->NXM_NX_CT_LABEL[[0]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
 dnl Commit other new incoming non-related IP connections with SNAT range.
-table=5 priority=10 reg2=1 reg3=1 ct_state=+new-rel, ip, action=ct(zone=NXM_NX_REG4[[0..15]],commit,nat(src=$2),exec(move:NXM_NX_REG3[[0..31]]->NXM_NX_CT_MARK[[0..31]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
+table=5 priority=10 reg2=1 reg3=1 ct_state=+new-rel, ip, action=ct(zone=NXM_NX_REG4[[0..15]],commit,nat(src=$2),exec(move:NXM_NX_REG3[[0]]->NXM_NX_CT_LABEL[[0]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
 dnl Commit non-related outgoing new IP connections with DNAT range.
 dnl (This should not get any packets in this test.)
-table=5 priority=10 reg2=1 reg3=2 ct_state=+new-rel, ip, action=ct(zone=NXM_NX_REG4[[0..15]],commit,nat(dst=$2),exec(move:NXM_NX_REG3[[0..31]]->NXM_NX_CT_MARK[[0..31]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
+table=5 priority=10 reg2=1 reg3=2 ct_state=+new-rel, ip, action=ct(zone=NXM_NX_REG4[[0..15]],commit,nat(dst=$2),exec(move:NXM_NX_REG3[[0]]->NXM_NX_CT_LABEL[[0]],move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
 dnl Commit new related connections in either direction, which need 'nat'
-dnl and which inherit the mark (the direction of the original direction
+dnl and which inherit the label (the direction of the original direction
 dnl master tuple) from the master connection.
 table=5 priority=10 reg2=1 ct_state=+new+rel, ip, action=ct(zone=NXM_NX_REG4[[0..15]],commit,nat,exec(move:NXM_NX_REG1[[0..31]]->NXM_NX_CT_LABEL[[96..127]])),goto_table:6
 dnl
@@ -3015,8 +3122,8 @@ table=10 priority=100 arp xreg0=0 action=normal
 table=10 priority=10,arp,arp_op=1,action=load:2->OXM_OF_ARP_OP[[]],move:OXM_OF_ARP_SHA[[]]->OXM_OF_ARP_THA[[]],move:OXM_OF_PKT_REG0[[0..47]]->OXM_OF_ARP_SHA[[]],move:OXM_OF_ARP_SPA[[]]->OXM_OF_ARP_TPA[[]],move:NXM_NX_REG2[[]]->OXM_OF_ARP_SPA[[]],move:NXM_OF_ETH_SRC[[]]->NXM_OF_ETH_DST[[]],move:OXM_OF_PKT_REG0[[0..47]]->NXM_OF_ETH_SRC[[]],move:NXM_OF_IN_PORT[[]]->NXM_NX_REG3[[0..15]],load:0->NXM_OF_IN_PORT[[]],output:NXM_NX_REG3[[0..15]]
 table=10 priority=0 action=drop
 ], [dnl
-tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=$2,sport=<cleared>,dport=<cleared>),zone=1,mark=1,labels=0x4d2000000000000000000000000,protoinfo=(state=<cleared>),helper=ftp
-tcp,orig=(src=10.1.1.2,dst=$2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),zone=1,mark=1,labels=0x4d2000000000000000000000000,protoinfo=(state=<cleared>)
+tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=$2,sport=<cleared>,dport=<cleared>),zone=1,labels=0x4d2000000000000000000000001,protoinfo=(state=<cleared>),helper=ftp
+tcp,orig=(src=10.1.1.2,dst=$2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),zone=1,labels=0x4d2000000000000000000000001,protoinfo=(state=<cleared>)
 ])
 ])
 
@@ -3365,4 +3472,209 @@ ovs-ofctl -O OpenFlow15 dump-flows br0
 ovs-ofctl -O OpenFlow15 dump-group-stats br0
 
 OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_BANNER([802.1ad])
+
+AT_SETUP([802.1ad - vlan_limit])
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24")
+ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
+
+ADD_SVLAN(p0, at_ns0, 4094, "10.255.2.1/24")
+ADD_SVLAN(p1, at_ns1, 4094, "10.255.2.2/24")
+
+ADD_CVLAN(p0.4094, at_ns0, 100, "10.2.2.1/24")
+ADD_CVLAN(p1.4094, at_ns1, 100, "10.2.2.2/24")
+
+AT_CHECK([ovs-ofctl add-flow br0 "priority=1 action=normal"])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.2.2.2])
+
+dnl CVLAN traffic should match the flow and drop
+AT_CHECK([ovs-appctl revalidator/purge])
+AT_CHECK([ovs-vsctl set Open_vSwitch . other_config:vlan-limit=1])
+AT_CHECK([ovs-ofctl add-flow br0 "priority=100 dl_type=0x8100 action=drop"])
+NS_CHECK_EXEC([at_ns0], [ping -q -c 1 -w 3 10.2.2.2], [1], [ignore])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+
+AT_SETUP([802.1ad - push/pop outer 802.1ad])
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_BR([br1])
+ADD_BR([br2])
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+AT_CHECK([ip link add ovs-p0 type veth peer name ovs-p1])
+AT_CHECK([ip link set dev ovs-p0 up])
+AT_CHECK([ip link set dev ovs-p1 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p0])
+AT_CHECK([ovs-vsctl add-port br1 ovs-p1])
+on_exit 'ip link del ovs-p0'
+
+AT_CHECK([ip link add ovs-p2 type veth peer name ovs-p3])
+AT_CHECK([ip link set dev ovs-p2 up])
+AT_CHECK([ip link set dev ovs-p3 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p2])
+AT_CHECK([ovs-vsctl add-port br2 ovs-p3])
+on_exit 'ip link del ovs-p2'
+
+ADD_VETH(p4, at_ns0, br1, "10.1.1.1/24")
+ADD_VETH(p5, at_ns1, br2, "10.1.1.2/24")
+ADD_CVLAN(p4, at_ns0, 100, "10.2.2.1/24")
+ADD_CVLAN(p5, at_ns1, 100, "10.2.2.2/24")
+
+AT_DATA([flows-br0.txt], [dnl
+priority=1 action=drop
+priority=100 in_port=1 action=push_vlan:0x88a8,mod_vlan_vid=4094,output:2
+priority=100 in_port=2 action=push_vlan:0x88a8,mod_vlan_vid=4094,output:1
+])
+
+AT_DATA([flows-customer-br.txt], [dnl
+priority=1 action=normal
+priority=100 in_port=1 vlan_tci=0x1000/0x1000 action=pop_vlan,normal
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows-br0.txt])
+AT_CHECK([ovs-ofctl --bundle add-flows br1 flows-customer-br.txt])
+AT_CHECK([ovs-ofctl --bundle add-flows br2 flows-customer-br.txt])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.2.2.2])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+
+AT_SETUP([802.1ad - push/pop outer 802.1q])
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_BR([br1])
+ADD_BR([br2])
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+AT_CHECK([ip link add ovs-p0 type veth peer name ovs-p1])
+AT_CHECK([ip link set dev ovs-p0 up])
+AT_CHECK([ip link set dev ovs-p1 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p0])
+AT_CHECK([ovs-vsctl add-port br1 ovs-p1])
+on_exit 'ip link del ovs-p0'
+
+AT_CHECK([ip link add ovs-p2 type veth peer name ovs-p3])
+AT_CHECK([ip link set dev ovs-p2 up])
+AT_CHECK([ip link set dev ovs-p3 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p2])
+AT_CHECK([ovs-vsctl add-port br2 ovs-p3])
+on_exit 'ip link del ovs-p2'
+
+ADD_VETH(p4, at_ns0, br1, "10.1.1.1/24")
+ADD_VETH(p5, at_ns1, br2, "10.1.1.2/24")
+ADD_CVLAN(p4, at_ns0, 100, "10.2.2.1/24")
+ADD_CVLAN(p5, at_ns1, 100, "10.2.2.2/24")
+
+AT_DATA([flows-br0.txt], [dnl
+priority=1 action=drop
+priority=100 in_port=1 action=push_vlan:0x8100,mod_vlan_vid=4094,output:2
+priority=100 in_port=2 action=push_vlan:0x8100,mod_vlan_vid=4094,output:1
+])
+
+AT_DATA([flows-customer-br.txt], [dnl
+priority=1 action=normal
+priority=100 in_port=1 vlan_tci=0x1000/0x1000 action=pop_vlan,normal
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows-br0.txt])
+AT_CHECK([ovs-ofctl --bundle add-flows br1 flows-customer-br.txt])
+AT_CHECK([ovs-ofctl --bundle add-flows br2 flows-customer-br.txt])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.2.2.2])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+
+AT_SETUP([802.1ad - 802.1q tunnel])
+OVS_TRAFFIC_VSWITCHD_START([set Open_vSwitch . other_config:vlan-limit=0])
+OVS_CHECK_8021AD()
+
+ADD_BR([br1])
+ADD_BR([br2])
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+AT_CHECK([ip link add ovs-p0 type veth peer name ovs-p1])
+AT_CHECK([ip link set dev ovs-p0 up])
+AT_CHECK([ip link set dev ovs-p1 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p0])
+AT_CHECK([ovs-vsctl add-port br1 ovs-p1])
+on_exit 'ip link del ovs-p0'
+
+AT_CHECK([ip link add ovs-p2 type veth peer name ovs-p3])
+AT_CHECK([ip link set dev ovs-p2 up])
+AT_CHECK([ip link set dev ovs-p3 up])
+AT_CHECK([ovs-vsctl add-port br0 ovs-p2])
+AT_CHECK([ovs-vsctl add-port br2 ovs-p3])
+on_exit 'ip link del ovs-p2'
+
+ADD_VETH(p4, at_ns0, br1, "10.1.1.1/24")
+ADD_VETH(p5, at_ns1, br2, "10.1.1.2/24")
+ADD_CVLAN(p4, at_ns0, 100, "10.2.2.1/24")
+ADD_CVLAN(p5, at_ns1, 100, "10.2.2.2/24")
+ADD_CVLAN(p4, at_ns0, 200, "10.3.2.1/24")
+ADD_CVLAN(p5, at_ns1, 200, "10.3.2.2/24")
+ADD_CVLAN(p4, at_ns0, 300, "10.4.2.1/24")
+ADD_CVLAN(p5, at_ns1, 300, "10.4.2.2/24")
+
+AT_CHECK([ovs-ofctl add-flow br0 action=normal])
+AT_CHECK([ovs-ofctl add-flow br1 action=normal])
+AT_CHECK([ovs-ofctl add-flow br2 action=normal])
+AT_CHECK([ovs-vsctl set port ovs-p0 vlan_mode=dot1q-tunnel tag=4094 cvlans=100,200])
+AT_CHECK([ovs-vsctl set port ovs-p2 vlan_mode=dot1q-tunnel tag=4094 cvlans=100,200])
+
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.2.2.2])
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping -c 1 10.3.2.2])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.3.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.2.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+NS_CHECK_EXEC([at_ns0], [ping -s 1600 -q -c 3 -i 0.3 -w 2 10.3.2.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+dnl CVLAN 300 is not permitted by dot1q-tunnel
+NS_CHECK_EXEC([at_ns0], [ping -q -c 1 -w 3 10.4.2.2], [1], [ignore])
+
+OVS_TRAFFIC_VSWITCHD_STOP(["/dropping VLAN \(0\|300\) packet received on dot1q-tunnel port/d"])
 AT_CLEANUP

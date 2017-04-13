@@ -1352,11 +1352,14 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
 
     /* Handle the packets individually in order of arrival.
      *
-     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, and SLOW_BFD, translation is what
-     *     processes received packets for these protocols.
+     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, SLOW_BFD, and SLOW_LLDP,
+     *     translation is what processes received packets for these
+     *     protocols.
      *
      *   - For SLOW_CONTROLLER, translation sends the packet to the OpenFlow
      *     controller.
+     *
+     *   - For SLOW_ACTION, translation executes the actions directly.
      *
      * The loop fills 'ops' with an array of operations to execute in the
      * datapath. */
@@ -1404,7 +1407,7 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
             ovs_mutex_lock(&ukey->mutex);
             if (ops[i].dop.error) {
                 transition_ukey(ukey, UKEY_EVICTED);
-            } else {
+            } else if (ukey->state < UKEY_OPERATIONAL) {
                 transition_ukey(ukey, UKEY_OPERATIONAL);
             }
             ovs_mutex_unlock(&ukey->mutex);
@@ -1947,6 +1950,10 @@ revalidate_ukey__(struct udpif *udpif, const struct udpif_key *ukey,
         goto exit;
     }
     xoutp = &ctx.xout;
+
+    if (xoutp->avoid_caching) {
+        goto exit;
+    }
 
     if (xoutp->slow) {
         ofpbuf_clear(odp_actions);

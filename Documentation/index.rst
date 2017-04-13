@@ -61,6 +61,7 @@ vSwitch? Start here.
   :doc:`intro/install/dpdk`
 
 - **Tutorials:** :doc:`tutorials/ovs-advanced` |
+  :doc:`tutorials/ovn-sandbox`
 
 Deeper Dive
 -----------
@@ -107,7 +108,8 @@ Learn more about the Open vSwitch project and about how you can contribute:
   :doc:`internals/committer-grant-revocation`
 
 - **Documentation:** :doc:`internals/contributing/documentation-style` |
-  :doc:`Building Open vSwitch Documentation <intro/install/documentation>`
+  :doc:`Building Open vSwitch Documentation <intro/install/documentation>` |
+  :doc:`internals/documentation`
 
 Getting Help
 -------------

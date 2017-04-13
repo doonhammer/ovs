@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,9 +94,11 @@ struct ofbundle {
     /* Configuration. */
     struct ovs_list ports;      /* Contains "struct ofport"s. */
     enum port_vlan_mode vlan_mode; /* VLAN mode */
+    uint16_t qinq_ethtype;
     int vlan;                   /* -1=trunk port, else a 12-bit VLAN ID. */
     unsigned long *trunks;      /* Bitmap of trunked VLANs, if 'vlan' == -1.
                                  * NULL if all VLANs are trunked. */
+    unsigned long *cvlans;
     struct lacp *lacp;          /* LACP if LACP is enabled, otherwise NULL. */
     struct bond *bond;          /* Nonnull iff more than one port. */
     bool use_priority_tags;     /* Use 802.1p tag for frames in VLAN 0? */
@@ -449,8 +451,9 @@ type_run(const char *type)
 
             HMAP_FOR_EACH (bundle, hmap_node, &ofproto->bundles) {
                 xlate_bundle_set(ofproto, bundle, bundle->name,
-                                 bundle->vlan_mode, bundle->vlan,
-                                 bundle->trunks, bundle->use_priority_tags,
+                                 bundle->vlan_mode, bundle->qinq_ethtype,
+                                 bundle->vlan, bundle->trunks, bundle->cvlans,
+                                 bundle->use_priority_tags,
                                  bundle->bond, bundle->lacp,
                                  bundle->floodable, bundle->protected);
             }
@@ -947,6 +950,41 @@ check_variable_length_userdata(struct dpif_backer *backer)
     }
 }
 
+/* Tests number of 802.1q VLAN headers supported by 'backer''s datapath.
+ *
+ * Returns the number of elements in a struct flow's vlan
+ * if the datapath supports at least that many VLAN headers. */
+static size_t
+check_max_vlan_headers(struct dpif_backer *backer)
+{
+    struct flow flow;
+    struct odp_flow_key_parms odp_parms = {
+        .flow = &flow,
+        .probe = true,
+    };
+    int n;
+
+    memset(&flow, 0, sizeof flow);
+    flow.dl_type = htons(ETH_TYPE_IP);
+    for (n = 0; n < FLOW_MAX_VLAN_HEADERS; n++) {
+        struct odputil_keybuf keybuf;
+        struct ofpbuf key;
+
+        flow_push_vlan_uninit(&flow, NULL);
+        flow.vlans[0].tpid = htons(ETH_TYPE_VLAN);
+        flow.vlans[0].tci = htons(1) | htons(VLAN_CFI);
+
+        ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);
+        odp_flow_key_from_flow(&odp_parms, &key);
+        if (!dpif_probe_feature(backer->dpif, "VLAN", &key, NULL, NULL)) {
+            break;
+        }
+    }
+
+    VLOG_INFO("%s: VLAN header stack length probed as %d",
+              dpif_name(backer->dpif), n);
+    return n;
+}
 /* Tests the MPLS label stack depth supported by 'backer''s datapath.
  *
  * Returns the number of elements in a struct flow's mpls_lse field
@@ -1254,6 +1292,7 @@ check_support(struct dpif_backer *backer)
 
     /* Actions. */
     backer->support.odp.recirc = check_recirc(backer);
+    backer->support.odp.max_vlan_headers = check_max_vlan_headers(backer);
     backer->support.odp.max_mpls_depth = check_max_mpls_depth(backer);
     backer->support.masked_set_action = check_masked_set_action(backer);
     backer->support.trunc = check_trunc_action(backer);
@@ -2502,10 +2541,8 @@ get_stp_port_status(struct ofport *ofport_,
     }
 
     s->enabled = true;
-    s->port_id = stp_port_get_id(sp);
-    s->state = stp_port_get_state(sp);
+    stp_port_get_status(sp, &s->port_id, &s->state, &s->role);
     s->sec_in_state = (time_msec() - ofport->stp_state_entered) / 1000;
-    s->role = stp_port_get_role(sp);
 
     return 0;
 }
@@ -2820,6 +2857,7 @@ bundle_destroy(struct ofbundle *bundle)
     hmap_remove(&ofproto->bundles, &bundle->hmap_node);
     free(bundle->name);
     free(bundle->trunks);
+    free(bundle->cvlans);
     lacp_unref(bundle->lacp);
     bond_unref(bundle->bond);
     free(bundle);
@@ -2833,7 +2871,8 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     bool need_flush = false;
     struct ofport_dpif *port;
     struct ofbundle *bundle;
-    unsigned long *trunks;
+    unsigned long *trunks = NULL;
+    unsigned long *cvlans = NULL;
     int vlan;
     size_t i;
     bool ok;
@@ -2858,8 +2897,10 @@ bundle_set(struct ofproto *ofproto_, void *aux,
 
         ovs_list_init(&bundle->ports);
         bundle->vlan_mode = PORT_VLAN_TRUNK;
+        bundle->qinq_ethtype = ETH_TYPE_VLAN_8021AD;
         bundle->vlan = -1;
         bundle->trunks = NULL;
+        bundle->cvlans = NULL;
         bundle->use_priority_tags = s->use_priority_tags;
         bundle->lacp = NULL;
         bundle->bond = NULL;
@@ -2924,6 +2965,11 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         need_flush = true;
     }
 
+    if (s->qinq_ethtype != bundle->qinq_ethtype) {
+        bundle->qinq_ethtype = s->qinq_ethtype;
+        need_flush = true;
+    }
+
     /* Set VLAN tag. */
     vlan = (s->vlan_mode == PORT_VLAN_TRUNK ? -1
             : s->vlan >= 0 && s->vlan <= 4095 ? s->vlan
@@ -2961,6 +3007,10 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         }
         break;
 
+    case PORT_VLAN_DOT1Q_TUNNEL:
+        cvlans = CONST_CAST(unsigned long *, s->cvlans);
+        break;
+
     default:
         OVS_NOT_REACHED();
     }
@@ -2976,6 +3026,20 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     }
     if (trunks != s->trunks) {
         free(trunks);
+    }
+
+    if (!vlan_bitmap_equal(cvlans, bundle->cvlans)) {
+        free(bundle->cvlans);
+        if (cvlans == s->cvlans) {
+            bundle->cvlans = vlan_bitmap_clone(cvlans);
+        } else {
+            bundle->cvlans = cvlans;
+            cvlans = NULL;
+        }
+        need_flush = true;
+    }
+    if (cvlans != s->cvlans) {
+        free(cvlans);
     }
 
     /* Bonding. */
@@ -4781,7 +4845,7 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
     ovs_rwlock_rdlock(&ofproto->ml->rwlock);
     LIST_FOR_EACH (e, lru_node, &ofproto->ml->lrus) {
         struct ofbundle *bundle = mac_entry_get_port(ofproto->ml, e);
-        char name[OFP_MAX_PORT_NAME_LEN];
+        char name[OFP10_MAX_PORT_NAME_LEN];
 
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
                                name, sizeof name);
@@ -4822,7 +4886,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
     ovs_rwlock_rdlock(&ofproto->ms->rwlock);
     LIST_FOR_EACH (grp, group_node, &ofproto->ms->group_lru) {
         LIST_FOR_EACH(b, bundle_node, &grp->bundle_lru) {
-            char name[OFP_MAX_PORT_NAME_LEN];
+            char name[OFP10_MAX_PORT_NAME_LEN];
 
             bundle = b->port;
             ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
@@ -4836,7 +4900,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
 
     /* ports connected to multicast routers */
     LIST_FOR_EACH(mrouter, mrouter_node, &ofproto->ms->mrouter_lru) {
-        char name[OFP_MAX_PORT_NAME_LEN];
+        char name[OFP10_MAX_PORT_NAME_LEN];
 
         bundle = mrouter->port;
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
@@ -4891,6 +4955,32 @@ ofproto_unixctl_dpif_dump_dps(struct unixctl_conn *conn, int argc OVS_UNUSED,
 }
 
 static void
+show_dp_feature_bool(struct ds *ds, const char *feature, bool b)
+{
+    ds_put_format(ds, "%s: %s\n", feature, b ? "Yes" : "No");
+}
+
+static void
+show_dp_feature_size_t(struct ds *ds, const char *feature, size_t s)
+{
+    ds_put_format(ds, "%s: %"PRIuSIZE"\n", feature, s);
+}
+
+static void
+dpif_show_support(const struct dpif_backer_support *support, struct ds *ds)
+{
+#define DPIF_SUPPORT_FIELD(TYPE, NAME, TITLE) \
+    show_dp_feature_##TYPE (ds, TITLE, support->NAME);
+    DPIF_SUPPORT_FIELDS
+#undef DPIF_SUPPORT_FIELD
+
+#define ODP_SUPPORT_FIELD(TYPE, NAME, TITLE) \
+    show_dp_feature_##TYPE (ds, TITLE, support->odp.NAME );
+    ODP_SUPPORT_FIELDS
+#undef ODP_SUPPORT_FIELD
+}
+
+static void
 dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
 {
     const struct shash_node **ofprotos;
@@ -4899,7 +4989,6 @@ dpif_show_backer(const struct dpif_backer *backer, struct ds *ds)
     size_t i;
 
     dpif_get_dp_stats(backer->dpif, &dp_stats);
-
     ds_put_format(ds, "%s: hit:%"PRIu64" missed:%"PRIu64"\n",
                   dpif_name(backer->dpif), dp_stats.n_hit, dp_stats.n_missed);
 
@@ -5119,6 +5208,24 @@ disable_datapath_clone(struct unixctl_conn *conn OVS_UNUSED,
 }
 
 static void
+ofproto_unixctl_dpif_show_dp_features(struct unixctl_conn *conn,
+                                      int argc, const char *argv[],
+                                      void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+    const char *br = argv[argc -1];
+    struct ofproto_dpif *ofproto = ofproto_dpif_lookup(br);
+
+    if (!ofproto) {
+        unixctl_command_reply_error(conn, "no such bridge");
+        return;
+    }
+
+    dpif_show_support(&ofproto->backer->support, &ds);
+    unixctl_command_reply(conn, ds_cstr(&ds));
+}
+
+static void
 ofproto_unixctl_init(void)
 {
     static bool registered;
@@ -5139,6 +5246,8 @@ ofproto_unixctl_init(void)
                              ofproto_unixctl_dpif_dump_dps, NULL);
     unixctl_command_register("dpif/show", "", 0, 0, ofproto_unixctl_dpif_show,
                              NULL);
+    unixctl_command_register("dpif/show-dp-features", "bridge", 1, 1,
+                             ofproto_unixctl_dpif_show_dp_features, NULL);
     unixctl_command_register("dpif/dump-flows", "[-m] bridge", 1, 2,
                              ofproto_unixctl_dpif_dump_flows, NULL);
 

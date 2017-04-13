@@ -488,6 +488,7 @@ Options:\n\
   --oneline                   print exactly one line of output per command\n",
            program_name, program_name, ctl_get_db_cmd_usage(),
            default_nb_db());
+    table_usage();
     vlog_usage();
     printf("\
   --no-syslog             equivalent to --verbose=nbctl:syslog:warn\n");
@@ -495,6 +496,7 @@ Options:\n\
 Other options:\n\
   -h, --help                  display this help message\n\
   -V, --version               display version information\n");
+    stream_usage("database", true, true, false);
     exit(EXIT_SUCCESS);
 }
 

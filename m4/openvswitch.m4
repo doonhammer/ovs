@@ -341,22 +341,26 @@ else:
             fi
           done
         done
-        if test $ovs_cv_python != no; then
-          if test -x "$ovs_cv_python" && ! "$ovs_cv_python" -c 'import six' >/dev/null 2>&1; then
-            ovs_cv_python=no
-            AC_MSG_WARN([Missing Python six library.])
-          fi
-        fi
       fi])
-   AC_SUBST([HAVE_PYTHON])
-   AM_MISSING_PROG([PYTHON], [python])
-   if test $ovs_cv_python != no; then
-     PYTHON=$ovs_cv_python
-     HAVE_PYTHON=yes
-   else
-     HAVE_PYTHON=no
+
+   # Set $PYTHON from cache variable.
+   if test $ovs_cv_python = no; then
+     AC_MSG_ERROR([cannot find python 2.7 or higher.])
    fi
-   AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])])
+   AM_MISSING_PROG([PYTHON], [python])
+   PYTHON=$ovs_cv_python
+
+   # HAVE_PYTHON is always true.  (Python has not always been a build
+   # requirement, so this variable is now obsolete.)
+   AC_SUBST([HAVE_PYTHON])
+   HAVE_PYTHON=yes
+   AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])
+
+   AC_MSG_CHECKING([whether $PYTHON has six library])
+   if ! $PYTHON -c 'import six ; six.moves.range' >&AS_MESSAGE_LOG_FD 2>&1; then
+     AC_MSG_ERROR([Missing Python six library or version too old.])
+   fi
+   AC_MSG_RESULT([yes])])
 
 dnl Checks for Python 3.x, x >= 4.
 AC_DEFUN([OVS_CHECK_PYTHON3],
@@ -417,7 +421,7 @@ AC_DEFUN([OVS_CHECK_SPHINX],
   [AC_CACHE_CHECK(
     [for sphinx],
     [ovs_cv_sphinx],
-    [if sphinx-build --version >/dev/null 2>&1; then
+    [if type sphinx-build >/dev/null 2>&1; then
        ovs_cv_sphinx=yes
      else
        ovs_cv_sphinx=no

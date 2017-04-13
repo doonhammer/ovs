@@ -118,7 +118,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
     size_t total_len;
     enum ofperr error;
 
-    error = ofputil_decode_packet_in_private(oh, true, NULL,
+    error = ofputil_decode_packet_in_private(oh, true, NULL, NULL,
                                              &pin, &total_len, &buffer_id);
     if (error) {
         ofp_print_error(string, error);
@@ -435,6 +435,11 @@ ofp_print_phy_port(struct ds *string, const struct ofputil_phy_port *port)
     ofputil_format_port(port->port_no, string);
     ds_put_format(string, "(%s): addr:"ETH_ADDR_FMT"\n",
                   name, ETH_ADDR_ARGS(port->hw_addr));
+
+    if (!eth_addr64_is_zero(port->hw_addr64)) {
+        ds_put_format(string, "     addr64: "ETH_ADDR64_FMT"\n",
+                      ETH_ADDR64_ARGS(port->hw_addr64));
+    }
 
     ds_put_cstr(string, "     config:     ");
     ofp_print_port_config(string, port->config);
@@ -875,7 +880,7 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
         ds_put_format(s, "importance:%"PRIu16" ", fm.importance);
     }
     if (fm.priority != OFP_DEFAULT_PRIORITY && need_priority) {
-        ds_put_format(s, "pri:%"PRIu16" ", fm.priority);
+        ds_put_format(s, "pri:%d ", fm.priority);
     }
     if (fm.buffer_id != UINT32_MAX) {
         ds_put_format(s, "buf:0x%"PRIx32" ", fm.buffer_id);
@@ -1011,6 +1016,10 @@ ofp_print_port_mod(struct ds *string, const struct ofp_header *oh)
     ofputil_format_port(pm.port_no, string);
     ds_put_format(string, ": addr:"ETH_ADDR_FMT"\n",
                   ETH_ADDR_ARGS(pm.hw_addr));
+    if (!eth_addr64_is_zero(pm.hw_addr64)) {
+        ds_put_format(string, "     addr64: "ETH_ADDR64_FMT"\n",
+                      ETH_ADDR64_ARGS(pm.hw_addr64));
+    }
 
     ds_put_cstr(string, "     config: ");
     ofp_print_port_config(string, pm.config);
@@ -1603,7 +1612,7 @@ ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh)
     struct ofputil_flow_stats_request fsr;
     enum ofperr error;
 
-    error = ofputil_decode_flow_stats_request(&fsr, oh, NULL);
+    error = ofputil_decode_flow_stats_request(&fsr, oh, NULL, NULL);
     if (error) {
         ofp_print_error(string, error);
         return;

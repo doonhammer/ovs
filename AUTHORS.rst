@@ -176,6 +176,7 @@ Kenneth Duda                    kduda@arista.com
 Kentaro Ebisawa                 ebiken.g@gmail.com
 Kevin Lo                        kevlo@FreeBSD.org
 Kevin Traynor                   kevin.traynor@intel.com
+Khem Raj                        raj.khem@gmail.com
 Kmindg G                        kmindg@gmail.com
 Krishna Kondaka                 kkondaka@vmware.com
 Kyle Mestery                    mestery@mestery.com
@@ -308,6 +309,7 @@ Wei Yongjun                     yjwei@cn.fujitsu.com
 Wenyu Zhang                     wenyuz@vmware.com
 William Fulton
 William Tu                      u9012063@gmail.com
+Xiao Liang                      shaw.leon@gmail.com
 YAMAMOTO Takashi                yamamoto@midokura.com
 Yasuhito Takamiya               yasuhito@gmail.com
 Yi-Hung Wei                     yihung.wei@gmail.com
@@ -320,6 +322,7 @@ Zoltan Kiss                     zoltan.kiss@citrix.com
 Zhi Yong Wu                     zwu.kernel@gmail.com
 Zang MingJie                    zealot0630@gmail.com
 nickcooper-zhangtonghao         nickcooper-zhangtonghao@opencloud.tech
+wenxu                           wenxu@ucloud.cn
 wisd0me                         ak47izatool@gmail.com
 xushengping                     shengping.xu@huawei.com
 yinpeijun                       yinpeijun@huawei.com
@@ -458,6 +461,7 @@ Michael Hu                      mhu@nicira.com
 Michael J. Smalley              michaeljsmalley@gmail.com
 Michael Mao                     mmao@nicira.com
 Michael Shigorin                mike@osdn.org.ua
+Michael Stapelberg              stapelberg@debian.org
 Mihir Gangar                    gangarm@vmware.com
 Mike Bursell                    mike.bursell@citrix.com
 Mike Kruze                      mkruze@nicira.com
@@ -511,6 +515,7 @@ Stepan Andrushko                stepanx.andrushko@intel.com
 Stephen Hemminger               shemminger@vyatta.com
 Stuart Cardall                  developer@it-offshore.co.uk
 Suganya Ramachandran            suganyar@vmware.com
+Sundar Nadathur                 undar.nadathur@intel.com
 Taekho Nam                      thnam@smartx.kr
 Takayuki HAMA                   t-hama@cb.jp.nec.com
 Teemu Koponen                   koponen@nicira.com

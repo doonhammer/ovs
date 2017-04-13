@@ -1,8 +1,9 @@
-EXTRA_DIST += \
+DOC_SOURCE = \
 	Documentation/group-selection-method-property.txt \
 	Documentation/_static/logo.png \
 	Documentation/_static/overview.png \
 	Documentation/conf.py \
+	Documentation/conf.py.in \
 	Documentation/index.rst \
 	Documentation/contents.rst \
 	Documentation/intro/index.rst \
@@ -24,6 +25,7 @@ EXTRA_DIST += \
 	Documentation/intro/install/xenserver.rst \
 	Documentation/tutorials/index.rst \
 	Documentation/tutorials/ovs-advanced.rst \
+	Documentation/tutorials/ovn-sandbox.rst \
 	Documentation/topics/index.rst \
 	Documentation/topics/bonding.rst \
 	Documentation/topics/datapath.rst \
@@ -37,6 +39,7 @@ EXTRA_DIST += \
 	Documentation/topics/openflow.rst \
 	Documentation/topics/ovsdb-replication.rst \
 	Documentation/topics/porting.rst \
+	Documentation/topics/tracing.rst \
 	Documentation/topics/windows.rst \
 	Documentation/howto/index.rst \
 	Documentation/howto/docker.rst \
@@ -75,6 +78,7 @@ EXTRA_DIST += \
 	Documentation/internals/bugs.rst \
 	Documentation/internals/committer-grant-revocation.rst \
 	Documentation/internals/committer-responsibilities.rst \
+	Documentation/internals/documentation.rst \
 	Documentation/internals/mailing-lists.rst \
 	Documentation/internals/maintainers.rst \
 	Documentation/internals/patchwork.rst \
@@ -88,6 +92,8 @@ EXTRA_DIST += \
 	Documentation/internals/contributing/libopenvswitch-abi.rst \
 	Documentation/internals/contributing/submitting-patches.rst \
 	Documentation/requirements.txt
+
+EXTRA_DIST += $(DOC_SOURCE)
 
 # You can set these variables from the command line.
 SPHINXOPTS =
@@ -105,9 +111,10 @@ sphinx_verbose_ = $(sphinx_verbose_@AM_DEFAULT_V@)
 sphinx_verbose_0 = -q
 
 if HAVE_SPHINX
-htmldocs:
-	$(AM_V_GEN)$(SPHINXBUILD) $(sphinx_verbose) -b html $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/html
-ALL_LOCAL += htmldocs
+htmldocs-check: $(DOC_SOURCE)
+	$(AM_V_GEN)$(SPHINXBUILD) $(sphinx_verbose) -b html $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/html && touch $@
+ALL_LOCAL += htmldocs-check
+CLEANFILES += htmldocs-check
 
 check-docs:
 	$(SPHINXBUILD) -b linkcheck $(ALLSPHINXOPTS) $(SPHINXBUILDDIR)/linkcheck
@@ -117,7 +124,15 @@ clean-docs:
 	rm -rf $(SPHINXBUILDDIR)/html
 	rm -rf $(SPHINXBUILDDIR)/linkcheck
 CLEAN_LOCAL += clean-docs
+
+ALL_LOCAL += $(srcdir)/Documentation/conf.py
+$(srcdir)/Documentation/conf.py: $(srcdir)/Documentation/conf.py.in
+	$(AM_V_GEN)($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g' \
+		-e 's,[@]OVS_MAJOR[@],$(shell echo $(VERSION) | cut -f1 -d.),g' \
+		-e 's,[@]OVS_MINOR[@],$(shell echo $(VERSION) | cut -f2 -d.),g') \
+		< $(srcdir)/Documentation/$(@F).in > $(@F).tmp || exit 1; \
+	if cmp -s $(@F).tmp $@; then touch $@; rm $(@F).tmp; else mv $(@F).tmp $@; fi
+
 endif
-.PHONY: htmldocs
 .PHONY: check-docs
 .PHONY: clean-docs

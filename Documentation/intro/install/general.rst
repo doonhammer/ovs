@@ -29,6 +29,34 @@ This document describes how to build and install Open vSwitch on a generic
 Linux, FreeBSD, or NetBSD host. For specifics around installation on a specific
 platform, refer to one of the other installation guides listed in :doc:`index`.
 
+Obtaining Open vSwitch Sources
+------------------------------
+
+The canonical location for Open vSwitch source code is its Git
+repository, which you can clone into a directory named "ovs" with::
+
+    $ git clone https://github.com/openvswitch/ovs.git
+
+Cloning the repository leaves the "master" branch initially checked
+out.  This is the right branch for general development.  If, on the
+other hand, if you want to build a particular released version, you
+can check it out by running a command such as the following from the
+"ovs" directory::
+
+    $ git checkout v2.7.0
+
+The repository also has a branch for each release series.  For
+example, to obtain the latest fixes in the Open vSwitch 2.7.x release
+series, which might include bug fixes that have not yet been in any
+released version, you can check it out from the "ovs" directory with::
+
+    $ git checkout origin/branch-2.7
+
+If you do not want to use Git, you can also obtain tarballs for Open
+vSwitch release versions via http://openvswitch.org/download/, or
+download a ZIP file for any snapshot from the web interface at
+https://github.com/openvswitch/ovs.
+
 .. _general-build-reqs:
 
 Build Requirements
@@ -41,11 +69,9 @@ need the following software:
 
 - A C compiler, such as:
 
-  - GCC 4.x.
+  - GCC 4.6 or later.
 
-  - Clang. Clang 3.4 and later provide useful static semantic analysis and
-    thread-safety checks. For Ubuntu, there are nightly built packages
-    available on clang's website.
+  - Clang 3.4 or later.
 
   - MSVC 2013. Refer to :doc:`windows` for additional Windows build
     instructions.
@@ -64,7 +90,9 @@ need the following software:
   If libcap-ng is installed, then Open vSwitch will automatically build with
   support for it.
 
-- Python 2.7. You must also have the Python ``six`` library.
+- Python 2.7. You must also have the Python ``six`` library version 1.4.0
+  or later.
+
 
 On Linux, you may choose to compile the kernel module that comes with the Open
 vSwitch distribution or to use the kernel module built into the Linux kernel
@@ -162,18 +190,21 @@ Installation Requirements
 The machine you build Open vSwitch on may not be the one you run it on. To
 simply install and run Open vSwitch you require the following software:
 
-- libc compatible with the libc used for build.
+- Shared libraries compatible with those used for the build.
 
-- libssl compatible with the libssl used for build, if OpenSSL was used
-  for the build.
-
-- On Linux, the same kernel version configured as part of the build.
+- On Linux, if you want to use the kernel-based datapath (which is the most
+  common use case), then a kernel with a compatible kernel module.  This
+  can be a kernel module built with Open vSwitch (e.g. in the previous
+  step), or the kernel module that accompanies Linux 3.3 and later.  Open
+  vSwitch features and performance can vary based on the module and the
+  kernel.  Refer to :doc:`/faq/releases` for more information.
 
 - For optional support of ingress policing on Linux, the "tc" program
   from iproute2 (part of all major distributions and available at
   https://wiki.linuxfoundation.org/networking/iproute2).
 
-- Python 2.7. You must also have the Python six library.
+- Python 2.7. You must also have the Python six library version 1.4.0
+  or later.
 
 On Linux you should ensure that ``/dev/urandom`` exists. To support TAP
 devices, you must also ensure that ``/dev/net/tun`` exists.

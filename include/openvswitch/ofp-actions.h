@@ -68,7 +68,7 @@ struct vl_mff_map;
     OFPACT(SET_VLAN_VID,    ofpact_vlan_vid,    ofpact, "set_vlan_vid") \
     OFPACT(SET_VLAN_PCP,    ofpact_vlan_pcp,    ofpact, "set_vlan_pcp") \
     OFPACT(STRIP_VLAN,      ofpact_null,        ofpact, "strip_vlan")   \
-    OFPACT(PUSH_VLAN,       ofpact_null,        ofpact, "push_vlan")    \
+    OFPACT(PUSH_VLAN,       ofpact_push_vlan,   ofpact, "push_vlan")    \
     OFPACT(SET_ETH_SRC,     ofpact_mac,         ofpact, "mod_dl_src")   \
     OFPACT(SET_ETH_DST,     ofpact_mac,         ofpact, "mod_dl_dst")   \
     OFPACT(SET_IPV4_SRC,    ofpact_ipv4,        ofpact, "mod_nw_src")   \
@@ -390,6 +390,14 @@ struct ofpact_vlan_pcp {
     bool flow_has_vlan;         /* VLAN present at action validation time? */
 };
 
+/* OFPACT_PUSH_VLAN.
+ *
+ * Used for OFPAT11_PUSH_VLAN. */
+struct ofpact_push_vlan {
+    struct ofpact ofpact;
+    ovs_be16 ethertype;
+};
+
 /* OFPACT_SET_ETH_SRC, OFPACT_SET_ETH_DST.
  *
  * Used for OFPAT10_SET_DL_SRC, OFPAT10_SET_DL_DST. */
@@ -660,6 +668,10 @@ struct ofpact_resubmit {
  * If NX_LEARN_F_SEND_FLOW_REM is set, then the learned flows will have their
  * OFPFF_SEND_FLOW_REM flag set.
  *
+ * If NX_LEARN_F_WRITE_RESULT is set, then the actions will write whether the
+ * learn operation succeded on a bit.  If the learn is successful the bit will
+ * be set, otherwise (e.g. if the limit is hit) the bit will be unset.
+ *
  * If NX_LEARN_F_DELETE_LEARNED is set, then removing this action will delete
  * all the flows from the learn action's 'table_id' that have the learn
  * action's 'cookie'.  Important points:
@@ -685,6 +697,7 @@ struct ofpact_resubmit {
 enum nx_learn_flags {
     NX_LEARN_F_SEND_FLOW_REM = 1 << 0,
     NX_LEARN_F_DELETE_LEARNED = 1 << 1,
+    NX_LEARN_F_WRITE_RESULT = 1 << 2,
 };
 
 #define NX_LEARN_N_BITS_MASK    0x3ff
@@ -748,6 +761,13 @@ struct ofpact_learn {
         ovs_be64 cookie;           /* Cookie for new flow. */
         uint16_t fin_idle_timeout; /* Idle timeout after FIN, if nonzero. */
         uint16_t fin_hard_timeout; /* Hard timeout after FIN, if nonzero. */
+        /* If the number of flows on 'table_id' with 'cookie' exceeds this,
+         * the action will not add a new flow. */
+        uint32_t limit;
+        /* Used only if 'flags' has NX_LEARN_F_WRITE_RESULT.  If the execution
+         * failed to install a new flow because 'limit' is exceeded,
+         * result_dst will be set to 0, otherwise to 1. */
+        struct mf_subfield result_dst;
     );
 
     struct ofpact_learn_spec specs[];
@@ -954,12 +974,14 @@ enum ofperr ofpacts_pull_openflow_actions(struct ofpbuf *openflow,
                                           unsigned int actions_len,
                                           enum ofp_version version,
                                           const struct vl_mff_map *,
+                                          uint64_t *ofpacts_tlv_bitmap,
                                           struct ofpbuf *ofpacts);
 enum ofperr
 ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
                                    unsigned int instructions_len,
                                    enum ofp_version version,
                                    const struct vl_mff_map *vl_mff_map,
+                                   uint64_t *ofpacts_tlv_bitmap,
                                    struct ofpbuf *ofpacts);
 enum ofperr ofpacts_check(struct ofpact[], size_t ofpacts_len,
                           struct match *, ofp_port_t max_ports,

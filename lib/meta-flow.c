@@ -27,6 +27,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "nx-match.h"
 #include "openvswitch/ofp-util.h"
+#include "ovs-atomic.h"
 #include "ovs-rcu.h"
 #include "ovs-thread.h"
 #include "packets.h"
@@ -287,14 +288,14 @@ mf_is_all_wild(const struct mf_field *mf, const struct flow_wildcards *wc)
         return eth_addr_is_zero(wc->masks.arp_tha);
 
     case MFF_VLAN_TCI:
-        return !wc->masks.vlan_tci;
+        return !wc->masks.vlans[0].tci;
     case MFF_DL_VLAN:
-        return !(wc->masks.vlan_tci & htons(VLAN_VID_MASK));
+        return !(wc->masks.vlans[0].tci & htons(VLAN_VID_MASK));
     case MFF_VLAN_VID:
-        return !(wc->masks.vlan_tci & htons(VLAN_VID_MASK | VLAN_CFI));
+        return !(wc->masks.vlans[0].tci & htons(VLAN_VID_MASK | VLAN_CFI));
     case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
-        return !(wc->masks.vlan_tci & htons(VLAN_PCP_MASK));
+        return !(wc->masks.vlans[0].tci & htons(VLAN_PCP_MASK));
 
     case MFF_MPLS_LABEL:
         return !(wc->masks.mpls_lse[0] & htonl(MPLS_LABEL_MASK));
@@ -418,12 +419,6 @@ mf_are_prereqs_ok__(const struct mf_field *mf, const struct flow *flow,
         return is_ip_any(flow);
     case MFP_CT_VALID:
         return is_ct_valid(flow, mask, wc);
-    case MFP_CTV4_VALID:
-        return flow->dl_type == htons(ETH_TYPE_IP)
-            && is_ct_valid(flow, mask, wc);
-    case MFP_CTV6_VALID:
-        return flow->dl_type == htons(ETH_TYPE_IPV6)
-            && is_ct_valid(flow, mask, wc);
     case MFP_TCP:
         /* Matching !FRAG_LATER is not enforced (mask is not checked). */
         return is_tcp(flow, wc) && !(flow->nw_frag & FLOW_NW_FRAG_LATER);
@@ -731,19 +726,19 @@ mf_get_value(const struct mf_field *mf, const struct flow *flow,
         break;
 
     case MFF_VLAN_TCI:
-        value->be16 = flow->vlan_tci;
+        value->be16 = flow->vlans[0].tci;
         break;
 
     case MFF_DL_VLAN:
-        value->be16 = flow->vlan_tci & htons(VLAN_VID_MASK);
+        value->be16 = flow->vlans[0].tci & htons(VLAN_VID_MASK);
         break;
     case MFF_VLAN_VID:
-        value->be16 = flow->vlan_tci & htons(VLAN_VID_MASK | VLAN_CFI);
+        value->be16 = flow->vlans[0].tci & htons(VLAN_VID_MASK | VLAN_CFI);
         break;
 
     case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
-        value->u8 = vlan_tci_to_pcp(flow->vlan_tci);
+        value->u8 = vlan_tci_to_pcp(flow->vlans[0].tci);
         break;
 
     case MFF_MPLS_LABEL:
@@ -1380,19 +1375,24 @@ mf_set_flow_value(const struct mf_field *mf,
         break;
 
     case MFF_VLAN_TCI:
-        flow->vlan_tci = value->be16;
+        flow->vlans[0].tci = value->be16;
+        flow_fix_vlan_tpid(flow);
         break;
 
     case MFF_DL_VLAN:
         flow_set_dl_vlan(flow, value->be16);
+        flow_fix_vlan_tpid(flow);
         break;
+
     case MFF_VLAN_VID:
         flow_set_vlan_vid(flow, value->be16);
+        flow_fix_vlan_tpid(flow);
         break;
 
     case MFF_DL_VLAN_PCP:
     case MFF_VLAN_PCP:
         flow_set_vlan_pcp(flow, value->u8);
+        flow_fix_vlan_tpid(flow);
         break;
 
     case MFF_MPLS_LABEL:
@@ -2821,6 +2821,7 @@ field_array_set(enum mf_field_id id, const union mf_value *value,
  * struct vl_mff_map.*/
 struct vl_mf_field {
     struct mf_field mf;
+    struct ovs_refcount ref_cnt;
     struct cmap_node cmap_node; /* In ofproto->vl_mff_map->cmap. */
 };
 
@@ -2830,17 +2831,41 @@ mf_field_hash(uint32_t key)
     return hash_int(key, 0);
 }
 
-void
-mf_vl_mff_map_clear(struct vl_mff_map *vl_mff_map)
+static void
+vmf_delete(struct vl_mf_field *vmf)
+{
+    if (ovs_refcount_unref(&vmf->ref_cnt) == 1) {
+        /* Postpone as this function is typically called immediately
+         * after removing from cmap. */
+        ovsrcu_postpone(free, vmf);
+    } else {
+        VLOG_WARN_RL(&rl,
+                     "Attempted to delete VMF %s but refcount is nonzero!",
+                     vmf->mf.name);
+    }
+}
+
+enum ofperr
+mf_vl_mff_map_clear(struct vl_mff_map *vl_mff_map, bool force)
     OVS_REQUIRES(vl_mff_map->mutex)
 {
     struct vl_mf_field *vmf;
 
+    if (!force) {
+        CMAP_FOR_EACH (vmf, cmap_node, &vl_mff_map->cmap) {
+            if (ovs_refcount_read(&vmf->ref_cnt) != 1) {
+                return OFPERR_NXTTMFC_INVALID_TLV_DEL;
+            }
+        }
+    }
+
     CMAP_FOR_EACH (vmf, cmap_node, &vl_mff_map->cmap) {
         cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
                     mf_field_hash(vmf->mf.id));
-        ovsrcu_postpone(free, vmf);
+        vmf_delete(vmf);
     }
+
+    return 0;
 }
 
 static struct vl_mf_field *
@@ -2872,53 +2897,98 @@ mf_get_vl_mff(const struct mf_field *mff,
     return NULL;
 }
 
+static enum ofperr
+mf_vl_mff_map_del(struct vl_mff_map *vl_mff_map,
+                  const struct ofputil_tlv_table_mod *ttm, bool force)
+    OVS_REQUIRES(vl_mff_map->mutex)
+{
+    struct ofputil_tlv_map *tlv_map;
+    struct vl_mf_field *vmf;
+    unsigned int idx;
+
+    if (!force) {
+        LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
+            idx = MFF_TUN_METADATA0 + tlv_map->index;
+            if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
+                return OFPERR_NXTTMFC_BAD_FIELD_IDX;
+            }
+
+            vmf = mf_get_vl_mff__(idx, vl_mff_map);
+            if (vmf && ovs_refcount_read(&vmf->ref_cnt) != 1) {
+                return OFPERR_NXTTMFC_INVALID_TLV_DEL;
+            }
+        }
+    }
+
+    LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
+        idx = MFF_TUN_METADATA0 + tlv_map->index;
+        if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
+            return OFPERR_NXTTMFC_BAD_FIELD_IDX;
+        }
+
+        vmf = mf_get_vl_mff__(idx, vl_mff_map);
+        if (vmf) {
+            cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
+                        mf_field_hash(idx));
+            vmf_delete(vmf);
+        }
+    }
+
+    return 0;
+}
+
+static enum ofperr
+mf_vl_mff_map_add(struct vl_mff_map *vl_mff_map,
+                  const struct ofputil_tlv_table_mod *ttm)
+    OVS_REQUIRES(vl_mff_map->mutex)
+{
+    struct ofputil_tlv_map *tlv_map;
+    struct vl_mf_field *vmf;
+    unsigned int idx;
+
+    LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
+        idx = MFF_TUN_METADATA0 + tlv_map->index;
+        if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
+            return OFPERR_NXTTMFC_BAD_FIELD_IDX;
+        }
+
+        vmf = xmalloc(sizeof *vmf);
+        vmf->mf = mf_fields[idx];
+        vmf->mf.n_bytes = tlv_map->option_len;
+        vmf->mf.n_bits = tlv_map->option_len * 8;
+        vmf->mf.mapped = true;
+        ovs_refcount_init(&vmf->ref_cnt);
+
+        cmap_insert(&vl_mff_map->cmap, &vmf->cmap_node,
+                    mf_field_hash(idx));
+    }
+
+    return 0;
+}
+
 /* Updates the tun_metadata mf_field in 'vl_mff_map' according to 'ttm'.
- * This function is supposed to be invoked after tun_metadata_table_mod(). */
+ * This function must be invoked after tun_metadata_table_mod().
+ * Returns OFPERR_NXTTMFC_BAD_FIELD_IDX, if the index for the vl_mf_field is
+ * invalid.
+ * Returns OFPERR_NXTTMFC_INVALID_TLV_DEL, if 'ttm' tries to delete an
+ * vl_mf_field that is still used by any active flow.*/
 enum ofperr
 mf_vl_mff_map_mod_from_tun_metadata(struct vl_mff_map *vl_mff_map,
                                     const struct ofputil_tlv_table_mod *ttm)
     OVS_REQUIRES(vl_mff_map->mutex)
 {
-    struct ofputil_tlv_map *tlv_map;
+    switch (ttm->command) {
+    case NXTTMC_ADD:
+        return mf_vl_mff_map_add(vl_mff_map, ttm);
 
-    if (ttm->command == NXTTMC_CLEAR) {
-        mf_vl_mff_map_clear(vl_mff_map);
-        return 0;
-    }
+    case NXTTMC_DELETE:
+        return mf_vl_mff_map_del(vl_mff_map, ttm, false);
 
-    LIST_FOR_EACH (tlv_map, list_node, &ttm->mappings) {
-        unsigned int idx = MFF_TUN_METADATA0 + tlv_map->index;
-        struct vl_mf_field *vmf;
+    case NXTTMC_CLEAR:
+        return mf_vl_mff_map_clear(vl_mff_map, false);
 
-        if (idx >= MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS) {
-            return OFPERR_NXTTMFC_BAD_FIELD_IDX;
-        }
-
-        switch (ttm->command) {
-        case NXTTMC_ADD:
-            vmf = xmalloc(sizeof *vmf);
-            vmf->mf = mf_fields[idx];
-            vmf->mf.n_bytes = tlv_map->option_len;
-            vmf->mf.n_bits = tlv_map->option_len * 8;
-            vmf->mf.mapped = true;
-
-            cmap_insert(&vl_mff_map->cmap, &vmf->cmap_node,
-                        mf_field_hash(idx));
-            break;
-
-        case NXTTMC_DELETE:
-            vmf = mf_get_vl_mff__(idx, vl_mff_map);
-            if (vmf) {
-                cmap_remove(&vl_mff_map->cmap, &vmf->cmap_node,
-                            mf_field_hash(idx));
-                ovsrcu_postpone(free, vmf);
-            }
-            break;
-
-        case NXTTMC_CLEAR:
-        default:
-            OVS_NOT_REACHED();
-        }
+    default:
+        OVS_NOT_REACHED();
     }
 
     return 0;
@@ -2930,4 +3000,91 @@ bool
 mf_vl_mff_invalid(const struct mf_field *mff, const struct vl_mff_map *map)
 {
     return map && mff && mff->variable_len && !mff->mapped;
+}
+
+void
+mf_vl_mff_set_tlv_bitmap(const struct mf_field *mff, uint64_t *tlv_bitmap)
+{
+    if (mff && mff->mapped) {
+        ovs_assert(mf_is_tun_metadata(mff));
+        ULLONG_SET1(*tlv_bitmap, mff->id - MFF_TUN_METADATA0);
+    }
+}
+
+static void
+mf_vl_mff_ref_cnt_mod(const struct vl_mff_map *map, uint64_t tlv_bitmap,
+                      bool ref)
+{
+    struct vl_mf_field *vmf;
+    int i;
+
+    if (map) {
+        ULLONG_FOR_EACH_1 (i, tlv_bitmap) {
+            vmf = mf_get_vl_mff__(i + MFF_TUN_METADATA0, map);
+            if (vmf) {
+                if (ref) {
+                    ovs_refcount_ref(&vmf->ref_cnt);
+                } else {
+                    ovs_refcount_unref(&vmf->ref_cnt);
+                }
+            } else {
+                VLOG_WARN("Invalid TLV index %d.", i);
+            }
+        }
+    }
+}
+
+void
+mf_vl_mff_ref(const struct vl_mff_map *map, uint64_t tlv_bitmap)
+{
+    mf_vl_mff_ref_cnt_mod(map, tlv_bitmap, true);
+}
+
+void
+mf_vl_mff_unref(const struct vl_mff_map *map, uint64_t tlv_bitmap)
+{
+    mf_vl_mff_ref_cnt_mod(map, tlv_bitmap, false);
+}
+
+enum ofperr
+mf_vl_mff_nx_pull_header(struct ofpbuf *b, const struct vl_mff_map *vl_mff_map,
+                         const struct mf_field **field, bool *masked,
+                         uint64_t *tlv_bitmap)
+{
+    enum ofperr error = nx_pull_header(b, vl_mff_map, field, masked);
+    if (error) {
+        return error;
+    }
+
+    mf_vl_mff_set_tlv_bitmap(*field, tlv_bitmap);
+    return 0;
+}
+
+enum ofperr
+mf_vl_mff_nx_pull_entry(struct ofpbuf *b, const struct vl_mff_map *vl_mff_map,
+                        const struct mf_field **field, union mf_value *value,
+                        union mf_value *mask, uint64_t *tlv_bitmap)
+{
+    enum ofperr error = nx_pull_entry(b, vl_mff_map, field, value, mask);
+    if (error) {
+        return error;
+    }
+
+    mf_vl_mff_set_tlv_bitmap(*field, tlv_bitmap);
+    return 0;
+}
+
+enum ofperr
+mf_vl_mff_mf_from_nxm_header(uint32_t header,
+                             const struct vl_mff_map *vl_mff_map,
+                             const struct mf_field **field,
+                             uint64_t *tlv_bitmap)
+{
+    *field = mf_from_nxm_header(header, vl_mff_map);
+    if (mf_vl_mff_invalid(*field, vl_mff_map)) {
+        return OFPERR_NXFMFC_INVALID_TLV_FIELD;
+    }
+
+    mf_vl_mff_set_tlv_bitmap(*field, tlv_bitmap);
+    return 0;
 }

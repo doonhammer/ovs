@@ -228,6 +228,8 @@ static enum ofperr ofproto_rule_create(struct ofproto *, struct cls_rule *,
                                        uint16_t importance,
                                        const struct ofpact *ofpacts,
                                        size_t ofpacts_len,
+                                       uint64_t match_tlv_bitmap,
+                                       uint64_t ofpacts_tlv_bitmap,
                                        struct rule **new_rule)
     OVS_NO_THREAD_SAFETY_ANALYSIS;
 
@@ -1577,14 +1579,6 @@ ofproto_destroy__(struct ofproto *ofproto)
     cmap_destroy(&ofproto->groups);
 
     hmap_remove(&all_ofprotos, &ofproto->hmap_node);
-    tun_metadata_free(ovsrcu_get_protected(struct tun_table *,
-                                           &ofproto->metadata_tab));
-
-    ovs_mutex_lock(&ofproto->vl_mff_map.mutex);
-    mf_vl_mff_map_clear(&ofproto->vl_mff_map);
-    ovs_mutex_unlock(&ofproto->vl_mff_map.mutex);
-    cmap_destroy(&ofproto->vl_mff_map.cmap);
-    ovs_mutex_destroy(&ofproto->vl_mff_map.mutex);
 
     free(ofproto->name);
     free(ofproto->type);
@@ -1602,6 +1596,14 @@ ofproto_destroy__(struct ofproto *ofproto)
         oftable_destroy(table);
     }
     free(ofproto->tables);
+
+    ovs_mutex_lock(&ofproto->vl_mff_map.mutex);
+    mf_vl_mff_map_clear(&ofproto->vl_mff_map, true);
+    ovs_mutex_unlock(&ofproto->vl_mff_map.mutex);
+    cmap_destroy(&ofproto->vl_mff_map.cmap);
+    ovs_mutex_destroy(&ofproto->vl_mff_map.mutex);
+    tun_metadata_free(ovsrcu_get_protected(struct tun_table *,
+                                           &ofproto->metadata_tab));
 
     ovs_assert(hindex_is_empty(&ofproto->cookies));
     hindex_destroy(&ofproto->cookies);
@@ -2344,6 +2346,7 @@ ofport_open(struct ofproto *ofproto,
     }
     pp->port_no = ofproto_port->ofp_port;
     netdev_get_etheraddr(netdev, &pp->hw_addr);
+    pp->hw_addr64 = eth_addr64_zero;
     ovs_strlcpy(pp->name, ofproto_port->name, sizeof pp->name);
     netdev_get_flags(netdev, &flags);
     pp->config = flags & NETDEV_UP ? 0 : OFPUTIL_PC_PORT_DOWN;
@@ -2364,6 +2367,7 @@ ofport_equal(const struct ofputil_phy_port *a,
              const struct ofputil_phy_port *b)
 {
     return (eth_addr_equals(a->hw_addr, b->hw_addr)
+            && eth_addr64_equals(a->hw_addr64, b->hw_addr64)
             && a->state == b->state
             && !((a->config ^ b->config) & OFPUTIL_PC_PORT_DOWN)
             && a->curr == b->curr
@@ -2458,6 +2462,7 @@ static void
 ofport_modified(struct ofport *port, struct ofputil_phy_port *pp)
 {
     port->pp.hw_addr = pp->hw_addr;
+    port->pp.hw_addr64 = pp->hw_addr64;
     port->pp.config = ((port->pp.config & ~OFPUTIL_PC_PORT_DOWN)
                         | (pp->config & OFPUTIL_PC_PORT_DOWN));
     port->pp.state = ((port->pp.state & ~OFPUTIL_PS_LINK_DOWN)
@@ -2829,6 +2834,8 @@ rule_destroy_cb(struct rule *rule)
         ofproto_rule_send_removed(rule);
     }
     rule->ofproto->ofproto_class->rule_destruct(rule);
+    mf_vl_mff_unref(&rule->ofproto->vl_mff_map, rule->match_tlv_bitmap);
+    mf_vl_mff_unref(&rule->ofproto->vl_mff_map, rule->ofpacts_tlv_bitmap);
     ofproto_rule_destroy__(rule);
 }
 
@@ -3575,8 +3582,9 @@ handle_nxt_resume(struct ofconn *ofconn, const struct ofp_header *oh)
     enum ofperr error;
 
     error = ofputil_decode_packet_in_private(oh, false,
-                                             ofproto_get_tun_tab(ofproto), &pin,
-                                             NULL, NULL);
+                                             ofproto_get_tun_tab(ofproto),
+                                             &ofproto->vl_mff_map, &pin, NULL,
+                                             NULL);
     if (error) {
         return error;
     }
@@ -3625,7 +3633,8 @@ port_mod_start(struct ofconn *ofconn, struct ofputil_port_mod *pm,
     if (!*port) {
         return OFPERR_OFPPMFC_BAD_PORT;
     }
-    if (!eth_addr_equals((*port)->pp.hw_addr, pm->hw_addr)) {
+    if (!eth_addr_equals((*port)->pp.hw_addr, pm->hw_addr) ||
+        !eth_addr64_equals((*port)->pp.hw_addr64, pm->hw_addr64)) {
         return OFPERR_OFPPMFC_BAD_HW_ADDR;
     }
     return 0;
@@ -4280,7 +4289,8 @@ handle_flow_stats_request(struct ofconn *ofconn,
     enum ofperr error;
 
     error = ofputil_decode_flow_stats_request(&fsr, request,
-                                              ofproto_get_tun_tab(ofproto));
+                                              ofproto_get_tun_tab(ofproto),
+                                              &ofproto->vl_mff_map);
     if (error) {
         return error;
     }
@@ -4445,7 +4455,8 @@ handle_aggregate_stats_request(struct ofconn *ofconn,
     enum ofperr error;
 
     error = ofputil_decode_flow_stats_request(&request, oh,
-                                              ofproto_get_tun_tab(ofproto));
+                                              ofproto_get_tun_tab(ofproto),
+                                              &ofproto->vl_mff_map);
     if (error) {
         return error;
     }
@@ -4740,7 +4751,9 @@ add_flow_init(struct ofproto *ofproto, struct ofproto_flow_mod *ofm,
                                     fm->new_cookie, fm->idle_timeout,
                                     fm->hard_timeout, fm->flags,
                                     fm->importance, fm->ofpacts,
-                                    fm->ofpacts_len, &ofm->temp_rule);
+                                    fm->ofpacts_len,
+                                    fm->match.flow.tunnel.metadata.present.map,
+                                    fm->ofpacts_tlv_bitmap, &ofm->temp_rule);
         if (error) {
             return error;
         }
@@ -4855,6 +4868,7 @@ ofproto_rule_create(struct ofproto *ofproto, struct cls_rule *cr,
                     uint16_t idle_timeout, uint16_t hard_timeout,
                     enum ofputil_flow_mod_flags flags, uint16_t importance,
                     const struct ofpact *ofpacts, size_t ofpacts_len,
+                    uint64_t match_tlv_bitmap, uint64_t ofpacts_tlv_bitmap,
                     struct rule **new_rule)
     OVS_NO_THREAD_SAFETY_ANALYSIS
 {
@@ -4905,6 +4919,10 @@ ofproto_rule_create(struct ofproto *ofproto, struct cls_rule *cr,
     }
 
     rule->state = RULE_INITIALIZED;
+    rule->match_tlv_bitmap = match_tlv_bitmap;
+    rule->ofpacts_tlv_bitmap = ofpacts_tlv_bitmap;
+    mf_vl_mff_ref(&rule->ofproto->vl_mff_map, match_tlv_bitmap);
+    mf_vl_mff_ref(&rule->ofproto->vl_mff_map, ofpacts_tlv_bitmap);
 
     *new_rule = rule;
     return 0;
@@ -5002,6 +5020,8 @@ ofproto_flow_mod_learn_refresh(struct ofproto_flow_mod *ofm)
                                     rule->importance,
                                     rule->actions->ofpacts,
                                     rule->actions->ofpacts_len,
+                                    rule->match_tlv_bitmap,
+                                    rule->ofpacts_tlv_bitmap,
                                     &ofm->temp_rule);
         ovs_mutex_unlock(&rule->mutex);
         if (!error) {
@@ -5064,29 +5084,69 @@ ofproto_flow_mod_learn_finish(struct ofproto_flow_mod *ofm,
  * 'keep_ref' is true, then a reference to the current rule is held, otherwise
  * it is released and 'ofm->temp_rule' is set to NULL.
  *
+ * If 'limit' != 0, insertion will fail if there are more than 'limit' rules
+ * in the same table with the same cookie.  If insertion succeeds,
+ * '*below_limitp' will be set to true.  If insertion fails '*below_limitp'
+ * will be set to false.
+ *
  * Caller needs to be the exclusive owner of 'ofm' as it is being manipulated
  * during the call. */
 enum ofperr
-ofproto_flow_mod_learn(struct ofproto_flow_mod *ofm, bool keep_ref)
+ofproto_flow_mod_learn(struct ofproto_flow_mod *ofm, bool keep_ref,
+                       unsigned limit, bool *below_limitp)
     OVS_EXCLUDED(ofproto_mutex)
 {
     enum ofperr error = ofproto_flow_mod_learn_refresh(ofm);
     struct rule *rule = ofm->temp_rule;
+    bool below_limit = true;
 
     /* Do we need to insert the rule? */
     if (!error && rule->state == RULE_INITIALIZED) {
         ovs_mutex_lock(&ofproto_mutex);
-        ofm->version = rule->ofproto->tables_version + 1;
-        error = ofproto_flow_mod_learn_start(ofm);
-        if (!error) {
-            ofproto_flow_mod_learn_finish(ofm, NULL);
+
+        if (limit) {
+            struct rule_criteria criteria;
+            struct rule_collection rules;
+            struct match match;
+
+            match_init_catchall(&match);
+            rule_criteria_init(&criteria, rule->table_id, &match, 0,
+                               OVS_VERSION_MAX, rule->flow_cookie,
+                               OVS_BE64_MAX, OFPP_ANY, OFPG_ANY);
+            rule_criteria_require_rw(&criteria, false);
+            collect_rules_loose(rule->ofproto, &criteria, &rules);
+            if (rule_collection_n(&rules) >= limit) {
+                below_limit = false;
+            }
+            rule_collection_destroy(&rules);
+            rule_criteria_destroy(&criteria);
+        }
+
+        if (below_limit) {
+            ofm->version = rule->ofproto->tables_version + 1;
+
+            error = ofproto_flow_mod_learn_start(ofm);
+            if (!error) {
+                ofproto_flow_mod_learn_finish(ofm, NULL);
+            }
+        } else {
+            ofproto_flow_mod_uninit(ofm);
         }
         ovs_mutex_unlock(&ofproto_mutex);
+
+        if (!below_limit) {
+            static struct vlog_rate_limit learn_rl = VLOG_RATE_LIMIT_INIT(1, 5);
+            VLOG_INFO_RL(&learn_rl, "Learn limit for flow %"PRIu64" reached.",
+                         rule->flow_cookie);
+        }
     }
 
-    if (!keep_ref) {
+    if (!keep_ref && below_limit) {
         ofproto_rule_unref(rule);
         ofm->temp_rule = NULL;
+    }
+    if (below_limitp) {
+        *below_limitp = below_limit;
     }
     return error;
 }
@@ -5262,6 +5322,13 @@ modify_flows_start__(struct ofproto *ofproto, struct ofproto_flow_mod *ofm)
                 cls_rule_destroy(CONST_CAST(struct cls_rule *, &temp->cr));
                 cls_rule_clone(CONST_CAST(struct cls_rule *, &temp->cr),
                                &old_rule->cr);
+                if (temp->match_tlv_bitmap != old_rule->match_tlv_bitmap) {
+                    mf_vl_mff_unref(&temp->ofproto->vl_mff_map,
+                                    temp->match_tlv_bitmap);
+                    temp->match_tlv_bitmap = old_rule->match_tlv_bitmap;
+                    mf_vl_mff_ref(&temp->ofproto->vl_mff_map,
+                                  temp->match_tlv_bitmap);
+                }
                 *CONST_CAST(uint8_t *, &temp->table_id) = old_rule->table_id;
                 rule_collection_add(new_rules, temp);
                 first = false;
@@ -5275,6 +5342,8 @@ modify_flows_start__(struct ofproto *ofproto, struct ofproto_flow_mod *ofm)
                                             temp->importance,
                                             temp->actions->ofpacts,
                                             temp->actions->ofpacts_len,
+                                            old_rule->match_tlv_bitmap,
+                                            temp->ofpacts_tlv_bitmap,
                                             &new_rule);
                 if (!error) {
                     rule_collection_add(new_rules, new_rule);
@@ -7790,13 +7859,14 @@ handle_tlv_table_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     old_tab = ovsrcu_get_protected(struct tun_table *, &ofproto->metadata_tab);
     error = tun_metadata_table_mod(&ttm, old_tab, &new_tab);
     if (!error) {
-        ovsrcu_set(&ofproto->metadata_tab, new_tab);
-        tun_metadata_postpone_free(old_tab);
-
         ovs_mutex_lock(&ofproto->vl_mff_map.mutex);
         error = mf_vl_mff_map_mod_from_tun_metadata(&ofproto->vl_mff_map,
                                                     &ttm);
         ovs_mutex_unlock(&ofproto->vl_mff_map.mutex);
+        if (!error) {
+            ovsrcu_set(&ofproto->metadata_tab, new_tab);
+            tun_metadata_postpone_free(old_tab);
+        }
     }
 
     ofputil_uninit_tlv_table(&ttm.mappings);
@@ -8549,4 +8619,10 @@ ofproto_unixctl_init(void)
 
     unixctl_command_register("ofproto/list", "", 0, 0,
                              ofproto_unixctl_list, NULL);
+}
+
+void
+ofproto_set_vlan_limit(int vlan_limit)
+{
+    flow_limit_vlans(vlan_limit);
 }
