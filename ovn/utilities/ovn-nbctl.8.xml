@@ -322,6 +322,12 @@
           port-chain-classifiers using the UUID instead of the
           <var>classifier</var> name.
         </p>
+
+        <p>
+          The number of chains that can be attached to a port is limited to one
+          currently. If more than one chain is attached to a port an error is
+          generated.
+        </p>
       </dd>
 
       <dt>[<code>--if-exists</code>] <code>lsp-chain-classififer-del</code> <var>port-chain-classifier</var></dt>
@@ -362,7 +368,10 @@
           more port-pairs. Every port-pair within a port-pair-group should be
           of the same type of VNF, but OVN cannot enforce this requirement.
         </p>
-
+        <p>
+          The number of port pair groups that can be added to a port chain is
+          limited to 128. 
+        </p>
         <p>
           The OVN northbound database schema does not require logical port
           chain names to be unique, but the whole point to the names is to
@@ -406,7 +415,7 @@
         </p>
       </dd>
 
-      <dt>[<code>--may-exist</code> | <code>--add-duplicate</code>] <code>lsp-pair-group-add</code> <var>port-pair-group</var></dt>
+      <dt>[<code>--may-exist</code> | <code>--add-duplicate</code>] <code>lsp-pair-group-add</code> <var>port-pair-group</var> [<var>sortkey</var>var>]</dt>
       <dd>
         <p>
           Creates a new logical port pair group named
@@ -416,7 +425,11 @@
           port-pair-group should be of the same type of VNF, but OVN cannot
           enforce this requirement.
         </p>
-
+        <p> 
+          The sortkey parameter allows the defintion of the order of in which
+          the port pair groups are applied. The default is the order they are defined.
+          The list command shows the sortkey with the port pair group.
+        </p>
         <p>
           The OVN northbound database schema does not require logical port pair
           group names to be unique, but the whole point to the names is to

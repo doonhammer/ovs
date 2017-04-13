@@ -394,7 +394,15 @@
         application into the VNF ingress port and the second rule takes all
         traffic destined to the application from the VNF egress port to the
         application, the priorities are such that the second rule is always
-        checked first. In the egress direction the rules are similar if the
+        checked first. 
+
+        The final rule in a chain re-circulates the packet back to the original
+        entry point to the chain. This ensures that the packet exiting to a
+        physcal network always has the correct ethernet header. Within the
+        chain the OVN Geneve tunnel between hypervisors ensures that the inner
+        packet is not seen by physical networking devices,
+
+        In the egress direction the rules are similar if the
         traffic is from the application it is sent to the VNF egress port
         and if if is from the application and is from the VNF ingress port it
         is delivered to the destination. Additional VNFs can be chained
