@@ -1439,7 +1439,7 @@ nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *lswitch;
     const struct nbrec_logical_port_chain *lsp_chain;
-    const struct nbrec_logical_switch_port *lsp_input, *lsp_exist;   
+    const struct nbrec_logical_switch_port *lsp_input, *lsp_exist;
     struct nbrec_logical_port_chain_classifier *lsp_chain_classifier;
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
@@ -1451,7 +1451,7 @@ nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
      * to a port.
      */
     NBREC_LOGICAL_SWITCH_FOR_EACH(lswitch, ctx->idl) {
-      for (int k=0; k < lswitch->n_port_chain_classifiers; k++){
+      for (int k=0; k < lswitch->n_port_chain_classifiers; k++) {
       lsp_chain_classifier =  lswitch->port_chain_classifiers[k];
       lsp_exist = lsp_chain_classifier->port;
       if (uuid_equals(&lsp_exist->header_.uuid, &lsp_input->header_.uuid)) {

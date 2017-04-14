@@ -3031,7 +3031,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         output_port_array = xmalloc(sizeof *dst_port *
                                   (lpc->n_port_pair_groups + 1));
         /* Copy port groups from chain and sort them according to sortkey.*/
-        struct nbrec_logical_port_pair_group **port_pair_groups = 
+        struct nbrec_logical_port_pair_group **port_pair_groups =
                                  xmemdup(lpc->port_pair_groups,
                           sizeof *port_pair_groups * lpc->n_port_pair_groups);
         qsort(port_pair_groups, lpc->n_port_pair_groups,
@@ -3122,7 +3122,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                      REGBIT_CHAIN_LOOPBACK" == 0 && %s",
                                 ETH_ADDR_ARGS(traffic_logical_port_ea),
                                 output_port_array[j]->json_key, chain_match);
-             } else {         
+             } else {
                  lcc_match = xasprintf(
                     "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
                      REGBIT_CHAIN_LOOPBACK" == 0",
