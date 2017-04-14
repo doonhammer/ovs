@@ -3068,7 +3068,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
          */
     /* TODO add LCC match to match */
     if (chain_path == 1) { /* Path starting from entry port */
-        if (strcmp(chain_match,"")!=0){
+        if (strcmp(chain_match,"")!=0) {
            lcc_match =  xasprintf(
             "eth.src == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0 && %s",
              ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
@@ -3080,7 +3080,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
            lcc_action = xasprintf("outport = %s; output;",
                                 input_port_array[0]->json_key);
     } else {
-        if (strcmp(chain_match,"")!=0){
+        if (strcmp(chain_match,"")!=0) {
            lcc_match =  xasprintf(
             "eth.dst == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0 && %s",
              ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
@@ -3101,13 +3101,13 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         /* Completed first catch all rule for this port-chain. */
         /* Apply inner rules flows */
         if (chain_path == 1) { /* Path starting from entry port */
-            if (strcmp(chain_match,"")!=0){
+            if (strcmp(chain_match,"")!=0) {
                  lcc_match = xasprintf(
                     "eth.src == "ETH_ADDR_FMT" && inport == %s && "
                      REGBIT_CHAIN_LOOPBACK" == 0 && %s",
                                 ETH_ADDR_ARGS(traffic_logical_port_ea),
                                 output_port_array[j]->json_key, chain_match);
-            } else { 
+            } else {
                    lcc_match = xasprintf(
                     "eth.src == "ETH_ADDR_FMT" && inport == %s && "
                      REGBIT_CHAIN_LOOPBACK" == 0",
@@ -3116,13 +3116,13 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
             }
 
         } else { /* Path starting from destination port. */
-             if (strcmp(chain_match,"")!=0){
+             if (strcmp(chain_match,"")!=0) {
                  lcc_match = xasprintf(
                     "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
                      REGBIT_CHAIN_LOOPBACK" == 0 && %s",
                                 ETH_ADDR_ARGS(traffic_logical_port_ea),
                                 output_port_array[j]->json_key, chain_match);
-             } else {                 
+             } else {         
                  lcc_match = xasprintf(
                     "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
                      REGBIT_CHAIN_LOOPBACK" == 0",
@@ -3151,7 +3151,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
          */
         /* TODO add LCC match to match */
         if (chain_path == 1) { /* Path from source port. */
-            if (strcmp(chain_match,"")!=0){
+            if (strcmp(chain_match,"")!=0) {
                  lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT" && "
                         REGBIT_CHAIN_LOOPBACK" == 0 && %s",
                         ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
@@ -3164,7 +3164,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
             lcc_action = xasprintf("outport = %s; output;",
                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
         } else { /* Path from destination port. */
-           if (strcmp(chain_match,"")!=0){
+           if (strcmp(chain_match,"")!=0) {
                 lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT" && "
                         REGBIT_CHAIN_LOOPBACK" == 0 && %s",
                         ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
@@ -3181,7 +3181,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         free(lcc_match);
         free(lcc_action);
         /*
-        * End of default flow match 
+        * End of default flow match
         */
         for (int j = lpc->n_port_pair_groups-1; j >= 0; j--) {
 
@@ -3189,7 +3189,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
 
             /* Apply inner rules flows */
             if (chain_path == 1) { /* Path from source port. */
-                if (strcmp(chain_match,"")!=0){
+                if (strcmp(chain_match,"")!=0) {
                     lcc_match = xasprintf(
                       "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
                        REGBIT_CHAIN_LOOPBACK" == 0 && %s",
@@ -3204,7 +3204,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
 
                 }
             } else { /* Path from destination port. */
-                if (strcmp(chain_match,"")!=0){
+                if (strcmp(chain_match,"")!=0) {
                      lcc_match = xasprintf(
                          "eth.src == "ETH_ADDR_FMT" && inport == %s && "
                           REGBIT_CHAIN_LOOPBACK" == 0 && %s",

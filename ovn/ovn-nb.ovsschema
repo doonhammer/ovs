@@ -136,7 +136,7 @@
                                            "refTable": "Logical_Port_Pair",
                                            "refType": "strong"},
                                            "min": 0, "max": "unlimited"}},
-                "sortkey": {"type": {"key": {"type": "integer", 
+                "sortkey": {"type": {"key": {"type": "integer",
                                               "minInteger": 0,
                                               "maxInteger": 127 }}},
                 "external_ids": {

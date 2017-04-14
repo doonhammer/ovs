@@ -370,7 +370,6 @@
           model other types of connectivity into an OVN logical switch.  The
           following types are defined:
         </p>
-
         <dl>
           <dt>(empty string)</dt>
           <dd>

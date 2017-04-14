@@ -1208,7 +1208,7 @@ nbctl_lsp_pair_group_add(struct ctl_context *ctx)
          sortkey = (int64_t) parse_sortkey(ctx->argv[3]);
     }
     nbrec_logical_port_pair_group_set_sortkey(lsp_pair_group, sortkey);
-    /* 
+    /*
      * Insert the logical port-pair-group into the logical chain.
      */
     struct nbrec_logical_port_pair_group  **new_port_pair_group =
@@ -1439,8 +1439,7 @@ nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
 {
     const struct nbrec_logical_switch *lswitch;
     const struct nbrec_logical_port_chain *lsp_chain;
-    const struct nbrec_logical_switch_port *lsp_input, *lsp_exist;
-    
+    const struct nbrec_logical_switch_port *lsp_input, *lsp_exist;   
     struct nbrec_logical_port_chain_classifier *lsp_chain_classifier;
 
     lswitch = ls_by_name_or_uuid(ctx, ctx->argv[1], true);
@@ -1455,7 +1454,7 @@ nbctl_lsp_chain_classifier_add(struct ctl_context *ctx)
       for (int k=0; k < lswitch->n_port_chain_classifiers; k++){
       lsp_chain_classifier =  lswitch->port_chain_classifiers[k];
       lsp_exist = lsp_chain_classifier->port;
-      if (uuid_equals(&lsp_exist->header_.uuid, &lsp_input->header_.uuid)){
+      if (uuid_equals(&lsp_exist->header_.uuid, &lsp_input->header_.uuid)) {
                     ctl_fatal("%s: lsp is already assigned a chain",
                                lsp_input->name);
                 }
@@ -1632,9 +1631,7 @@ static void
 nbctl_lsp_chain_classifier_list(struct ctl_context *ctx)
 {
     const char *id = ctx->argc > 1 ? ctx->argv[1] : NULL;
-    
     const struct nbrec_logical_switch *lswitch;
-
     if (id) {
         lswitch = ls_by_name_or_uuid(ctx, id, true);
         print_lsp_chain_classifier(ctx, lswitch, false);
@@ -1653,9 +1650,7 @@ print_lsp_chain_classifier_entry(struct ctl_context *ctx,
                       const char *chain_classifier_name_filter,
                       const bool show_switch_name)
 {
-    struct smap lsp_chain_classifiers;
     size_t i;
-    smap_init(&lsp_chain_classifiers);
     /*
     * Loop over all chain classifiers
     */
@@ -1665,50 +1660,38 @@ print_lsp_chain_classifier_entry(struct ctl_context *ctx,
         const struct nbrec_logical_port_chain *lsp_chain;
         const struct nbrec_logical_switch_port *lsp;
 
+
         lsp_chain = lsp_chain_classifier->chain;
         lsp = lsp_chain_classifier->port;
+
         if (chain_classifier_name_filter != NULL &&
                  strcmp(chain_classifier_name_filter,
                  lsp_chain_classifier->name) !=0) {
             continue;
         }
         if (show_switch_name) {
-            smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name, UUID_FMT " (%s:%s)",
+          ds_put_format(&ctx->output,
+                            "\nls-chain-classifier: " UUID_FMT " (%s:%s)\n",
                             UUID_ARGS(&lsp_chain_classifier->header_.uuid),
                             lswitch->name, lsp_chain_classifier->name);
         } else {
-            smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name, UUID_FMT " (%s)",
+          ds_put_format(&ctx->output,"ls-chain-classifier: "UUID_FMT" (%s)\n",
                             UUID_ARGS(&lsp_chain_classifier->header_.uuid),
                             lsp_chain_classifier->name);
         }
-        smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name,UUID_FMT " (%s)",
+        ds_put_format(&ctx->output,"     lsp-chain: "UUID_FMT " (%s)\n",
                             UUID_ARGS(&lsp_chain->header_.uuid),
                             lsp_chain->name);
-        smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name,UUID_FMT " (%s)",
+        ds_put_format(&ctx->output, "     lsp: "UUID_FMT " (%s)\n",
                             UUID_ARGS(&lsp->header_.uuid),
                             lsp->name);
-        smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name, "Flow Direction: %s",
+        ds_put_format(&ctx->output, "     Flow Direction: %s\n",
                             lsp_chain_classifier->direction);
-        smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name, "Flow Type: %s",
+        ds_put_format(&ctx->output, "     Flow Type: %s\n",
                             lsp_chain_classifier->path);
-        smap_add_format(&lsp_chain_classifiers,
-                            lsp_chain_classifier->name, "Match Statement: %s",
+        ds_put_format(&ctx->output, "     Match Statement: %s\n",
                             lsp_chain_classifier->match);
     }
-
-    const struct smap_node **nodes = smap_sort(&lsp_chain_classifiers);
-    for (i = 0; i < smap_count(&lsp_chain_classifiers); i++) {
-        const struct smap_node *node = nodes[i];
-        ds_put_format(&ctx->output, "%s\n", node->value);
-    }
-    smap_destroy(&lsp_chain_classifiers);
-    free(nodes);
 }
 
 static void

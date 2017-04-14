@@ -370,7 +370,7 @@
         </p>
         <p>
           The number of port pair groups that can be added to a port chain is
-          limited to 128. 
+          limited to 128.
         </p>
         <p>
           The OVN northbound database schema does not require logical port
@@ -425,7 +425,7 @@
           port-pair-group should be of the same type of VNF, but OVN cannot
           enforce this requirement.
         </p>
-        <p> 
+        <p>
           The sortkey parameter allows the defintion of the order of in which
           the port pair groups are applied. The default is the order they are defined.
           The list command shows the sortkey with the port pair group.

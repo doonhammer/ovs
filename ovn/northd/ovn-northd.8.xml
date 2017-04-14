@@ -394,7 +394,7 @@
         application into the VNF ingress port and the second rule takes all
         traffic destined to the application from the VNF egress port to the
         application, the priorities are such that the second rule is always
-        checked first. 
+        checked first.
 
         The final rule in a chain re-circulates the packet back to the original
         entry point to the chain. This ensures that the packet exiting to a
