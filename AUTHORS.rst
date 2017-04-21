@@ -116,6 +116,7 @@ Aymerich Edward                 edward.aymerich@hpe.com
 Edward Tomasz Napierała         trasz@freebsd.org
 Eitan Eliahu                    eliahue@vmware.com
 Eohyung Lee                     liquidnuker@gmail.com
+Eric Dumazet                    edumazet@google.com
 Eric Garver                     e@erig.me
 Eric Sesterhenn                 eric.sesterhenn@lsexperts.de
 Ethan J. Jackson                ejj@eecs.berkeley.edu
@@ -178,6 +179,7 @@ Kevin Lo                        kevlo@FreeBSD.org
 Kevin Traynor                   kevin.traynor@intel.com
 Khem Raj                        raj.khem@gmail.com
 Kmindg G                        kmindg@gmail.com
+Kris Murphy                     kriskend@linux.vnet.ibm.com
 Krishna Kondaka                 kkondaka@vmware.com
 Kyle Mestery                    mestery@mestery.com
 Kyle Upton                      kupton@baymicrosystems.com
@@ -225,6 +227,7 @@ Nithin Raju                     nithin@vmware.com
 Niti Rohilla                    niti.rohilla@tcs.com
 Numan Siddique                  nusiddiq@redhat.com
 Ofer Ben-Yacov                  ofer.benyacov@gmail.com
+Or Gerlitz                      ogerlitz@mellanox.com
 Ori Shoshan                     ori.shoshan@guardicore.com
 Padmanabhan Krishnan            kprad1@yahoo.com
 Panu Matilainen                 pmatilai@redhat.com
@@ -234,6 +237,7 @@ Paul Fazzone                    pfazzone@nicira.com
 Paul Ingram                     paul@nicira.com
 Paul-Emmanuel Raoul             skyper@skyplabs.net
 Pavithra Ramesh                 paramesh@vmware.com
+Peter Downs                     padowns@gmail.com
 Philippe Jung                   phil.jung@free.fr
 Pim van den Berg                pim@nethuis.nl
 pritesh                         pritesh.kothari@cisco.com
@@ -401,6 +405,7 @@ Ghanem Bahri                    bahri.ghanem@gmail.com
 Giuseppe de Candia              giuseppe.decandia@gmail.com
 Gordon Good                     ggood@nicira.com
 Greg Dahlman                    gdahlman@hotmail.com
+Greg Rose                       gvrose8192@gmail.com
 Gregor Schaffrath               grsch@net.t-labs.tu-berlin.de
 Gregory Smith                   gasmith@nutanix.com
 Guolin Yang                     gyang@vmware.com

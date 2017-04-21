@@ -13,15 +13,19 @@ Post-v2.7.0
    - New support for multiple VLANs (802.1ad or "QinQ"), including a new
      "dot1q-tunnel" port VLAN mode.
    - OVN:
+     * IPAM for IPv4 can now exclude user-defined addresses from assignment.
+     * IPAM can now assign IPv6 addresses.
      * Make the DHCPv4 router setting optional.
      * Gratuitous ARP for NAT addresses on a distributed logical router.
      * Allow ovn-controller SSL configuration to be obtained from vswitchd
        database.
+     * ovn-trace now has basic support for tracing distributed firewalls.
    - Add the command 'ovs-appctl stp/show' (see ovs-vswitchd(8)).
    - OpenFlow:
      * Increased support for OpenFlow 1.6 (draft).
      * Bundles now support hashing by just nw_src or nw_dst.
      * The "learn" action now supports a "limit" option (see ovs-ofctl(8)).
+     * The port status bit OFPPS_LIVE now reflects link aliveness.
 
 v2.7.0 - 21 Feb 2017
 ---------------------

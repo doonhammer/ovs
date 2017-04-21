@@ -794,33 +794,34 @@ struct tcp_header {
 };
 BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
 
-/* Connection states */
-enum {
-    CS_NEW_BIT =         0,
-    CS_ESTABLISHED_BIT = 1,
-    CS_RELATED_BIT =     2,
-    CS_REPLY_DIR_BIT =   3,
-    CS_INVALID_BIT =     4,
-    CS_TRACKED_BIT =     5,
-    CS_SRC_NAT_BIT =     6,
-    CS_DST_NAT_BIT =     7,
-};
+/* Connection states.
+ *
+ * Names like CS_RELATED are bit values, e.g. 1 << 2.
+ * Names like CS_RELATED_BIT are bit indexes, e.g. 2. */
+#define CS_STATES                               \
+    CS_STATE(NEW,         0, "new")             \
+    CS_STATE(ESTABLISHED, 1, "est")             \
+    CS_STATE(RELATED,     2, "rel")             \
+    CS_STATE(REPLY_DIR,   3, "rpl")             \
+    CS_STATE(INVALID,     4, "inv")             \
+    CS_STATE(TRACKED,     5, "trk")             \
+    CS_STATE(SRC_NAT,     6, "snat")            \
+    CS_STATE(DST_NAT,     7, "dnat")
 
 enum {
-    CS_NEW =         (1 << CS_NEW_BIT),
-    CS_ESTABLISHED = (1 << CS_ESTABLISHED_BIT),
-    CS_RELATED =     (1 << CS_RELATED_BIT),
-    CS_REPLY_DIR =   (1 << CS_REPLY_DIR_BIT),
-    CS_INVALID =     (1 << CS_INVALID_BIT),
-    CS_TRACKED =     (1 << CS_TRACKED_BIT),
-    CS_SRC_NAT =     (1 << CS_SRC_NAT_BIT),
-    CS_DST_NAT =     (1 << CS_DST_NAT_BIT),
+#define CS_STATE(ENUM, INDEX, NAME) \
+    CS_##ENUM = 1 << INDEX, \
+    CS_##ENUM##_BIT = INDEX,
+    CS_STATES
+#undef CS_STATE
 };
 
 /* Undefined connection state bits. */
-#define CS_SUPPORTED_MASK    (CS_NEW | CS_ESTABLISHED | CS_RELATED \
-                              | CS_INVALID | CS_REPLY_DIR | CS_TRACKED \
-                              | CS_SRC_NAT | CS_DST_NAT)
+enum {
+#define CS_STATE(ENUM, INDEX, NAME) +CS_##ENUM
+    CS_SUPPORTED_MASK = CS_STATES
+#undef CS_STATE
+};
 #define CS_UNSUPPORTED_MASK  (~(uint32_t)CS_SUPPORTED_MASK)
 
 #define ARP_HRD_ETHERNET 1
@@ -1036,6 +1037,26 @@ in6_addr_solicited_node(struct in6_addr *addr, const struct in6_addr *ip6)
     taddr->be16[5] = htons(0x1);
     taddr->be16[6] = htons(0xff00);
     memcpy(&addr->s6_addr[13], &ip6->s6_addr[13], 3);
+}
+
+/*
+ * Generates ipv6 EUI64 address from the given eth addr
+ * and prefix and stores it in 'lla'
+ */
+static inline void
+in6_generate_eui64(struct eth_addr ea, struct in6_addr *prefix,
+                   struct in6_addr *lla)
+{
+    union ovs_16aligned_in6_addr *taddr = (void *) lla;
+    union ovs_16aligned_in6_addr *prefix_taddr = (void *) prefix;
+    taddr->be16[0] = prefix_taddr->be16[0];
+    taddr->be16[1] = prefix_taddr->be16[1];
+    taddr->be16[2] = prefix_taddr->be16[2];
+    taddr->be16[3] = prefix_taddr->be16[3];
+    taddr->be16[4] = htons(((ea.ea[0] ^ 0x02) << 8) | ea.ea[1]);
+    taddr->be16[5] = htons(ea.ea[2] << 8 | 0x00ff);
+    taddr->be16[6] = htons(0xfe << 8 | ea.ea[3]);
+    taddr->be16[7] = ea.be16[2];
 }
 
 /*

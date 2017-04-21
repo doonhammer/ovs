@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 Nicira, Inc.
+ * Copyright (c) 2007-2017 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -60,6 +60,39 @@ struct ovs_len_tbl {
 
 #define OVS_ATTR_NESTED -1
 #define OVS_ATTR_VARIABLE -2
+
+static bool actions_may_change_flow(const struct nlattr *actions)
+{
+	struct nlattr *nla;
+	int rem;
+
+	nla_for_each_nested(nla, actions, rem) {
+		u16 action = nla_type(nla);
+
+		switch (action) {
+		case OVS_ACTION_ATTR_OUTPUT:
+		case OVS_ACTION_ATTR_RECIRC:
+		case OVS_ACTION_ATTR_TRUNC:
+		case OVS_ACTION_ATTR_USERSPACE:
+			break;
+
+		case OVS_ACTION_ATTR_CT:
+		case OVS_ACTION_ATTR_HASH:
+		case OVS_ACTION_ATTR_POP_ETH:
+		case OVS_ACTION_ATTR_POP_MPLS:
+		case OVS_ACTION_ATTR_POP_VLAN:
+		case OVS_ACTION_ATTR_PUSH_ETH:
+		case OVS_ACTION_ATTR_PUSH_MPLS:
+		case OVS_ACTION_ATTR_PUSH_VLAN:
+		case OVS_ACTION_ATTR_SAMPLE:
+		case OVS_ACTION_ATTR_SET:
+		case OVS_ACTION_ATTR_SET_MASKED:
+		default:
+			return true;
+		}
+	}
+	return false;
+}
 
 static void update_range(struct sw_flow_match *match,
 			 size_t offset, size_t size, bool is_mask)
@@ -606,7 +639,7 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 			ipv4 = true;
 			break;
 		case OVS_TUNNEL_KEY_ATTR_IPV6_SRC:
-			SW_FLOW_KEY_PUT(match, tun_key.u.ipv6.dst,
+			SW_FLOW_KEY_PUT(match, tun_key.u.ipv6.src,
 					nla_get_in6_addr(a), is_mask);
 			ipv6 = true;
 			break;
@@ -666,6 +699,8 @@ static int ip_tun_from_nlattr(const struct nlattr *attr,
 
 			tun_flags |= TUNNEL_VXLAN_OPT;
 			opts_type = type;
+			break;
+		case OVS_TUNNEL_KEY_ATTR_PAD:
 			break;
 		default:
 			OVS_NLERR(log, "Unknown IP tunnel attribute %d",
@@ -1074,14 +1109,14 @@ static int metadata_from_nlattrs(struct net *net, struct sw_flow_match *match,
 			return -EINVAL;
 		}
 
-		SW_FLOW_KEY_PUT(match, ct.state, ct_state, is_mask);
+		SW_FLOW_KEY_PUT(match, ct_state, ct_state, is_mask);
 		*attrs &= ~(1ULL << OVS_KEY_ATTR_CT_STATE);
 	}
 	if (*attrs & (1 << OVS_KEY_ATTR_CT_ZONE) &&
 	    ovs_ct_verify(net, OVS_KEY_ATTR_CT_ZONE)) {
 		u16 ct_zone = nla_get_u16(a[OVS_KEY_ATTR_CT_ZONE]);
 
-		SW_FLOW_KEY_PUT(match, ct.zone, ct_zone, is_mask);
+		SW_FLOW_KEY_PUT(match, ct_zone, ct_zone, is_mask);
 		*attrs &= ~(1ULL << OVS_KEY_ATTR_CT_ZONE);
 	}
 	if (*attrs & (1 << OVS_KEY_ATTR_CT_MARK) &&
@@ -1109,7 +1144,7 @@ static int metadata_from_nlattrs(struct net *net, struct sw_flow_match *match,
 		SW_FLOW_KEY_PUT(match, ipv4.ct_orig.dst, ct->ipv4_dst, is_mask);
 		SW_FLOW_KEY_PUT(match, ct.orig_tp.src, ct->src_port, is_mask);
 		SW_FLOW_KEY_PUT(match, ct.orig_tp.dst, ct->dst_port, is_mask);
-		SW_FLOW_KEY_PUT(match, ct.orig_proto, ct->ipv4_proto, is_mask);
+		SW_FLOW_KEY_PUT(match, ct_orig_proto, ct->ipv4_proto, is_mask);
 		*attrs &= ~(1ULL << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4);
 	}
 	if (*attrs & (1ULL << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6)) {
@@ -1125,7 +1160,7 @@ static int metadata_from_nlattrs(struct net *net, struct sw_flow_match *match,
 				   is_mask);
 		SW_FLOW_KEY_PUT(match, ct.orig_tp.src, ct->src_port, is_mask);
 		SW_FLOW_KEY_PUT(match, ct.orig_tp.dst, ct->dst_port, is_mask);
-		SW_FLOW_KEY_PUT(match, ct.orig_proto, ct->ipv6_proto, is_mask);
+		SW_FLOW_KEY_PUT(match, ct_orig_proto, ct->ipv6_proto, is_mask);
 		*attrs &= ~(1ULL << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6);
 	}
 
@@ -1565,6 +1600,9 @@ int ovs_nla_get_flow_metadata(struct net *net,
 	memset(&match, 0, sizeof(match));
 	match.key = key;
 
+	key->ct_state = 0;
+	key->ct_zone = 0;
+	key->ct_orig_proto = 0;
 	memset(&key->ct, 0, sizeof(key->ct));
 	memset(&key->ipv4.ct_orig, 0, sizeof(key->ipv4.ct_orig));
 	memset(&key->ipv6.ct_orig, 0, sizeof(key->ipv6.ct_orig));
@@ -2019,18 +2057,20 @@ static inline void add_nested_action_end(struct sw_flow_actions *sfa,
 
 static int __ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 				  const struct sw_flow_key *key,
-				  int depth, struct sw_flow_actions **sfa,
+				  struct sw_flow_actions **sfa,
 				  __be16 eth_type, __be16 vlan_tci, bool log);
 
 static int validate_and_copy_sample(struct net *net, const struct nlattr *attr,
-				    const struct sw_flow_key *key, int depth,
+				    const struct sw_flow_key *key,
 				    struct sw_flow_actions **sfa,
-				    __be16 eth_type, __be16 vlan_tci, bool log)
+				    __be16 eth_type, __be16 vlan_tci,
+				    bool log, bool last)
 {
 	const struct nlattr *attrs[OVS_SAMPLE_ATTR_MAX + 1];
 	const struct nlattr *probability, *actions;
 	const struct nlattr *a;
-	int rem, start, err, st_acts;
+	int rem, start, err;
+	struct sample_arg arg;
 
 	memset(attrs, 0, sizeof(attrs));
 	nla_for_each_nested(a, attr, rem) {
@@ -2054,20 +2094,32 @@ static int validate_and_copy_sample(struct net *net, const struct nlattr *attr,
 	start = add_nested_action_start(sfa, OVS_ACTION_ATTR_SAMPLE, log);
 	if (start < 0)
 		return start;
-	err = ovs_nla_add_action(sfa, OVS_SAMPLE_ATTR_PROBABILITY,
-				 nla_data(probability), sizeof(u32), log);
+
+	/* When both skb and flow may be changed, put the sample
+	 * into a deferred fifo. On the other hand, if only skb
+	 * may be modified, the actions can be executed in place.
+	 *
+	 * Do this analysis at the flow installation time.
+	 * Set 'clone_action->exec' to true if the actions can be
+	 * executed without being deferred.
+	 *
+	 * If the sample is the last action, it can always be excuted
+	 * rather than deferred.
+	 */
+	arg.exec = last || !actions_may_change_flow(actions);
+	arg.probability = nla_get_u32(probability);
+
+	err = ovs_nla_add_action(sfa, OVS_SAMPLE_ATTR_ARG, &arg, sizeof(arg),
+				 log);
 	if (err)
 		return err;
-	st_acts = add_nested_action_start(sfa, OVS_SAMPLE_ATTR_ACTIONS, log);
-	if (st_acts < 0)
-		return st_acts;
 
-	err = __ovs_nla_copy_actions(net, actions, key, depth + 1, sfa,
+	err = __ovs_nla_copy_actions(net, actions, key, sfa,
 				     eth_type, vlan_tci, log);
+
 	if (err)
 		return err;
 
-	add_nested_action_end(*sfa, st_acts);
 	add_nested_action_end(*sfa, start);
 
 	return 0;
@@ -2379,8 +2431,8 @@ static int validate_userspace(const struct nlattr *attr)
 	struct nlattr *a[OVS_USERSPACE_ATTR_MAX + 1];
 	int error;
 
-	error = nla_parse_nested(a, OVS_USERSPACE_ATTR_MAX,
-				 attr, userspace_policy);
+	error = nla_parse_nested(a, OVS_USERSPACE_ATTR_MAX, attr,
+				 userspace_policy, NULL);
 	if (error)
 		return error;
 
@@ -2407,15 +2459,12 @@ static int copy_action(const struct nlattr *from,
 
 static int __ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 				  const struct sw_flow_key *key,
-				  int depth, struct sw_flow_actions **sfa,
+				  struct sw_flow_actions **sfa,
 				  __be16 eth_type, __be16 vlan_tci, bool log)
 {
 	u8 mac_proto = ovs_key_mac_proto(key);
 	const struct nlattr *a;
 	int rem, err;
-
-	if (depth >= SAMPLE_ACTION_DEPTH)
-		return -EOVERFLOW;
 
 	nla_for_each_nested(a, attr, rem) {
 		/* Expected argument lengths, (u32)-1 for variable length. */
@@ -2554,13 +2603,17 @@ static int __ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 				return err;
 			break;
 
-		case OVS_ACTION_ATTR_SAMPLE:
-			err = validate_and_copy_sample(net, a, key, depth, sfa,
-						       eth_type, vlan_tci, log);
+		case OVS_ACTION_ATTR_SAMPLE: {
+			bool last = nla_is_last(a, rem);
+
+			err = validate_and_copy_sample(net, a, key, sfa,
+						       eth_type, vlan_tci,
+						       log, last);
 			if (err)
 				return err;
 			skip_copy = true;
 			break;
+		}
 
 		case OVS_ACTION_ATTR_CT:
 			err = ovs_ct_copy_action(net, a, key, sfa, log);
@@ -2614,7 +2667,7 @@ int ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 		return PTR_ERR(*sfa);
 
 	(*sfa)->orig_len = nla_len(attr);
-	err = __ovs_nla_copy_actions(net, attr, key, 0, sfa, key->eth.type,
+	err = __ovs_nla_copy_actions(net, attr, key, sfa, key->eth.type,
 				     key->eth.vlan.tci, log);
 	if (err)
 		ovs_nla_free_flow_actions(*sfa);
@@ -2622,39 +2675,44 @@ int ovs_nla_copy_actions(struct net *net, const struct nlattr *attr,
 	return err;
 }
 
-static int sample_action_to_attr(const struct nlattr *attr, struct sk_buff *skb)
+static int sample_action_to_attr(const struct nlattr *attr,
+				 struct sk_buff *skb)
 {
-	const struct nlattr *a;
-	struct nlattr *start;
-	int err = 0, rem;
+	struct nlattr *start, *ac_start = NULL, *sample_arg;
+	int err = 0, rem = nla_len(attr);
+	const struct sample_arg *arg;
+	struct nlattr *actions;
 
 	start = nla_nest_start(skb, OVS_ACTION_ATTR_SAMPLE);
 	if (!start)
 		return -EMSGSIZE;
 
-	nla_for_each_nested(a, attr, rem) {
-		int type = nla_type(a);
-		struct nlattr *st_sample;
+	sample_arg = nla_data(attr);
+	arg = nla_data(sample_arg);
+	actions = nla_next(sample_arg, &rem);
 
-		switch (type) {
-		case OVS_SAMPLE_ATTR_PROBABILITY:
-			if (nla_put(skb, OVS_SAMPLE_ATTR_PROBABILITY,
-				    sizeof(u32), nla_data(a)))
-				return -EMSGSIZE;
-			break;
-		case OVS_SAMPLE_ATTR_ACTIONS:
-			st_sample = nla_nest_start(skb, OVS_SAMPLE_ATTR_ACTIONS);
-			if (!st_sample)
-				return -EMSGSIZE;
-			err = ovs_nla_put_actions(nla_data(a), nla_len(a), skb);
-			if (err)
-				return err;
-			nla_nest_end(skb, st_sample);
-			break;
-		}
+	if (nla_put_u32(skb, OVS_SAMPLE_ATTR_PROBABILITY, arg->probability)) {
+		err = -EMSGSIZE;
+		goto out;
 	}
 
-	nla_nest_end(skb, start);
+	ac_start = nla_nest_start(skb, OVS_SAMPLE_ATTR_ACTIONS);
+	if (!ac_start) {
+		err = -EMSGSIZE;
+		goto out;
+	}
+
+	err = ovs_nla_put_actions(actions, rem, skb);
+
+out:
+	if (err) {
+		nla_nest_cancel(skb, ac_start);
+		nla_nest_cancel(skb, start);
+	} else {
+		nla_nest_end(skb, ac_start);
+		nla_nest_end(skb, start);
+	}
+
 	return err;
 }
 

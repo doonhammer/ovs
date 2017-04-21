@@ -1894,6 +1894,16 @@ port_modified(struct ofport *port_)
         bfd_set_netdev(port->bfd, netdev);
     }
 
+    /* Set liveness, unless the link is administratively or
+     * operationally down or link monitoring false */
+    if (!(port->up.pp.config & OFPUTIL_PC_PORT_DOWN) &&
+        !(port->up.pp.state & OFPUTIL_PS_LINK_DOWN) &&
+        port->may_enable) {
+        port->up.pp.state |= OFPUTIL_PS_LIVE;
+    } else {
+        port->up.pp.state &= ~OFPUTIL_PS_LIVE;
+    }
+
     ofproto_dpif_monitor_port_update(port, port->bfd, port->cfm,
                                      port->lldp, &port->up.pp.hw_addr);
 
@@ -3457,6 +3467,19 @@ port_run(struct ofport_dpif *ofport)
         if (ofport->rstp_port) {
             rstp_port_set_mac_operational(ofport->rstp_port, enable);
         }
+
+        /* Propagate liveness, unless the link is administratively or
+         * operationally down. */
+        if (!(ofport->up.pp.config & OFPUTIL_PC_PORT_DOWN) &&
+            !(ofport->up.pp.state & OFPUTIL_PS_LINK_DOWN)) {
+            enum ofputil_port_state of_state = ofport->up.pp.state;
+            if (enable) {
+                of_state |= OFPUTIL_PS_LIVE;
+            } else {
+                of_state &= ~OFPUTIL_PS_LIVE;
+            }
+            ofproto_port_set_state(&ofport->up, of_state);
+        }
     }
 
     ofport->may_enable = enable;
@@ -4121,8 +4144,12 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
 
     support = &ofproto->backer->support.odp;
     ct_state = MINIFLOW_GET_U8(flow, ct_state);
+
+    /* Do not bother dissecting the flow further if the datapath supports all
+     * the features we know of. */
     if (support->ct_state && support->ct_zone && support->ct_mark
-        && support->ct_label && support->ct_state_nat) {
+        && support->ct_label && support->ct_state_nat
+        && support->ct_orig_tuple) {
         return ct_state & CS_UNSUPPORTED_MASK ? OFPERR_OFPBMC_BAD_MASK : 0;
     }
 
@@ -4139,17 +4166,27 @@ check_mask(struct ofproto_dpif *ofproto, const struct miniflow *flow)
         return OFPERR_OFPBMC_BAD_MASK;
     }
 
+    if (!support->ct_orig_tuple &&
+        (MINIFLOW_GET_U8(flow, ct_nw_proto) ||
+         MINIFLOW_GET_U16(flow, ct_tp_src) ||
+         MINIFLOW_GET_U16(flow, ct_tp_dst) ||
+         MINIFLOW_GET_U32(flow, ct_nw_src) ||
+         MINIFLOW_GET_U32(flow, ct_nw_dst) ||
+         !ovs_u128_is_zero(MINIFLOW_GET_U128(flow, ct_ipv6_src)) ||
+         !ovs_u128_is_zero(MINIFLOW_GET_U128(flow, ct_ipv6_dst)))) {
+        return OFPERR_OFPBMC_BAD_MASK;
+    }
+
     return 0;
 }
 
 static void
-report_unsupported_ct(const char *detail)
+report_unsupported_act(const char *action, const char *detail)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-    VLOG_WARN_RL(&rl, "Rejecting ct action because datapath does not support "
-                 "ct action%s%s (your kernel module may be out of date)",
-                 detail ? " " : "",
-                 detail ? detail : "");
+    VLOG_WARN_RL(&rl, "Rejecting %s action because datapath does not support"
+                 "%s%s (your kernel module may be out of date)",
+                 action, detail ? " " : "", detail ? detail : "");
 }
 
 static enum ofperr
@@ -4157,42 +4194,55 @@ check_actions(const struct ofproto_dpif *ofproto,
               const struct rule_actions *const actions)
 {
     const struct ofpact *ofpact;
+    const struct odp_support *support = &ofproto->backer->support.odp;
 
     OFPACT_FOR_EACH (ofpact, actions->ofpacts, actions->ofpacts_len) {
-        const struct odp_support *support;
-        const struct ofpact_conntrack *ct;
-        const struct ofpact *a;
+        if (ofpact->type == OFPACT_CT) {
+            const struct ofpact_conntrack *ct;
+            const struct ofpact *a;
 
-        if (ofpact->type != OFPACT_CT) {
-            continue;
-        }
+            ct = CONTAINER_OF(ofpact, struct ofpact_conntrack, ofpact);
 
-        ct = CONTAINER_OF(ofpact, struct ofpact_conntrack, ofpact);
-        support = &ofproto->backer->support.odp;
-
-        if (!support->ct_state) {
-            report_unsupported_ct(NULL);
-            return OFPERR_OFPBAC_BAD_TYPE;
-        }
-        if ((ct->zone_imm || ct->zone_src.field) && !support->ct_zone) {
-            report_unsupported_ct("zone");
-            return OFPERR_OFPBAC_BAD_ARGUMENT;
-        }
-
-        OFPACT_FOR_EACH(a, ct->actions, ofpact_ct_get_action_len(ct)) {
-            const struct mf_field *dst = ofpact_get_mf_dst(a);
-
-            if (a->type == OFPACT_NAT && !support->ct_state_nat) {
-                /* The backer doesn't seem to support the NAT bits in
-                 * 'ct_state': assume that it doesn't support the NAT
-                 * action. */
-                report_unsupported_ct("nat");
+            if (!support->ct_state) {
+                report_unsupported_act("ct", "ct action");
                 return OFPERR_OFPBAC_BAD_TYPE;
             }
-            if (dst && ((dst->id == MFF_CT_MARK && !support->ct_mark)
-                        || (dst->id == MFF_CT_LABEL && !support->ct_label))) {
-                report_unsupported_ct("setting mark and/or label");
-                return OFPERR_OFPBAC_BAD_SET_ARGUMENT;
+            if ((ct->zone_imm || ct->zone_src.field) && !support->ct_zone) {
+                report_unsupported_act("ct", "ct zones");
+                return OFPERR_OFPBAC_BAD_ARGUMENT;
+            }
+            /* So far the force commit feature is implemented together with the
+             * original direction tuple feature by all datapaths, so we use the
+             * support flag for the 'ct_orig_tuple' to indicate support for the
+             * force commit feature as well. */
+            if ((ct->flags & NX_CT_F_FORCE) && !support->ct_orig_tuple) {
+                report_unsupported_act("ct", "force commit");
+                return OFPERR_OFPBAC_BAD_ARGUMENT;
+            }
+
+            OFPACT_FOR_EACH(a, ct->actions, ofpact_ct_get_action_len(ct)) {
+                const struct mf_field *dst = ofpact_get_mf_dst(a);
+
+                if (a->type == OFPACT_NAT && !support->ct_state_nat) {
+                    /* The backer doesn't seem to support the NAT bits in
+                     * 'ct_state': assume that it doesn't support the NAT
+                     * action. */
+                    report_unsupported_act("ct", "nat");
+                    return OFPERR_OFPBAC_BAD_TYPE;
+                }
+                if (dst && ((dst->id == MFF_CT_MARK && !support->ct_mark) ||
+                            (dst->id == MFF_CT_LABEL && !support->ct_label))) {
+                    report_unsupported_act("ct", "setting mark and/or label");
+                    return OFPERR_OFPBAC_BAD_SET_ARGUMENT;
+                }
+            }
+        } else if (ofpact->type == OFPACT_RESUBMIT) {
+            struct ofpact_resubmit *resubmit = ofpact_get_RESUBMIT(ofpact);
+
+            if (resubmit->with_ct_orig && !support->ct_orig_tuple) {
+                report_unsupported_act("resubmit",
+                                       "ct original direction tuple");
+                return OFPERR_OFPBAC_BAD_TYPE;
             }
         }
     }

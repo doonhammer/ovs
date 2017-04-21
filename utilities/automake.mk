@@ -71,8 +71,6 @@ MAN_ROOTS += \
 	utilities/ovs-tcpdump.8.in \
 	utilities/ovs-tcpundump.1.in \
 	utilities/ovs-vlan-bug-workaround.8.in \
-	utilities/ovs-test.8.in \
-	utilities/ovs-vlan-test.8.in \
 	utilities/ovs-vsctl.8.in
 MAN_FRAGMENTS += utilities/ovs-vlan-bugs.man
 CLEANFILES += \
@@ -99,9 +97,7 @@ CLEANFILES += \
 	utilities/ovs-tcpundump \
 	utilities/ovs-tcpundump.1 \
 	utilities/ovs-test \
-	utilities/ovs-test.8 \
 	utilities/ovs-vlan-test \
-	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vlan-bug-workaround.8 \
 	utilities/ovs-vsctl.8
 
@@ -119,8 +115,6 @@ man_MANS += \
 	utilities/ovs-tcpdump.8 \
 	utilities/ovs-tcpundump.1 \
 	utilities/ovs-vlan-bug-workaround.8 \
-	utilities/ovs-test.8 \
-	utilities/ovs-vlan-test.8 \
 	utilities/ovs-vsctl.8
 
 utilities_ovs_appctl_SOURCES = utilities/ovs-appctl.c

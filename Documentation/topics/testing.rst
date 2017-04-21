@@ -38,8 +38,6 @@ described in :doc:`/intro/install/general`. You do not need to install Open
 vSwitch or to build or load the kernel module to run these test suites. You do
 not need supervisor privilege to run these test suites.
 
-.. _testing-unit-tests:
-
 Unit Tests
 ~~~~~~~~~~
 
@@ -126,8 +124,6 @@ All the same options are available via TESTSUITEFLAGS.
   You may find that the valgrind results are easier to interpret if you put
   ``-q`` in ``~/.valgrindrc``, since that reduces the amount of output.
 
-.. _testing-oftest:
-
 OFTest
 ~~~~~~
 
@@ -181,14 +177,12 @@ standard and other standards.
   of Open vSwitch and OFTest in your bug report, plus any other information
   needed to reproduce the problem.
 
-.. _ryu:
-
 Ryu
 ~~~
 
 Ryu is an OpenFlow controller written in Python that includes an extensive
 OpenFlow testsuite. Open vSwitch includes a Makefile target to run Ryu in
-"dummy mode". See :ref:`testing-oftest` above for an explanation of dummy mode.
+"dummy mode". See `OFTest`_ above for an explanation of dummy mode.
 
 To run Ryu tests with Open vSwitch, first read and follow the instructions
 under **Testing** above. Second, obtain a copy of Ryu, install its
@@ -237,8 +231,9 @@ Vagrant
   Requires Vagrant (version 1.7.0 or later) and a compatible hypervisor
 
 .. note::
-  You must **Bootstrap** and **Configure** the sources before you run the steps
-  described here.
+  You must bootstrap and configure the sources (see
+  doc:`/intro/install/general`) before you run the steps described
+  here.
 
 A Vagrantfile is provided allowing to compile and provision the source tree as
 found locally in a virtual machine using the following command::
@@ -341,8 +336,6 @@ You should invoke scan-view to view analysis results. The last line of output
 from ``clang-analyze`` will list the command (containing results directory)
 that you should invoke to view the results on a browser.
 
-.. _testing-ci:
-
 Continuous Integration with Travis CI
 -------------------------------------
 
@@ -382,8 +375,6 @@ Instructions to setup travis-ci for your GitHub repository:
 
 4. Pushing a commit to the repository which breaks the build or the
    testsuite will now trigger a email sent to mylist@mydomain.org
-
-.. _testing-vsperf:
 
 vsperf
 ------

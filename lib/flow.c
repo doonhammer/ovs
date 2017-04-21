@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1000,27 +1000,48 @@ flow_get_metadata(const struct flow *flow, struct match *flow_metadata)
     }
 }
 
-const char *ct_state_to_string(uint32_t state)
+const char *
+ct_state_to_string(uint32_t state)
 {
     switch (state) {
-    case CS_REPLY_DIR:
-        return "rpl";
-    case CS_TRACKED:
-        return "trk";
-    case CS_NEW:
-        return "new";
-    case CS_ESTABLISHED:
-        return "est";
-    case CS_RELATED:
-        return "rel";
-    case CS_INVALID:
-        return "inv";
-    case CS_SRC_NAT:
-        return "snat";
-    case CS_DST_NAT:
-        return "dnat";
+#define CS_STATE(ENUM, INDEX, NAME) case CS_##ENUM: return NAME;
+        CS_STATES
+#undef CS_STATE
     default:
         return NULL;
+    }
+}
+
+uint32_t
+ct_state_from_string(const char *s)
+{
+#define CS_STATE(ENUM, INDEX, NAME) \
+    if (!strcmp(s, NAME)) {         \
+        return CS_##ENUM;           \
+    }
+    CS_STATES
+#undef CS_STATE
+    return 0;
+}
+
+/* Clears the fields in 'flow' associated with connection tracking. */
+void
+flow_clear_conntrack(struct flow *flow)
+{
+    flow->ct_state = 0;
+    flow->ct_zone = 0;
+    flow->ct_mark = 0;
+    flow->ct_label = OVS_U128_ZERO;
+
+    flow->ct_nw_proto = 0;
+    flow->ct_tp_src = 0;
+    flow->ct_tp_dst = 0;
+    if (flow->dl_type == htons(ETH_TYPE_IP)) {
+        flow->ct_nw_src = 0;
+        flow->ct_nw_dst = 0;
+    } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+        memset(&flow->ct_ipv6_src, 0, sizeof flow->ct_ipv6_src);
+        memset(&flow->ct_ipv6_dst, 0, sizeof flow->ct_ipv6_dst);
     }
 }
 
@@ -2205,16 +2226,17 @@ void
 flow_pop_vlan(struct flow *flow, struct flow_wildcards *wc)
 {
     int n = flow_count_vlan_headers(flow);
-    if (n == 0) {
-        return;
+    if (n > 1) {
+        if (wc) {
+            memset(&wc->masks.vlans[1], 0xff,
+                   sizeof(union flow_vlan_hdr) * (n - 1));
+        }
+        memmove(&flow->vlans[0], &flow->vlans[1],
+                sizeof(union flow_vlan_hdr) * (n - 1));
     }
-    if (wc) {
-        memset(&wc->masks.vlans[1], 0xff,
-               sizeof(union flow_vlan_hdr) * (n - 1));
+    if (n > 0) {
+        memset(&flow->vlans[n - 1], 0, sizeof(union flow_vlan_hdr));
     }
-    memmove(&flow->vlans[0], &flow->vlans[1],
-            sizeof(union flow_vlan_hdr) * (n - 1));
-    memset(&flow->vlans[n - 1], 0, sizeof(union flow_vlan_hdr));
 }
 
 void
@@ -2222,7 +2244,9 @@ flow_push_vlan_uninit(struct flow *flow, struct flow_wildcards *wc)
 {
     if (wc) {
         int n = flow_count_vlan_headers(flow);
-        memset(wc->masks.vlans, 0xff, sizeof(union flow_vlan_hdr) * n);
+        if (n) {
+            memset(wc->masks.vlans, 0xff, sizeof(union flow_vlan_hdr) * n);
+        }
     }
     memmove(&flow->vlans[1], &flow->vlans[0],
             sizeof(union flow_vlan_hdr) * (FLOW_MAX_VLAN_HEADERS - 1));
