@@ -2970,6 +2970,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     struct ovn_port *dst_port = NULL;
     struct ovn_port *src_port = NULL;
 
+   
     struct nbrec_logical_port_chain *lpc;
     struct nbrec_logical_port_pair_group *lppg;
     struct nbrec_logical_port_pair *lpp;
@@ -2998,6 +2999,27 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         lpc = lcc->chain;
         //traffic_port = lcc->port;
         traffic_port =  ovn_port_find(ports,lcc->port->name);
+        if (traffic_port == NULL) {
+            static struct vlog_rate_limit rl =
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                        "Traffic port %s does not exist\n",
+                              lcc->port->name);
+            break;
+        }
+        /*
+        * Check chain has one or more groups
+        */
+        if (lpc->n_port_pair_groups == 0) {
+            static struct vlog_rate_limit rl =
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                "SFC Chain: %s used in classifier: %s does not not "
+                 "have any port pair groups\n",
+                              lcc->chain->name, lcc->name);
+            break;
+
+        }
         /* TODO Check port exists. */
         struct eth_addr traffic_logical_port_ea;
         ovs_be32 traffic_logical_port_ip;
@@ -3027,16 +3049,17 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
          *  to enhanced to: SUM(port pairs of each port group) + 1
          */
         input_port_array = xmalloc(sizeof *src_port *
-                                   lpc->n_port_pair_groups + 1);
+                                   lpc->n_port_pair_groups);
         output_port_array = xmalloc(sizeof *dst_port *
-                                  (lpc->n_port_pair_groups + 1));
+                                  (lpc->n_port_pair_groups));
         /* Copy port groups from chain and sort them according to sortkey.*/
         struct nbrec_logical_port_pair_group **port_pair_groups =
                                  xmemdup(lpc->port_pair_groups,
                           sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        qsort(port_pair_groups, lpc->n_port_pair_groups,
+        if ( lpc->n_port_pair_groups > 1){
+            qsort(port_pair_groups, lpc->n_port_pair_groups,
               sizeof *port_pair_groups, cmp_port_pair_groups);
-
+        }
         /* For each port-pair-group in a port chain pull out the port-pairs.*/
         for (size_t j = 0; j < lpc->n_port_pair_groups; j++) {
             lppg = port_pair_groups[j];
@@ -3063,174 +3086,192 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
          * the chain. This defines the complete path for packets through
          * the chain. */
         }
-        /*
-         * Insert the lowest priorty rule dest is src-logical-port
-         */
-    /* TODO add LCC match to match */
+    /*
+    * Insert the lowest priorty rule dest is src-logical-port. These are the
+    * entry points into the chain in either direction. The match statement
+    * is used to filter the entry port to provide higher granularity of 
+    * filtering.
+    */
     if (chain_path == 1) { /* Path starting from entry port */
         if (strcmp(chain_match,"")!=0) {
            lcc_match =  xasprintf(
-            "eth.src == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0 && %s",
+            "eth.src == "ETH_ADDR_FMT" && %s",
              ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
         } else {
            lcc_match =  xasprintf(
-            "eth.src == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0",
+            "eth.src == "ETH_ADDR_FMT,
              ETH_ADDR_ARGS(traffic_logical_port_ea));
         }
            lcc_action = xasprintf("outport = %s; output;",
                                 input_port_array[0]->json_key);
-    } else {
+    } else {  /* Path going to the entry port */
         if (strcmp(chain_match,"")!=0) {
            lcc_match =  xasprintf(
-            "eth.dst == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0 && %s",
+            "eth.dst == "ETH_ADDR_FMT" && %s",
              ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
         } else {
            lcc_match =  xasprintf(
-            "eth.dst == "ETH_ADDR_FMT" && "REGBIT_CHAIN_LOOPBACK" == 0",
+            "eth.dst == "ETH_ADDR_FMT,
              ETH_ADDR_ARGS(traffic_logical_port_ea));
         }
            lcc_action = xasprintf("outport = %s; output;",
-                                input_port_array[0]->json_key);
+                    output_port_array[lpc->n_port_pair_groups-1]->json_key);
     }
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_outer_priority,
                        lcc_match, lcc_action);
     free(lcc_match);
     free(lcc_action);
-    for (size_t j = 0; j < lpc->n_port_pair_groups; j++) {
+    /*
+    * For last VNF send the flow back to teh original chassis and exit from
+    * there.
+    */
+    if (chain_path == 1) { /* Path starting from entry port */
+           lcc_match = xasprintf(
+                    "eth.src == "ETH_ADDR_FMT" && inport == %s",
+                     ETH_ADDR_ARGS(traffic_logical_port_ea),
+                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
+    } else { /* Path starting from destination port. */
+            lcc_match = xasprintf(
+                    "eth.dst == "ETH_ADDR_FMT" && inport == %s",
+                     ETH_ADDR_ARGS(traffic_logical_port_ea),
+                     input_port_array[0]->json_key);
+    }
+             //lcc_action = xasprintf("next;");
+             //lcc_action = xasprintf("flags.loopback = 1; "
+             //    REGBIT_CHAIN_LOOPBACK" = 1;"
+             //   "next(pipeline=ingress, table=0);");
+    struct ds actions = DS_EMPTY_INITIALIZER;
+    ds_put_format(&actions, "clone { "
+                              "inport = outport; outport = \"\"; "
+                              "flags = 0; flags.loopback = 1; ");
+    for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
+            ds_put_format(&actions, "reg%d = 0; ", ii);
+    }
+    ds_put_format(&actions, "next(pipeline=ingress, table=%d); };",
+                            ovn_stage_get_table(S_SWITCH_IN_CHAIN) + 1);
+    ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_inner_priority,
+                        lcc_match, ds_cstr(&actions));
+    free(lcc_match);
+        //free(lcc_action);
+    ds_destroy(&actions);
 
-        /* Completed first catch all rule for this port-chain. */
+    /*
+    * Loop over all VNFs and create flow rules for each
+    * Only get here when there is more than one VNF in the chain.
+    */
+    for (size_t j = 1; j < lpc->n_port_pair_groups; j++) {
+
         /* Apply inner rules flows */
         if (chain_path == 1) { /* Path starting from entry port */
-            if (strcmp(chain_match,"")!=0) {
-                 lcc_match = xasprintf(
-                    "eth.src == "ETH_ADDR_FMT" && inport == %s && "
-                     REGBIT_CHAIN_LOOPBACK" == 0 && %s",
-                                ETH_ADDR_ARGS(traffic_logical_port_ea),
-                                output_port_array[j]->json_key, chain_match);
-            } else {
-                   lcc_match = xasprintf(
-                    "eth.src == "ETH_ADDR_FMT" && inport == %s && "
-                     REGBIT_CHAIN_LOOPBACK" == 0",
-                                ETH_ADDR_ARGS(traffic_logical_port_ea),
-                                output_port_array[j]->json_key);
-            }
-
-        } else { /* Path starting from destination port. */
-             if (strcmp(chain_match,"")!=0) {
-                 lcc_match = xasprintf(
-                    "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
-                     REGBIT_CHAIN_LOOPBACK" == 0 && %s",
-                                ETH_ADDR_ARGS(traffic_logical_port_ea),
-                                output_port_array[j]->json_key, chain_match);
-             } else {
-                 lcc_match = xasprintf(
-                    "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
-                     REGBIT_CHAIN_LOOPBACK" == 0",
-                                ETH_ADDR_ARGS(traffic_logical_port_ea),
-                                output_port_array[j]->json_key);
-             }
-        }
-        if (j == (lpc->n_port_pair_groups-1)) {
-             //lcc_action = xasprintf("next;");
-             lcc_action = xasprintf("flags.loopback = 1; "
-                 REGBIT_CHAIN_LOOPBACK" = 1;"
-                "next(pipeline=ingress, table=0);");
-        } else {
+            lcc_match = xasprintf(
+                    "eth.src == "ETH_ADDR_FMT" && inport == %s",
+                                 ETH_ADDR_ARGS(traffic_logical_port_ea),
+                                 output_port_array[j-1]->json_key);
             lcc_action = xasprintf("outport = %s; output;",
-                                    input_port_array[j+1]->json_key);
+                                input_port_array[j]->json_key);
+        } else { /* Path going to entry port. */
+            lcc_match = xasprintf(
+                    "eth.dst == "ETH_ADDR_FMT" && inport == %s",
+                    ETH_ADDR_ARGS(traffic_logical_port_ea),
+                    input_port_array[lpc->n_port_pair_groups-j]->json_key);
+             lcc_action = xasprintf("outport = %s; output;",
+                  output_port_array[lpc->n_port_pair_groups-(j+1)]->json_key);
         }
         ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_inner_priority,
                         lcc_match, lcc_action);
         free(lcc_match);
         free(lcc_action);
     }
-    /* bi-directional chain */
+    /* bi-directional chain (Response)*/
     if (chain_direction == 1) {
         /*
          * Insert the lowest priorty rule dest is src-logical-port
          */
-        /* TODO add LCC match to match */
         if (chain_path == 1) { /* Path from source port. */
             if (strcmp(chain_match,"")!=0) {
-                 lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT" && "
-                        REGBIT_CHAIN_LOOPBACK" == 0 && %s",
+                 lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT" && %s",
                         ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
-            } else {
+            } else { /* Path to source port */
 
-                 lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT" && "
-                                    REGBIT_CHAIN_LOOPBACK" == 0",
+                 lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT,
                                     ETH_ADDR_ARGS(traffic_logical_port_ea));
             }
             lcc_action = xasprintf("outport = %s; output;",
                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
         } else { /* Path from destination port. */
            if (strcmp(chain_match,"")!=0) {
-                lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT" && "
-                        REGBIT_CHAIN_LOOPBACK" == 0 && %s",
+                lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT" && %s",
                         ETH_ADDR_ARGS(traffic_logical_port_ea), chain_match);
             } else {
-                lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT" && "
-                        REGBIT_CHAIN_LOOPBACK" == 0",
+                lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT,
                         ETH_ADDR_ARGS(traffic_logical_port_ea));
             }
             lcc_action = xasprintf("outport = %s; output;",
-                    output_port_array[lpc->n_port_pair_groups-1]->json_key);
+                    input_port_array[0]->json_key);
         }
         ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, egress_outer_priority,
                        lcc_match, lcc_action);
         free(lcc_match);
         free(lcc_action);
         /*
-        * End of default flow match
+        * End Entry Flow to classification chain entry point.
         */
-        for (int j = lpc->n_port_pair_groups-1; j >= 0; j--) {
+        /* Apply last rule to exit from chain */
+        if (chain_path == 1) { /* Path from source port. */
+             lcc_match = xasprintf(
+                    "eth.dst == "ETH_ADDR_FMT" && inport == %s",
+                                 ETH_ADDR_ARGS(traffic_logical_port_ea),
+                                 input_port_array[0]->json_key);
+
+        } else { /* Path to source port. */
+             lcc_match = xasprintf(
+                "eth.src == "ETH_ADDR_FMT" && inport == %s",
+                    ETH_ADDR_ARGS(traffic_logical_port_ea),
+                    output_port_array[lpc->n_port_pair_groups-1]->json_key);
+        }
+        struct ds actions = DS_EMPTY_INITIALIZER;
+        ds_put_format(&actions,
+                              "clone { "
+                              "inport = outport; outport = \"\"; "
+                              "flags = 0; flags.loopback = 1; ");
+        for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
+                    ds_put_format(&actions, "reg%d = 0; ", ii);
+        }
+        ds_put_format(&actions, "next(pipeline=ingress, table=%d); };",
+                              ovn_stage_get_table(S_SWITCH_IN_CHAIN) + 1);
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN,
+                        egress_inner_priority, lcc_match, ds_cstr(&actions));
+        ds_destroy(&actions);
+        free(lcc_match);
+
+        for (int j = 1; j< lpc->n_port_pair_groups; j++) {
 
             /* Completed first catch all rule for this port-chain. */
 
             /* Apply inner rules flows */
             if (chain_path == 1) { /* Path from source port. */
-                if (strcmp(chain_match,"")!=0) {
-                    lcc_match = xasprintf(
-                      "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
-                       REGBIT_CHAIN_LOOPBACK" == 0 && %s",
-                       ETH_ADDR_ARGS(traffic_logical_port_ea),
-                       input_port_array[j]->json_key, chain_match);
-                } else {
-                  lcc_match = xasprintf(
-                   "eth.dst == "ETH_ADDR_FMT" && inport == %s && "
-                    REGBIT_CHAIN_LOOPBACK" == 0",
-                                       ETH_ADDR_ARGS(traffic_logical_port_ea),
-                                       input_port_array[j]->json_key);
+                lcc_match = xasprintf(
+                    "eth.dst == "ETH_ADDR_FMT" && inport == %s",
+                    ETH_ADDR_ARGS(traffic_logical_port_ea),
+                    input_port_array[lpc->n_port_pair_groups-j]->json_key);
+                 lcc_action = xasprintf("outport = %s; output;",
+                  output_port_array[lpc->n_port_pair_groups-(j+1)]->json_key);
 
-                }
-            } else { /* Path from destination port. */
-                if (strcmp(chain_match,"")!=0) {
-                     lcc_match = xasprintf(
-                         "eth.src == "ETH_ADDR_FMT" && inport == %s && "
-                          REGBIT_CHAIN_LOOPBACK" == 0 && %s",
-                          ETH_ADDR_ARGS(traffic_logical_port_ea),
-                          input_port_array[j]->json_key, chain_match);
-                 }else {
-                     lcc_match = xasprintf(
-                         "eth.src == "ETH_ADDR_FMT" && inport == %s && "
-                          REGBIT_CHAIN_LOOPBACK" == 0",
-                          ETH_ADDR_ARGS(traffic_logical_port_ea),
-                          input_port_array[j]->json_key);
-
-                 }
+            } else { /* Path to source port. */
+                lcc_match = xasprintf(
+                    "eth.src == "ETH_ADDR_FMT" && inport == %s",
+                        ETH_ADDR_ARGS(traffic_logical_port_ea),
+                        output_port_array[j-1]->json_key);
+                 lcc_action = xasprintf("outport = %s; output;",
+                        input_port_array[j]->json_key);
             }
-            if (j == 0) {
-             lcc_action = xasprintf("flags.loopback = 1; "
-                                      REGBIT_CHAIN_LOOPBACK" = 1;"
-                                      "next(pipeline=ingress, table=0);");
-            } else {
-             lcc_action = xasprintf("outport = %s; output;",
-                                     output_port_array[j-1]->json_key);
-            }
+          
+             
             ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN,
                           egress_inner_priority, lcc_match, lcc_action);
             free(lcc_match);
             free(lcc_action);
+           
         }
     }
     free(input_port_array);
