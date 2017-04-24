@@ -3227,7 +3227,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
              //    REGBIT_CHAIN_LOOPBACK" = 1;"
              //   "next(pipeline=ingress, table=0);");
     struct ds actions = DS_EMPTY_INITIALIZER;
-    ds_put_format(&actions, "clone { "
+    ds_put_format(&actions, "clone { ct_clear; "
                               "inport = outport; outport = \"\"; "
                               "flags = 0; flags.loopback = 1; ");
     for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
@@ -3317,7 +3317,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         }
         struct ds actions = DS_EMPTY_INITIALIZER;
         ds_put_format(&actions,
-                              "clone { "
+                              "clone { ct_clear; "
                               "inport = outport; outport = \"\"; "
                               "flags = 0; flags.loopback = 1; ");
         for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
