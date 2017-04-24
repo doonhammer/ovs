@@ -3136,7 +3136,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         struct nbrec_logical_port_pair_group **port_pair_groups =
                                  xmemdup(lpc->port_pair_groups,
                           sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        if ( lpc->n_port_pair_groups > 1) {
+        if (lpc->n_port_pair_groups > 1) {
             qsort(port_pair_groups, lpc->n_port_pair_groups,
               sizeof *port_pair_groups, cmp_port_pair_groups);
         }
@@ -3344,7 +3344,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                         output_port_array[j-1]->json_key);
                  lcc_action = xasprintf("outport = %s; output;",
                         input_port_array[j]->json_key);
-            }     
+            }
             ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN,
                           egress_inner_priority, lcc_match, lcc_action);
             free(lcc_match);
