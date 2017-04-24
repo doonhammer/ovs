@@ -161,11 +161,6 @@ enum ovn_stage {
 #define REGBIT_CONNTRACK_COMMIT "reg0[1]"
 #define REGBIT_CONNTRACK_NAT    "reg0[2]"
 #define REGBIT_DHCP_OPTS_RESULT "reg0[3]"
-/*
-* Check for re-circulate chain flow to original sender
-*/
-#define REGBIT_CHAIN_LOOPBACK   "reg7[0]"
-
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
 /* Indicate that this packet has been recirculated using egress
@@ -3056,7 +3051,6 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     struct ovn_port *dst_port = NULL;
     struct ovn_port *src_port = NULL;
 
-   
     struct nbrec_logical_port_chain *lpc;
     struct nbrec_logical_port_pair_group *lppg;
     struct nbrec_logical_port_pair *lpp;
@@ -3142,7 +3136,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         struct nbrec_logical_port_pair_group **port_pair_groups =
                                  xmemdup(lpc->port_pair_groups,
                           sizeof *port_pair_groups * lpc->n_port_pair_groups);
-        if ( lpc->n_port_pair_groups > 1){
+        if ( lpc->n_port_pair_groups > 1) {
             qsort(port_pair_groups, lpc->n_port_pair_groups,
               sizeof *port_pair_groups, cmp_port_pair_groups);
         }
@@ -3175,7 +3169,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     /*
     * Insert the lowest priorty rule dest is src-logical-port. These are the
     * entry points into the chain in either direction. The match statement
-    * is used to filter the entry port to provide higher granularity of 
+    * is used to filter the entry port to provide higher granularity of
     * filtering.
     */
     if (chain_path == 1) { /* Path starting from entry port */
@@ -3350,14 +3344,11 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                         output_port_array[j-1]->json_key);
                  lcc_action = xasprintf("outport = %s; output;",
                         input_port_array[j]->json_key);
-            }
-          
-             
+            }     
             ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN,
                           egress_inner_priority, lcc_match, lcc_action);
             free(lcc_match);
             free(lcc_action);
-           
         }
     }
     free(input_port_array);
