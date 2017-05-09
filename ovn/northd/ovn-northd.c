@@ -116,7 +116,6 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,      14, "ls_in_dns_lookup") \
     PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  15, "ls_in_dns_response") \
     PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       16, "ls_in_l2_lkup")       \
-
                                                                       \
     /* Logical switch egress stages. */                               \
     PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")     \
@@ -164,6 +163,7 @@ enum ovn_stage {
 #define REGBIT_CONNTRACK_COMMIT "reg0[1]"
 #define REGBIT_CONNTRACK_NAT    "reg0[2]"
 #define REGBIT_DHCP_OPTS_RESULT "reg0[3]"
+#define REGBIT_DNS_LOOKUP_RESULT "reg0[4]"
 
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
