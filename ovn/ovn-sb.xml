@@ -311,7 +311,7 @@
         transmitted and received with reasonable performance. It is a hint
         to senders transmitting data to this chassis that they should use
         checksums to protect OVN metadata. <code>ovn-controller</code>
-        populates this key with the value defined in 
+        populates this key with the value defined in
         <ref table="Open_vSwitch" column="external_ids:ovn-encap-csum"/> column
         of the Open_vSwitch database's <ref table="Open_vSwitch"
         db="Open_vSwitch"/> table.  Other applications should treat this key as
@@ -852,9 +852,16 @@
         <li><code>ct_mark</code> <code>ct_label</code></li>
         <li>
           <p>
-            <code>ct_state</code>, which has the following Boolean subfields:
+            <code>ct_state</code>, which has several Boolean subfields.  The
+            <code>ct_next</code> action initializes the following subfields:
           </p>
           <ul>
+            <li>
+              <code>ct.trk</code>: Always set to true by <code>ct_next</code>
+              to indicate that connection tracking has taken place.  All other
+              <code>ct</code> subfields have <code>ct.trk</code> as a
+              prerequisite.
+            </li>
             <li><code>ct.new</code>: True for a new flow</li>
             <li><code>ct.est</code>: True for an established flow</li>
             <li><code>ct.rel</code>: True for a related flow</li>
@@ -862,8 +869,8 @@
             <li><code>ct.inv</code>: True for a connection entry in a bad state</li>
           </ul>
           <p>
-            The above subfields of <code>ct_state</code> are initialized by
-            the <code>ct_next</code> action, described later.
+            The <code>ct_dnat</code>, <code>ct_snat</code>, and
+            <code>ct_lb</code> actions initialize the following subfields:
           </p>
           <ul>
             <li>
@@ -875,11 +882,6 @@
               address has been changed.
             </li>
           </ul>
-          <p>
-            The above subfields of <code>ct_state</code> are initialized by
-            the actions like <code>ct_dnat</code>, <code>ct_snat</code> and
-            <code>ct_lb</code> described later.
-          </p>
         </li>
       </ul>
 
@@ -1463,6 +1465,53 @@
             packet in that connection.
           </p>
         </dd>
+
+        <dt>
+          <code><var>R</var> = dns_lookup();</code>
+        </dt>
+
+        <dd>
+          <p>
+            <b>Parameters</b>: No parameters.
+          </p>
+
+          <p>
+            <b>Result</b>: stored to a 1-bit subfield <var>R</var>.
+          </p>
+
+          <p>
+            Valid only in the ingress pipeline.
+          </p>
+
+          <p>
+            When this action is applied to a valid DNS request (a UDP packet
+            typically directed to port 53), it attempts to resolve the query
+            using the contents of the <ref table="DNS"/> table.  If it is
+            successful, it changes the packet into a DNS reply and stores 1 in
+            <var>R</var>.  If the action is applied to a non-DNS packet, an
+            invalid DNS request packet, or a valid DNS request for which the
+            <ref table="DNS"/> table does not supply an answer, it leaves the
+            packet unchanged and stores 0 in <var>R</var>.
+          </p>
+
+          <p>
+            Regardless of success, the action does not make any of the changes
+            to the flow that are necessary to direct the packet back to the
+            requester.  The logical pipeline can implement this behavior with
+            matches and actions in later tables.
+          </p>
+
+          <p>
+            <b>Example:</b>
+            <code>
+              reg0[3] = dns_lookup();
+            </code>
+          </p>
+
+          <p>
+            <b>Prerequisite:</b> <code>udp</code>
+          </p>
+        </dd>
       </dl>
 
       <p>
@@ -1534,6 +1583,12 @@ tcp.flags = RST;
 
     <column name="external_ids" key="stage-name">
       Human-readable name for this flow's stage in the pipeline.
+    </column>
+
+    <column name="external_ids" key="stage-hint" type='{"type": "uuid"}'>
+      UUID of a <ref db="OVN_Northbound"/> record that caused this logical flow
+      to be created.  Currently used only for attribute of logical flows to
+      northbound <ref db="OVN_Northbound" table="ACL"/> records.
     </column>
 
     <column name="external_ids" key="source">
@@ -1636,12 +1691,28 @@ tcp.flags = RST;
         the <ref db="OVN_Northbound"/> database.
       </column>
 
-      <column name="external_ids" key="name">
-        <code>ovn-northd</code> copies this from the <ref
-        table="Logical_Router" db="OVN_Northbound"/> or <ref
-        table="Logical_Switch" db="OVN_Northbound"/> table in the <ref
-        db="OVN_Northbound"/> database, when that column is nonempty.
-      </column>
+      <group title="Naming">
+        <p>
+          <code>ovn-northd</code> copies these from the name fields in the <ref
+          db="OVN_Northbound"/> database, either from <ref
+          table="Logical_Router" db="OVN_Northbound" column="name"/> and <ref
+          table="Logical_Router" db="OVN_Northbound" column="external_ids"
+          key="neutron:router_name"/> in the <ref table="Logical_Router"
+          db="OVN_Northbound"/> table or from <ref table="Logical_Switch"
+          db="OVN_Northbound" column="name"/> and <ref table="Logical_Switch"
+          db="OVN_Northbound" column="external_ids"
+          key="neutron:network_name"/> in the <ref table="Logical_Switch"
+          db="OVN_Northbound"/> table.
+        </p>
+
+        <column name="external_ids" key="name">
+          A name for the logical datapath.
+        </column>
+
+        <column name="external_ids" key="name2">
+          Another name for the logical datapath.
+        </column>
+      </group>
     </group>
 
     <group title="Common Columns">
@@ -1862,6 +1933,21 @@ tcp.flags = RST;
         ports must have reversed <ref column="logical_port"/> and
         <code>peer</code> values.
       </column>
+
+      <column name="nat_addresses">
+        MAC address followed by a list of SNAT and DNAT external IP
+        addresses, followed by
+        <code>is_chassis_resident("<var>lport</var>")</code>, where
+        <var>lport</var> is the name of a logical port on the same chassis
+        where the corresponding NAT rules are applied.  This is used to
+        send gratuitous ARPs for SNAT and DNAT external IP addresses via
+        <code>localnet</code>, from the chassis where <var>lport</var>
+        resides.  Example: <code>80:fa:5b:06:72:b7 158.36.44.22
+        158.36.44.24 is_chassis_resident("foo1")</code>.  This would result
+        in generation of gratuitous ARPs for IP addresses 158.36.44.22 and
+        158.36.44.24 with a MAC address of 80:fa:5b:06:72:b7 from the chassis
+        where the logical port "foo1" resides.
+      </column>
     </group>
 
     <group title="L3 Gateway Options">
@@ -1883,15 +1969,25 @@ tcp.flags = RST;
         The <code>chassis</code> in which the port resides.
       </column>
 
-        <column name="options" key="nat-addresses">
-          MAC address of the <code>l3gateway</code> port followed by a list of
-          SNAT and DNAT IP addresses. This is used to send gratuitous ARPs for
-          SNAT and DNAT IP addresses via <code>localnet</code> and is valid for
-          only L3 gateway ports.  Example: <code>80:fa:5b:06:72:b7 158.36.44.22
-          158.36.44.24</code>. This would result in generation of gratuitous
-          ARPs for IP addresses 158.36.44.22 and 158.36.44.24 with a MAC
-          address of 80:fa:5b:06:72:b7.
-        </column>
+      <column name="options" key="nat-addresses">
+        MAC address of the <code>l3gateway</code> port followed by a list of
+        SNAT and DNAT external IP addresses.  This is used to send gratuitous
+        ARPs for SNAT and DNAT external IP addresses via <code>localnet</code>.
+        Example: <code>80:fa:5b:06:72:b7 158.36.44.22 158.36.44.24</code>.
+        This would result in generation of gratuitous ARPs for IP addresses
+        158.36.44.22 and 158.36.44.24 with a MAC address of 80:fa:5b:06:72:b7.
+        This is used in OVS versions prior to 2.8.
+      </column>
+
+      <column name="nat_addresses">
+        MAC address of the <code>l3gateway</code> port followed by a list of
+        SNAT and DNAT external IP addresses.  This is used to send gratuitous
+        ARPs for SNAT and DNAT external IP addresses via <code>localnet</code>.
+        Example: <code>80:fa:5b:06:72:b7 158.36.44.22 158.36.44.24</code>.
+        This would result in generation of gratuitous ARPs for IP addresses
+        158.36.44.22 and 158.36.44.24 with a MAC address of 80:fa:5b:06:72:b7.
+        This is used in OVS version 2.8 and later versions.
+      </column>
     </group>
 
     <group title="Localnet Options">
@@ -2047,6 +2143,29 @@ tcp.flags = RST;
           is <code>localnet</code> (see <code>Localnet Options</code>, above)
           or <code>l2gateway</code> (see <code>L2 Gateway Options</code>, above).
         </p>
+      </column>
+    </group>
+
+    <group title="Naming">
+      <column name="external_ids" key="name">
+        <p>
+          For a logical switch port, <code>ovn-northd</code> copies this from
+          <ref table="Logical_Switch_Port" db="OVN_Northbound"
+          column="external_ids" key="neutron:port_name"/> in the <ref
+          table="Logical_Switch_Port" db="OVN_Northbound"/> table in the
+          OVN_Northbound database, if it is a nonempty string.
+        </p>
+
+        <p>
+          For a logical switch port, <code>ovn-northd</code> does not currently
+          set this key.
+        </p>
+      </column>
+    </group>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
       </column>
     </group>
   </table>
@@ -2651,6 +2770,32 @@ tcp.flags = RST;
       Columns</code> at the beginning of this document.
 
       <column name="external_ids"/>
+    </group>
+  </table>
+  <table name="DNS" title="Native DNS resolution">
+    <p>
+      Each row in this table stores the DNS records. The OVN action
+      <code>dns_lookup</code> uses this table for DNS resolution.
+    </p>
+
+    <column name="records">
+      Key-value pair of DNS records with <code>DNS query name</code> as the key
+      and a string of IP address(es) separated by comma or space as the
+      value.
+
+      <p><b>Example: </b> "vm1.ovn.org" = "10.0.0.4 aef0::4"</p>
+    </column>
+
+    <column name="datapaths">
+      The DNS records defined in the column <ref column="records"/> will be
+      applied only to the DNS queries originating from the datapaths defined
+      in this column.
+    </column>
+
+    <group title="Common Columns">
+      <column name="external_ids">
+        See <em>External IDs</em> at the beginning of this document.
+      </column>
     </group>
   </table>
 </database>

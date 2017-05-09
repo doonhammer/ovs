@@ -290,11 +290,11 @@ parse_subfield(const char *name, const char *str_value, struct match *match,
 
         const struct mf_field *field = sf.field;
         union mf_value value, mask;
-        unsigned int size = DIV_ROUND_UP(sf.n_bits, 8);
+        unsigned int size = field->n_bytes;
 
         mf_get(field, match, &value, &mask);
-        bitwise_copy(&val, size, 0, &value, field->n_bytes, sf.ofs, sf.n_bits);
-        bitwise_one (               &mask,  field->n_bytes, sf.ofs, sf.n_bits);
+        bitwise_copy(&val, size, 0, &value, size, sf.ofs, sf.n_bits);
+        bitwise_one (               &mask,  size, sf.ofs, sf.n_bits);
         *usable_protocols &= mf_set(field, &value, &mask, match, &error);
     }
     return error;
@@ -546,7 +546,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
         if (!error) {
             enum ofperr err;
 
-            err = ofpacts_check(ofpacts.data, ofpacts.size, &fm->match.flow,
+            err = ofpacts_check(ofpacts.data, ofpacts.size, &fm->match,
                                 OFPP_MAX, fm->table_id, 255, usable_protocols);
             if (!err && !*usable_protocols) {
                 err = OFPERR_OFPBAC_MATCH_INCONSISTENT;

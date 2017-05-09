@@ -159,12 +159,44 @@ static unsigned hash_to_bucket(uint32_t hash)
 
 static void
 write_ct_md(struct dp_packet *pkt, uint16_t state, uint16_t zone,
-            uint32_t mark, ovs_u128 label)
+            const struct conn *conn, const struct conn_key *key)
 {
     pkt->md.ct_state = state | CS_TRACKED;
     pkt->md.ct_zone = zone;
-    pkt->md.ct_mark = mark;
-    pkt->md.ct_label = label;
+    pkt->md.ct_mark = conn ? conn->mark : 0;
+    pkt->md.ct_label = conn ? conn->label : OVS_U128_ZERO;
+
+    /* Use the original direction tuple if we have it. */
+    if (conn) {
+        key = &conn->key;
+    }
+    pkt->md.ct_orig_tuple_ipv6 = false;
+    if (key) {
+        if (key->dl_type == htons(ETH_TYPE_IP)) {
+            pkt->md.ct_orig_tuple.ipv4 = (struct ovs_key_ct_tuple_ipv4) {
+                key->src.addr.ipv4_aligned,
+                key->dst.addr.ipv4_aligned,
+                key->nw_proto != IPPROTO_ICMP
+                ? key->src.port : htons(key->src.icmp_type),
+                key->nw_proto != IPPROTO_ICMP
+                ? key->dst.port : htons(key->src.icmp_code),
+                key->nw_proto,
+            };
+        } else if (key->dl_type == htons(ETH_TYPE_IPV6)) {
+            pkt->md.ct_orig_tuple_ipv6 = true;
+            pkt->md.ct_orig_tuple.ipv6 = (struct ovs_key_ct_tuple_ipv6) {
+                key->src.addr.ipv6_aligned,
+                key->dst.addr.ipv6_aligned,
+                key->nw_proto != IPPROTO_ICMPV6
+                ? key->src.port : htons(key->src.icmp_type),
+                key->nw_proto != IPPROTO_ICMPV6
+                ? key->dst.port : htons(key->src.icmp_code),
+                key->nw_proto,
+            };
+        }
+    } else {
+        memset(&pkt->md.ct_orig_tuple, 0, sizeof pkt->md.ct_orig_tuple);
+    }
 }
 
 static struct conn *
@@ -207,11 +239,20 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
 static struct conn *
 process_one(struct conntrack *ct, struct dp_packet *pkt,
             struct conn_lookup_ctx *ctx, uint16_t zone,
-            bool commit, long long now)
+            bool force, bool commit, long long now)
 {
     unsigned bucket = hash_to_bucket(ctx->hash);
     struct conn *conn = ctx->conn;
     uint16_t state = 0;
+
+    /* Delete found entry if in wrong direction. 'force' implies commit. */
+    if (conn && force && ctx->reply) {
+        ovs_list_remove(&conn->exp_node);
+        hmap_remove(&ct->buckets[bucket].connections, &conn->node);
+        atomic_count_dec(&ct->n_conn);
+        delete_conn(conn);
+        conn = NULL;
+    }
 
     if (conn) {
         if (ctx->related) {
@@ -254,8 +295,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         }
     }
 
-    write_ct_md(pkt, state, zone, conn ? conn->mark : 0,
-                conn ? conn->label : OVS_U128_ZERO);
+    write_ct_md(pkt, state, zone, conn, &ctx->key);
 
     return conn;
 }
@@ -270,7 +310,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
  * 'setlabel' behaves similarly for the connection label.*/
 int
 conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
-                  ovs_be16 dl_type, bool commit, uint16_t zone,
+                  ovs_be16 dl_type, bool force, bool commit, uint16_t zone,
                   const uint32_t *setmark,
                   const struct ovs_key_ct_labels *setlabel,
                   const char *helper)
@@ -306,7 +346,7 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
         unsigned bucket;
 
         if (!conn_key_extract(ct, pkts[i], dl_type, &ctxs[i], zone)) {
-            write_ct_md(pkts[i], CS_INVALID, zone, 0, OVS_U128_ZERO);
+            write_ct_md(pkts[i], CS_INVALID, zone, NULL, NULL);
             continue;
         }
 
@@ -333,7 +373,8 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
 
             conn_key_lookup(ctb, &ctxs[j], now);
 
-            conn = process_one(ct, pkts[j], &ctxs[j], zone, commit, now);
+            conn = process_one(ct, pkts[j], &ctxs[j], zone, force, commit,
+                               now);
 
             if (conn && setmark) {
                 set_mark(pkts[j], conn, setmark[0], setmark[1]);
@@ -568,14 +609,14 @@ extract_l3_ipv6(struct conn_key *key, const void *data, size_t size,
                 const char **new_data)
 {
     const struct ovs_16aligned_ip6_hdr *ip6 = data;
-    uint8_t nw_proto = ip6->ip6_nxt;
-    uint8_t nw_frag = 0;
-
     if (new_data) {
         if (OVS_UNLIKELY(size < sizeof *ip6)) {
             return false;
         }
     }
+
+    uint8_t nw_proto = ip6->ip6_nxt;
+    uint8_t nw_frag = 0;
 
     data = ip6 + 1;
     size -=  sizeof *ip6;
@@ -623,8 +664,11 @@ check_l4_tcp(const struct conn_key *key, const void *data, size_t size,
              const void *l3)
 {
     const struct tcp_header *tcp = data;
-    size_t tcp_len = TCP_OFFSET(tcp->tcp_ctl) * 4;
+    if (size < sizeof *tcp) {
+        return false;
+    }
 
+    size_t tcp_len = TCP_OFFSET(tcp->tcp_ctl) * 4;
     if (OVS_UNLIKELY(tcp_len < TCP_HEADER_LEN || tcp_len > size)) {
         return false;
     }
@@ -637,8 +681,11 @@ check_l4_udp(const struct conn_key *key, const void *data, size_t size,
              const void *l3)
 {
     const struct udp_header *udp = data;
-    size_t udp_len = ntohs(udp->udp_len);
+    if (size < sizeof *udp) {
+        return false;
+    }
 
+    size_t udp_len = ntohs(udp->udp_len);
     if (OVS_UNLIKELY(udp_len < UDP_HEADER_LEN || udp_len > size)) {
         return false;
     }
@@ -923,7 +970,7 @@ static bool
 conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
                  struct conn_lookup_ctx *ctx, uint16_t zone)
 {
-    const struct eth_header *l2 = dp_packet_l2(pkt);
+    const struct eth_header *l2 = dp_packet_eth(pkt);
     const struct ip_header *l3 = dp_packet_l3(pkt);
     const char *l4 = dp_packet_l4(pkt);
     const char *tail = dp_packet_tail(pkt);

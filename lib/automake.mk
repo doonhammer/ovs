@@ -284,6 +284,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/vconn-stream.c \
 	lib/vconn.c \
 	lib/versions.h \
+	lib/vl-mff-map.h \
 	lib/vlan-bitmap.c \
 	lib/vlan-bitmap.h \
 	lib/vlog.c \
@@ -442,6 +443,7 @@ EXTRA_DIST += \
 	lib/db-ctl-base.xml \
 	lib/ssl.xml \
 	lib/ssl-bootstrap.xml \
+	lib/table.xml \
 	lib/vlog.xml
 
 MAN_FRAGMENTS += \
@@ -532,10 +534,7 @@ EXTRA_DIST += build-aux/extract-ofp-msgs
 
 INSTALL_DATA_LOCAL += lib-install-data-local
 lib-install-data-local:
-	$(MKDIR_P) $(DESTDIR)$(RUNDIR)
 	$(MKDIR_P) $(DESTDIR)$(PKIDIR)
-	$(MKDIR_P) $(DESTDIR)$(LOGDIR)
-	$(MKDIR_P) $(DESTDIR)$(DBDIR)
 	$(MKDIR_P) $(DESTDIR)$(sysconfdir)/openvswitch
 
 man_MANS += lib/ovs-fields.7

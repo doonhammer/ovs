@@ -18,75 +18,46 @@
       <code>ovn-sb</code>(5)) below it.
     </p>
 
-    <h1>Configuration</h1>
+    <h1>Options</h1>
+    <dl>
+      <dt><code>--ovnnb-db=<var>database</var></code></dt>
+      <dd>
+        The OVSDB database containing the OVN Northbound Database.  If the
+        <env>OVN_NB_DB</env> environment variable is set, its value is used
+        as the default.  Otherwise, the default is
+        <code>unix:@RUNDIR@/ovnnb_db.sock</code>.
+      </dd>
+      <dt><code>--ovnsb-db=<var>database</var></code></dt>
+      <dd>
+        The OVSDB database containing the OVN Southbound Database.  If the
+        <env>OVN_SB_DB</env> environment variable is set, its value is used
+        as the default.  Otherwise, the default is
+        <code>unix:@RUNDIR@/ovnsb_db.sock</code>.
+      </dd>
+    </dl>
     <p>
-      <code>ovn-northd</code> requires a connection to the Northbound
-      and Southbound databases.  The defaults are <code>ovnnb_db.sock</code>
-      and <code>ovnsb_db.sock</code> respectively
-      in the local Open vSwitch's "run" directory.  This may be
-      overridden with the following commands:
+      <var>database</var> in the above options must take one of the following
+      forms:
     </p>
-    <ul>
-      <li>
-        <p>
-          <code>--ovnnb-db=<var>database</var></code>
-        </p>
-        <p>
-          The database containing the OVN Northbound Database.
-        </p>
-      </li>
-      <li>
-        <p>
-          <code>--ovnsb-db=<var>database</var></code>
-        </p>
-        <p>
-          The database containing the OVN Southbound Database.
-        </p>
-      </li>
-    </ul>
+    <xi:include href="ovsdb/remote-active.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+    <xi:include href="ovsdb/remote-passive.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h2>Daemon Options</h2>
+    <xi:include href="lib/daemon.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h2>Logging Options</h2>
+    <xi:include href="lib/vlog.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h2>PKI Options</h2>
     <p>
-      The <var>database</var> argument must take one of the following forms:
+      PKI configuration is required in order to use SSL for the connections to
+      the Northbound and Southbound databases.
     </p>
-    <ul>
-      <li>
-        <p>
-          <code>ssl:<var>ip</var>:<var>port</var></code>
-        </p>
-        <p>
-          The specified SSL <var>port</var> on the host at the given
-          <var>ip</var>, which must be expressed as an IP address (not a DNS
-          name) in IPv4 or IPv6 address format.  If <var>ip</var> is an IPv6
-          address, then wrap <var>ip</var> with square brackets, e.g.:
-          <code>ssl:[::1]:6640</code>.  The <code>--private-key</code>,
-          <code>--certificate</code>, and <code>--ca-cert</code> options are
-          mandatory when this form is used.
-        </p>
-      </li>
-      <li>
-        <p>
-          <code>tcp:<var>ip</var>:<var>port</var></code>
-        </p>
-        <p>
-          Connect to the given TCP <var>port</var> on <var>ip</var>, where
-          <var>ip</var> can be IPv4 or IPv6 address. If <var>ip</var> is an
-          IPv6 address, then wrap <var>ip</var> with square brackets, e.g.:
-          <code>tcp:[::1]:6640</code>.
-        </p>
-      </li>
-      <li>
-        <p>
-          <code>unix:<var>file</var></code>
-        </p>
-        <p>
-          On POSIX, connect to the Unix domain server socket named
-          <var>file</var>.
-        </p>
-        <p>
-          On Windows, connect to a localhost TCP port whose value is written
-          in <var>file</var>.
-        </p>
-      </li>
-    </ul>
+    <xi:include href="lib/ssl.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h2>Other Options</h2>
+
+    <xi:include href="lib/common.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h1>Runtime Management Commands</h1>
     <p>
@@ -770,7 +741,71 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 14 Destination Lookup</h3>
+    <h3>Ingress Table 13 DNS Lookup</h3>
+
+    <p>
+      This table looks up and resolves the DNS names to the corresponding
+      configured IP address(es).
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          A priority-100 logical flow for each logical switch datapath
+          if it is configured with DNS records, which matches the IPv4 and IPv6
+          packets with <code>udp.dst</code> = 53 and applies the action
+          <code>dns_lookup</code> and advances the packet to the next table.
+        </p>
+
+        <pre>
+reg0[4] = dns_lookup(); next;
+        </pre>
+
+        <p>
+          For valid DNS packets, this transforms the packet into a DNS
+          reply if the DNS name can be resolved, and stores 1 into reg0[4].
+          For failed DNS resolution or other kinds of packets, it just stores
+          0 into reg0[4]. Either way, it continues to the next table.
+        </p>
+      </li>
+    </ul>
+
+    <h3>Ingress Table 14 DNS Responses</h3>
+
+    <p>
+      This table implements DNS responder for the DNS replies generated by
+      the previous table.
+    </p>
+
+    <ul>
+      <li>
+        <p>
+          A priority-100 logical flow for each logical switch datapath
+          if it is configured with DNS records, which matches the IPv4 and IPv6
+          packets with <code>udp.dst = 53 &amp;&amp; reg0[4] == 1</code>
+          and responds back to the <code>inport</code> after applying these
+          actions.  If <code>reg0[4]</code> is set to 1, it means that the
+          action <code>dns_lookup</code> was successful.
+        </p>
+
+        <pre>
+eth.dst &lt;-&gt; eth.src;
+ip4.src &lt;-&gt; ip4.dst;
+udp.dst = udp.src;
+udp.src = 53;
+outport = <var>P</var>;
+flags.loopback = 1;
+output;
+        </pre>
+
+        <p>
+          (This terminates ingress packet processing; the packet does not go
+           to the next ingress table.)
+        </p>
+      </li>
+    </ul>
+
+    <h3>Ingress Table 15 Destination Lookup</h3>
 
     <p>
       This table implements switching behavior.  It contains these logical
@@ -880,11 +915,23 @@ output;
     </p>
 
     <p>
-      Also a priority 34000 logical flow is added for each logical port which
-      has DHCPv4 options defined to allow the DHCPv4 reply packet and which has
-      DHCPv6 options defined to allow the DHCPv6 reply packet from the
-      <code>Ingress Table 12: DHCP responses</code>.
+      Also the following flows are added.
     </p>
+    <ul>
+      <li>
+        A priority 34000 logical flow is added for each logical port which
+        has DHCPv4 options defined to allow the DHCPv4 reply packet and which has
+        DHCPv6 options defined to allow the DHCPv6 reply packet from the
+        <code>Ingress Table 12: DHCP responses</code>.
+      </li>
+
+      <li>
+        A priority 34000 logical flow is added for each logical switch datapath
+        configured with DNS records with the match <code>udp.dst = 53</code>
+        to allow the DNS reply packet from the
+        <code>Ingress Table 14:DNS responses</code>.
+      </li>
+    </ul>
 
     <h3>Egress Table 7: Egress Port Security - IP</h3>
 

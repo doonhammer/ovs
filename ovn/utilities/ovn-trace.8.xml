@@ -208,6 +208,64 @@
     semantic change.
   </p>
 
+  <h1>Stateful Actions</h1>
+
+  <p>
+    Some OVN logical actions use or update state that is not available in the
+    southbound database.  <code>ovn-trace</code> handles these actions as
+    described below:
+  </p>
+
+  <dl>
+    <dt><code>ct_next</code></dt>
+    <dd>
+      By default <code>ovn-trace</code> treats flows as ``tracked'' and
+      ``established.''  See the description of the <code>--ct</code> option for
+      a way to override this behavior.
+    </dd>
+
+    <dt><code>ct_dnat</code> (without an argument)</dt>
+    <dd>
+      Forks the pipeline.  In one fork, advances to the next table as if
+      <code>next;</code> were executed.  The packet is not changed, on the
+      assumption that no NAT state was available.  In the other fork, the
+      pipeline continues without change after the <code>ct_dnat</code> action.
+    </dd>
+
+    <dt><code>ct_snat</code> (without an argument)</dt>
+    <dd>
+      This action distinguishes between gateway routers and distributed
+      routers.  A gateway router is defined as a logical datapath that contains
+      an <code>l3gateway</code> port; any other logical datapath is a
+      distributed router.  On a gateway router, <code>ct_snat;</code> is
+      treated as a no-op.  On a distributed router, it is treated the same way
+      as <code>ct_dnat;</code>.
+    </dd>
+
+    <dt><code>ct_dnat(<var>ip</var>)</code></dt>
+    <dt><code>ct_snat(<var>ip</var>)</code></dt>
+    <dd>
+      Forks the pipeline.  In one fork, sets <code>ip4.dst</code> (or
+      <code>ip4.src</code>) to <var>ip</var> and <code>ct.dnat</code> (or
+      <code>ct.snat</code>) to 1 and advances to the next table as if
+      <code>next;</code> were executed.  In the other fork, the pipeline
+      continues without change after the <code>ct_dnat</code> (or
+      <code>ct_snat</code>) action.
+    </dd>
+
+    <dt><code>ct_lb</code></dt>
+    <dd>
+      Not yet implemented; currently implemented as a no-op.
+    </dd>
+
+    <dt><code>ct_commit</code></dt>
+    <dt><code>put_arp</code></dt>
+    <dt><code>put_nd</code></dt>
+    <dd>
+      These actions are treated as no-ops.
+    </dd>
+  </dl>
+
   <h1>Daemon Mode</h1>
 
   <p>
@@ -306,6 +364,79 @@
           output, it does not look up the corresponding OpenFlow flows.
         </li>
       </ul>
+    </dd>
+
+    <dt><code>--ct=<var>flags</var></code></dt>
+    <dd>
+      <p>
+        This option sets the <code>ct_state</code> flags that a
+        <code>ct_next</code> logical action will report.  The <var>flags</var>
+        must be a comma- or space-separated list of the following connection
+        tracking flags:
+      </p>
+
+      <ul>
+        <li>
+          <code>trk</code>: Include to indicate connection tracking has taken
+          place.  (This bit is set automatically even if not listed in
+          <var>flags</var>.
+        </li>
+        <li><code>new</code>: Include to indicate a new flow.</li>
+        <li><code>est</code>: Include to indicate an established flow.</li>
+        <li><code>rel</code>: Include to indicate a related flow.</li>
+        <li><code>rpl</code>: Include to indicate a reply flow.</li>
+        <li><code>inv</code>: Include to indicate a connection entry in a
+        bad state.</li>
+        <li><code>dnat</code>: Include to indicate a packet whose
+        destination IP address has been changed.</li>
+        <li><code>snat</code>: Include to indicate a packet whose source IP
+        address has been changed.</li>
+      </ul>
+
+      <p>
+        The <code>ct_next</code> action is used to implement the OVN
+        distributed firewall.  For testing, useful flag combinations include:
+      </p>
+
+      <ul>
+        <li><code>trk,new</code>: A packet in a flow in either direction
+        through a firewall that has not yet been committed (with
+        <code>ct_commit</code>).</li>
+        <li><code>trk,est</code>: A packet in an established flow going out
+        through a firewall.</li>
+        <li><code>trk,rpl</code>: A packet coming in through a firewall in
+        reply to an established flow.</li>
+        <li><code>trk,inv</code>: An invalid packet in either direction.</li>
+      </ul>
+
+      <p>
+        A packet might pass through the connection tracker twice in one trip
+        through OVN: once following egress from a VM as it passes outward
+        through a firewall, and once preceding ingress to a second VM as it
+        passes inward through a firewall.  Use multiple <code>--ct</code>
+        options to specify the flags for multiple <code>ct_next</code> actions.
+      </p>
+
+      <p>
+        When <code>--ct</code> is unspecified, or when there are fewer
+        <code>--ct</code> options than <code>ct_next</code> actions, the
+        <var>flags</var> default to <code>trk,est</code>.
+      </p>
+    </dd>
+
+    <dt><code>--friendly-names</code></dt>
+    <dt><code>--no-friendly-names</code></dt>
+    <dd>
+      When cloud management systems such as OpenStack are layered on top of
+      OVN, they often use long, human-unfriendly names for ports and datapaths,
+      for example, ones that include entire UUIDs.  They do usually include
+      friendlier names, but the long, hard-to-read names are the ones that
+      appear in matches and actions.  By default, or with
+      <code>--friendly-names</code>, <code>ovn-trace</code> substitutes these
+      friendlier names for the long names in its output.  Use
+      <code>--no-friendly-names</code> to disable this behavior; this option
+      might be useful, for example, if a program is going to parse
+      <code>ovn-trace</code> output.
     </dd>
   </dl>
 

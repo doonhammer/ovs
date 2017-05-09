@@ -111,7 +111,6 @@ enum ofp_version {
 #define INTEL_VENDOR_ID 0x0000AA01 /* Intel */
 
 #define OFP_MAX_TABLE_NAME_LEN 32
-#define OFP_MAX_PORT_NAME_LEN  16
 
 #define OFP_OLD_PORT  6633
 #define OFP_PORT  6653
@@ -292,9 +291,14 @@ enum ofp_packet_in_reason {
 
 #define OFPR10_BITS                                                     \
     ((1u << OFPR_NO_MATCH) | (1u << OFPR_ACTION) | (1u << OFPR_INVALID_TTL))
+
+/* From OF1.4+, OFPR_ACTION is split into four more descriptive reasons,
+ * OFPR_APPLY_ACTION, OFPR_ACTION_SET, OFPR_GROUP, and OFPR_PACKET_OUT.
+ * OFPR_APPLY_ACTION shares the same number as OFPR_ACTION. */
+#define OFPR14_ACTION_BITS                                              \
+    ((1u << OFPR_ACTION_SET) | (1u << OFPR_GROUP) | (1u << OFPR_PACKET_OUT))
 #define OFPR14_BITS                                                     \
-    (OFPR10_BITS |                                                      \
-     (1u << OFPR_ACTION_SET) | (1u << OFPR_GROUP) | (1u << OFPR_PACKET_OUT))
+    (OFPR10_BITS | OFPR14_ACTION_BITS)
 
     /* Nonstandard reason--not exposed via OpenFlow. */
     OFPR_EXPLICIT_MISS,
@@ -452,6 +456,15 @@ enum ofp_table_config {
     /* OpenFlow 1.4. */
     OFPTC14_EVICTION              = 1 << 2, /* Allow table to evict flows. */
     OFPTC14_VACANCY_EVENTS        = 1 << 3, /* Enable vacancy events. */
+};
+
+/* Header and packet type name spaces. */
+enum ofp_header_type_namespaces {
+    OFPHTN_ONF = 0,             /* ONF namespace. */
+    OFPHTN_ETHERTYPE = 1,       /* ns_type is an Ethertype. */
+    OFPHTN_IP_PROTO = 2,        /* ns_type is a IP protocol number. */
+    OFPHTN_UDP_TCP_PORT = 3,    /* ns_type is a TCP or UDP port. */
+    OFPHTN_IPV4_OPTION = 4,     /* ns_type is an IPv4 option number. */
 };
 
 #endif /* openflow/openflow-common.h */

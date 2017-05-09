@@ -31,7 +31,6 @@ EXTRA_DIST += \
 	rhel/usr_lib_systemd_system_ovn-controller.service \
 	rhel/usr_lib_systemd_system_ovn-controller-vtep.service \
 	rhel/usr_lib_systemd_system_ovn-northd.service \
-	rhel/usr_lib_systemd_system_ovn-northd.service \
 	rhel/usr_lib_firewalld_services_ovn-central-firewall-service.xml \
 	rhel/usr_lib_firewalld_services_ovn-host-firewall-service.xml
 
@@ -56,6 +55,7 @@ $(srcdir)/rhel/openvswitch-fedora.spec: rhel/openvswitch-fedora.spec.in $(top_bu
 	$(update_rhel_spec)
 
 RPMBUILD_TOP := $(abs_top_builddir)/rpm/rpmbuild
+RPMBUILD_OPT ?= --without check
 
 # Build user-space RPMs
 rpm-fedora: dist $(srcdir)/rhel/openvswitch-fedora.spec

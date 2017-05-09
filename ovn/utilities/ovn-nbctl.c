@@ -485,6 +485,7 @@ Options:\n\
   --oneline                   print exactly one line of output per command\n",
            program_name, program_name, ctl_get_db_cmd_usage(),
            default_nb_db());
+    table_usage();
     vlog_usage();
     printf("\
   --no-syslog             equivalent to --verbose=nbctl:syslog:warn\n");
@@ -492,6 +493,7 @@ Options:\n\
 Other options:\n\
   -h, --help                  display this help message\n\
   -V, --version               display version information\n");
+    stream_usage("database", true, true, false);
     exit(EXIT_SUCCESS);
 }
 
@@ -599,23 +601,34 @@ lb_by_name_or_uuid(struct ctl_context *ctx, const char *id, bool must_exist)
     return lb;
 }
 
+static void
+print_alias(const struct smap *external_ids, const char *key, struct ds *s)
+{
+    const char *alias = smap_get(external_ids, key);
+    if (alias && alias[0]) {
+        ds_put_format(s, " (aka %s)", alias);
+    }
+}
+
 /* Given pointer to logical router, this routine prints the router
  * information.  */
 static void
 print_lr(const struct nbrec_logical_router *lr, struct ds *s)
 {
-    ds_put_format(s, "    router "UUID_FMT" (%s)\n",
+    ds_put_format(s, "router "UUID_FMT" (%s)",
                   UUID_ARGS(&lr->header_.uuid), lr->name);
+    print_alias(&lr->external_ids, "neutron:router_name", s);
+    ds_put_char(s, '\n');
 
     for (size_t i = 0; i < lr->n_ports; i++) {
         const struct nbrec_logical_router_port *lrp = lr->ports[i];
-        ds_put_format(s, "        port %s\n", lrp->name);
+        ds_put_format(s, "    port %s\n", lrp->name);
         if (lrp->mac) {
-            ds_put_cstr(s, "            mac: ");
+            ds_put_cstr(s, "        mac: ");
             ds_put_format(s, "\"%s\"\n", lrp->mac);
         }
         if (lrp->n_networks) {
-            ds_put_cstr(s, "            networks: [");
+            ds_put_cstr(s, "        networks: [");
             for (size_t j = 0; j < lrp->n_networks; j++) {
                 ds_put_format(s, "%s\"%s\"",
                         j == 0 ? "" : ", ",
@@ -624,32 +637,62 @@ print_lr(const struct nbrec_logical_router *lr, struct ds *s)
             ds_put_cstr(s, "]\n");
         }
     }
+
+    for (size_t i = 0; i < lr->n_nat; i++) {
+        const struct nbrec_nat *nat = lr->nat[i];
+        ds_put_format(s, "    nat "UUID_FMT"\n",
+                  UUID_ARGS(&nat->header_.uuid));
+        ds_put_cstr(s, "        external ip: ");
+        ds_put_format(s, "\"%s\"\n", nat->external_ip);
+        ds_put_cstr(s, "        logical ip: ");
+        ds_put_format(s, "\"%s\"\n", nat->logical_ip);
+        ds_put_cstr(s, "        type: ");
+        ds_put_format(s, "\"%s\"\n", nat->type);
+    }
 }
 
 static void
 print_ls(const struct nbrec_logical_switch *ls, struct ds *s)
 {
-    ds_put_format(s, "    switch "UUID_FMT" (%s)\n",
+    ds_put_format(s, "switch "UUID_FMT" (%s)",
                   UUID_ARGS(&ls->header_.uuid), ls->name);
+    print_alias(&ls->external_ids, "neutron:network_name", s);
+    ds_put_char(s, '\n');
 
     for (size_t i = 0; i < ls->n_ports; i++) {
         const struct nbrec_logical_switch_port *lsp = ls->ports[i];
 
-        ds_put_format(s, "        port %s\n", lsp->name);
+        ds_put_format(s, "    port %s", lsp->name);
+        print_alias(&lsp->external_ids, "neutron:port_name", s);
+        ds_put_char(s, '\n');
+
+        if (lsp->type[0]) {
+            ds_put_format(s, "        type: %s\n", lsp->type);
+        }
         if (lsp->parent_name) {
-            ds_put_format(s, "            parent: %s\n", lsp->parent_name);
+            ds_put_format(s, "        parent: %s\n", lsp->parent_name);
         }
         if (lsp->n_tag) {
-            ds_put_format(s, "            tag: %"PRIu64"\n", lsp->tag[0]);
+            ds_put_format(s, "        tag: %"PRIu64"\n", lsp->tag[0]);
         }
-        if (lsp->n_addresses) {
-            ds_put_cstr(s, "            addresses: [");
+
+        /* Print the addresses, but not if there's just a single "router"
+         * address because that's just clutter. */
+        if (lsp->n_addresses
+            && !(lsp->n_addresses == 1
+                 && !strcmp(lsp->addresses[0], "router"))) {
+            ds_put_cstr(s, "        addresses: [");
             for (size_t j = 0; j < lsp->n_addresses; j++) {
                 ds_put_format(s, "%s\"%s\"",
                         j == 0 ? "" : ", ",
                         lsp->addresses[j]);
             }
             ds_put_cstr(s, "]\n");
+        }
+
+        const char *router_port = smap_get(&lsp->options, "router-port");
+        if (router_port) {
+            ds_put_format(s, "        router-port: %s\n", router_port);
         }
     }
 }
@@ -3498,7 +3541,7 @@ nbctl_lr_nat_list(struct ctl_context *ctx)
     struct smap lr_nats = SMAP_INITIALIZER(&lr_nats);
     for (size_t i = 0; i < lr->n_nat; i++) {
         const struct nbrec_nat *nat = lr->nat[i];
-        const char *key = xasprintf("%-17.13s%s", nat->type, nat->external_ip);
+        char *key = xasprintf("%-17.13s%s", nat->type, nat->external_ip);
         if (nat->external_mac && nat->logical_port) {
             smap_add_format(&lr_nats, key, "%-22.18s%-21.17s%s",
                             nat->logical_ip, nat->external_mac,
@@ -3506,6 +3549,7 @@ nbctl_lr_nat_list(struct ctl_context *ctx)
         } else {
             smap_add_format(&lr_nats, key, "%s", nat->logical_ip);
         }
+        free(key);
     }
 
     const struct smap_node **nodes = smap_sort(&lr_nats);
@@ -4130,25 +4174,34 @@ cmd_set_ssl(struct ctl_context *ctx)
 }
 
 static const struct ctl_table_class tables[NBREC_N_TABLES] = {
-    [NBREC_TABLE_LOGICAL_SWITCH].row_ids[0]
-    = {&nbrec_table_logical_switch, &nbrec_logical_switch_col_name, NULL},
+    [NBREC_TABLE_DHCP_OPTIONS].row_ids
+    = {{&nbrec_logical_switch_port_col_name, NULL,
+        &nbrec_logical_switch_port_col_dhcpv4_options},
+       {&nbrec_logical_switch_port_col_external_ids,
+        "neutron:port_name", &nbrec_logical_switch_port_col_dhcpv4_options},
+       {&nbrec_logical_switch_port_col_name, NULL,
+        &nbrec_logical_switch_port_col_dhcpv6_options},
+       {&nbrec_logical_switch_port_col_external_ids,
+        "neutron:port_name", &nbrec_logical_switch_port_col_dhcpv6_options}},
 
-    [NBREC_TABLE_LOGICAL_SWITCH_PORT].row_ids[0]
-    = {&nbrec_table_logical_switch_port, &nbrec_logical_switch_port_col_name,
-       NULL},
+    [NBREC_TABLE_LOGICAL_SWITCH].row_ids
+    = {{&nbrec_logical_switch_col_name, NULL, NULL},
+       {&nbrec_logical_switch_col_external_ids, "neutron:network_name", NULL}},
 
-    [NBREC_TABLE_LOGICAL_ROUTER].row_ids[0]
-    = {&nbrec_table_logical_router, &nbrec_logical_router_col_name, NULL},
+    [NBREC_TABLE_LOGICAL_SWITCH_PORT].row_ids
+    = {{&nbrec_logical_switch_port_col_name, NULL, NULL},
+       {&nbrec_logical_switch_port_col_external_ids,
+        "neutron:port_name", NULL}},
+
+    [NBREC_TABLE_LOGICAL_ROUTER].row_ids
+    = {{&nbrec_logical_router_col_name, NULL, NULL},
+       {&nbrec_logical_router_col_external_ids, "neutron:router_name", NULL}},
 
     [NBREC_TABLE_LOGICAL_ROUTER_PORT].row_ids[0]
-    = {&nbrec_table_logical_router_port, &nbrec_logical_router_port_col_name,
-       NULL},
+    = {&nbrec_logical_router_port_col_name, NULL, NULL},
 
     [NBREC_TABLE_ADDRESS_SET].row_ids[0]
-    = {&nbrec_table_address_set, &nbrec_address_set_col_name, NULL},
-
-    [NBREC_TABLE_SSL].row_ids[0]
-    = {&nbrec_table_nb_global, NULL, &nbrec_nb_global_col_ssl},
+    = {&nbrec_address_set_col_name, NULL, NULL},
 };
 
 static void

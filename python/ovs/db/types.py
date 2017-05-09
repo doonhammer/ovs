@@ -15,12 +15,12 @@
 import sys
 import uuid
 
-import six
-
-from ovs.db import error
-import ovs.db.parser
 import ovs.db.data
+import ovs.db.parser
 import ovs.ovsuuid
+from ovs.db import error
+
+import six
 
 
 class AtomicType(object):
@@ -296,6 +296,7 @@ class BaseType(object):
         if self.enum:
             literals = [value.toEnglish(escapeLiteral)
                         for value in self.enum.values]
+            literals.sort()
             if len(literals) == 1:
                 english = 'must be %s' % (literals[0])
             elif len(literals) == 2:

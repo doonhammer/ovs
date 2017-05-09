@@ -35,7 +35,9 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/trigger.c \
 	ovsdb/trigger.h \
 	ovsdb/transaction.c \
-	ovsdb/transaction.h
+	ovsdb/transaction.h \
+	ovsdb/ovsdb-util.c \
+	ovsdb/ovsdb-util.h
 ovsdb_libovsdb_la_CFLAGS = $(AM_CFLAGS)
 ovsdb_libovsdb_la_CPPFLAGS = $(AM_CPPFLAGS)
 
@@ -48,13 +50,17 @@ MAN_FRAGMENTS += \
 	ovsdb/replication.man \
 	ovsdb/replication-syn.man
 
+EXTRA_DIST += \
+	ovsdb/remote-active.xml \
+	ovsdb/remote-passive.xml
+
 # ovsdb-tool
 bin_PROGRAMS += ovsdb/ovsdb-tool
 ovsdb_ovsdb_tool_SOURCES = ovsdb/ovsdb-tool.c
 ovsdb_ovsdb_tool_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 # ovsdb-tool.1
 man_MANS += ovsdb/ovsdb-tool.1
-DISTCLEANFILES += ovsdb/ovsdb-tool.1
+CLEANFILES += ovsdb/ovsdb-tool.1
 MAN_ROOTS += ovsdb/ovsdb-tool.1.in
 
 # ovsdb-client
@@ -63,7 +69,7 @@ ovsdb_ovsdb_client_SOURCES = ovsdb/ovsdb-client.c
 ovsdb_ovsdb_client_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 # ovsdb-client.1
 man_MANS += ovsdb/ovsdb-client.1
-DISTCLEANFILES += ovsdb/ovsdb-client.1
+CLEANFILES += ovsdb/ovsdb-client.1
 MAN_ROOTS += ovsdb/ovsdb-client.1.in
 
 # ovsdb-server
@@ -72,14 +78,14 @@ ovsdb_ovsdb_server_SOURCES = ovsdb/ovsdb-server.c
 ovsdb_ovsdb_server_LDADD = ovsdb/libovsdb.la lib/libopenvswitch.la
 # ovsdb-server.1
 man_MANS += ovsdb/ovsdb-server.1
-DISTCLEANFILES += ovsdb/ovsdb-server.1
+CLEANFILES += ovsdb/ovsdb-server.1
 MAN_ROOTS += ovsdb/ovsdb-server.1.in
 
 # ovsdb-idlc
 noinst_SCRIPTS += ovsdb/ovsdb-idlc
 EXTRA_DIST += ovsdb/ovsdb-idlc.in
 MAN_ROOTS += ovsdb/ovsdb-idlc.1
-DISTCLEANFILES += ovsdb/ovsdb-idlc
+CLEANFILES += ovsdb/ovsdb-idlc
 SUFFIXES += .ovsidl .ovsschema
 OVSDB_IDLC = $(run_python) $(srcdir)/ovsdb/ovsdb-idlc.in
 .ovsidl.c:
@@ -107,5 +113,5 @@ OVSDB_DOC = $(run_python) $(srcdir)/ovsdb/ovsdb-doc
 # ovsdb-dot
 EXTRA_DIST += ovsdb/ovsdb-dot.in ovsdb/dot2pic
 noinst_SCRIPTS += ovsdb/ovsdb-dot
-DISTCLEANFILES += ovsdb/ovsdb-dot
+CLEANFILES += ovsdb/ovsdb-dot
 OVSDB_DOT = $(run_python) $(srcdir)/ovsdb/ovsdb-dot.in

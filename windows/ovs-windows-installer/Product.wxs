@@ -24,7 +24,7 @@
 
     <Property Id="Description" Value="Open vSwitch Extension" />
     <Property Id="DriverID" Value="{583CC151-73EC-4A6A-8B47-578297AD7623}" />
-    <Property Id="DriverVersion" Value="6.3.9600.17298" />
+    <Property Id="DriverVersion" Value="$(var.Version)" />
     <Property Id="ExtensionType" Value="Forwarding" />
 
     <Condition Message="This application is only supported on Windows 2012 or higher.">
@@ -83,6 +83,8 @@
       <Custom Action="InitializeDB_Prop" After="CostFinalize"><![CDATA[REMOVE <> "ALL" AND (&OpenvSwitchDriver = 3)]]></Custom>
       <Custom Action="InitializeDB" After="ChangeOvsdbServerService" ><![CDATA[REMOVE <> "ALL" AND (&OpenvSwitchDriver = 3)]]></Custom>
 
+      <Custom Action="AddTriggerToOvsVswitchdService_Prop" After="CostFinalize"><![CDATA[NOT Installed AND (&OpenvSwitchDriver = 3)]]></Custom>
+      <Custom Action="AddTriggerToOvsVswitchdService" Before="ChangeOvsVSwitchdService"><![CDATA[NOT Installed AND (&OpenvSwitchDriver = 3)]]></Custom>
       <Custom Action="StartOvsVSwitchdService_Prop" After="CostFinalize"><![CDATA[NOT Installed AND (&OpenvSwitchDriver = 3)]]></Custom>
       <Custom Action="RestartOvsVSwitchdService_Prop" After="CostFinalize"><![CDATA[Installed AND REMOVE <> "ALL" AND (&OpenvSwitchDriver = 3)]]></Custom>
       <Custom Action="ChangeOvsVSwitchdService" Before="InstallFinalize"><![CDATA[REMOVE <> "ALL" AND (&OpenvSwitchDriver = 3)]]></Custom>
@@ -207,7 +209,7 @@
                 Name="ovs-vswitchd"
                 DisplayName="Open vSwitch Service"
                 Description="Open vSwitch Service"
-                Start="auto"
+                Start="demand"
                 Account="LocalSystem"
                 ErrorControl="ignore"
                 Interactive="no">

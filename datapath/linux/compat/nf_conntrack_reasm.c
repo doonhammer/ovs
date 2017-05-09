@@ -498,7 +498,7 @@ find_prev_fhdr(struct sk_buff *skb, u8 *prevhdrp, int *prevhoff, int *fhoff)
 	return 0;
 }
 
-int nf_ct_frag6_gather(struct net *net, struct sk_buff *skb, u32 user)
+int rpl_nf_ct_frag6_gather(struct net *net, struct sk_buff *skb, u32 user)
 {
 	struct net_device *dev = skb->dev;
 	int fhoff, nhoff, ret;
@@ -530,6 +530,7 @@ int nf_ct_frag6_gather(struct net *net, struct sk_buff *skb, u32 user)
 	local_bh_enable();
 #endif
 
+	skb_orphan(skb);
 	fq = fq_find(net, fhdr->identification, user, &hdr->saddr, &hdr->daddr,
 		     ip6_frag_ecn(hdr));
 	if (fq == NULL)
@@ -557,12 +558,22 @@ out_unlock:
 	return ret;
 }
 
+#ifdef HAVE_DEFRAG_ENABLE_TAKES_NET
+static int nf_ct_net_init(struct net *net)
+{
+	return nf_defrag_ipv6_enable(net);
+}
+#endif
+
 static void nf_ct_net_exit(struct net *net)
 {
 	inet_frags_exit_net(&net->nf_frag.frags, &nf_frags);
 }
 
 static struct pernet_operations nf_ct_net_ops = {
+#ifdef HAVE_DEFRAG_ENABLE_TAKES_NET
+	.init = nf_ct_net_init,
+#endif
 	.exit = nf_ct_net_exit,
 };
 
@@ -570,7 +581,9 @@ int rpl_nf_ct_frag6_init(void)
 {
 	int ret = 0;
 
+#ifndef HAVE_DEFRAG_ENABLE_TAKES_NET
 	nf_defrag_ipv6_enable();
+#endif
 	nf_frags.hashfn = nf_hashfn;
 	nf_frags.constructor = ip6_frag_init;
 	nf_frags.destructor = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -113,6 +113,7 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_TRUNC: return sizeof(struct ovs_action_trunc);
     case OVS_ACTION_ATTR_TUNNEL_PUSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_TUNNEL_POP: return sizeof(uint32_t);
+    case OVS_ACTION_ATTR_METER: return sizeof(uint32_t);
     case OVS_ACTION_ATTR_USERSPACE: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_PUSH_VLAN: return sizeof(struct ovs_action_push_vlan);
     case OVS_ACTION_ATTR_POP_VLAN: return 0;
@@ -124,6 +125,8 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_SET_MASKED: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_SAMPLE: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_CT: return ATTR_LEN_VARIABLE;
+    case OVS_ACTION_ATTR_PUSH_ETH: return sizeof(struct ovs_action_push_eth);
+    case OVS_ACTION_ATTR_POP_ETH: return 0;
     case OVS_ACTION_ATTR_CLONE: return ATTR_LEN_VARIABLE;
 
     case OVS_ACTION_ATTR_UNSPEC:
@@ -150,6 +153,8 @@ ovs_key_attr_to_string(enum ovs_key_attr attr, char *namebuf, size_t bufsize)
     case OVS_KEY_ATTR_CT_ZONE: return "ct_zone";
     case OVS_KEY_ATTR_CT_MARK: return "ct_mark";
     case OVS_KEY_ATTR_CT_LABELS: return "ct_label";
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4: return "ct_tuple4";
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6: return "ct_tuple6";
     case OVS_KEY_ATTR_TUNNEL: return "tunnel";
     case OVS_KEY_ATTR_IN_PORT: return "in_port";
     case OVS_KEY_ATTR_ETHERNET: return "eth";
@@ -181,7 +186,7 @@ format_generic_odp_action(struct ds *ds, const struct nlattr *a)
 {
     size_t len = nl_attr_get_size(a);
 
-    ds_put_format(ds, "action%"PRId16, nl_attr_type(a));
+    ds_put_format(ds, "action%d", nl_attr_type(a));
     if (len) {
         const uint8_t *unspec;
         unsigned int i;
@@ -313,7 +318,7 @@ format_odp_userspace_action(struct ds *ds, const struct nlattr *attr)
             if (userdata_len == sizeof cookie.sflow
                 && cookie.type == USER_ACTION_COOKIE_SFLOW) {
                 ds_put_format(ds, ",sFlow("
-                              "vid=%"PRIu16",pcp=%"PRIu8",output=%"PRIu32")",
+                              "vid=%"PRIu16",pcp=%d,output=%"PRIu32")",
                               vlan_tci_to_vid(cookie.sflow.vlan_tci),
                               vlan_tci_to_pcp(cookie.sflow.vlan_tci),
                               cookie.sflow.output);
@@ -473,7 +478,7 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
     l3 = eth + 1;
 
     /* Ethernet */
-    ds_put_format(ds, "header(size=%"PRIu8",type=%"PRIu8",eth(dst=",
+    ds_put_format(ds, "header(size=%"PRIu32",type=%"PRIu32",eth(dst=",
                   data->header_len, data->tnl_type);
     ds_put_format(ds, ETH_ADDR_FMT, ETH_ADDR_ARGS(eth->eth_dst));
     ds_put_format(ds, ",src=");
@@ -499,7 +504,7 @@ format_odp_tnl_push_header(struct ds *ds, struct ovs_action_push_tnl *data)
         ipv6_format_addr(&ip6->ip6_src, ds);
         ds_put_format(ds, ",dst=");
         ipv6_format_addr(&ip6->ip6_dst, ds);
-        ds_put_format(ds, ",label=%i,proto=%"PRIu8",tclass=0x%"PRIx8
+        ds_put_format(ds, ",label=%i,proto=%"PRIu8",tclass=0x%"PRIx32
                           ",hlimit=%"PRIu8"),",
                       ntohl(ip6->ip6_flow) & IPV6_LABEL_MASK, ip6->ip6_nxt,
                       (ntohl(ip6->ip6_flow) >> 20) & 0xff, ip6->ip6_hlim);
@@ -718,6 +723,7 @@ format_odp_ct_nat(struct ds *ds, const struct nlattr *attr)
 
 static const struct nl_policy ovs_conntrack_policy[] = {
     [OVS_CT_ATTR_COMMIT] = { .type = NL_A_FLAG, .optional = true, },
+    [OVS_CT_ATTR_FORCE_COMMIT] = { .type = NL_A_FLAG, .optional = true, },
     [OVS_CT_ATTR_ZONE] = { .type = NL_A_U16, .optional = true, },
     [OVS_CT_ATTR_MARK] = { .type = NL_A_UNSPEC, .optional = true,
                            .min_len = sizeof(uint32_t) * 2 },
@@ -736,7 +742,7 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     const uint32_t *mark;
     const char *helper;
     uint16_t zone;
-    bool commit;
+    bool commit, force;
     const struct nlattr *nat;
 
     if (!nl_parse_nested(attr, ovs_conntrack_policy, a, ARRAY_SIZE(a))) {
@@ -745,6 +751,7 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     }
 
     commit = a[OVS_CT_ATTR_COMMIT] ? true : false;
+    force = a[OVS_CT_ATTR_FORCE_COMMIT] ? true : false;
     zone = a[OVS_CT_ATTR_ZONE] ? nl_attr_get_u16(a[OVS_CT_ATTR_ZONE]) : 0;
     mark = a[OVS_CT_ATTR_MARK] ? nl_attr_get(a[OVS_CT_ATTR_MARK]) : NULL;
     label = a[OVS_CT_ATTR_LABELS] ? nl_attr_get(a[OVS_CT_ATTR_LABELS]): NULL;
@@ -752,10 +759,13 @@ format_odp_conntrack_action(struct ds *ds, const struct nlattr *attr)
     nat = a[OVS_CT_ATTR_NAT];
 
     ds_put_format(ds, "ct");
-    if (commit || zone || mark || label || helper || nat) {
+    if (commit || force || zone || mark || label || helper || nat) {
         ds_put_cstr(ds, "(");
         if (commit) {
             ds_put_format(ds, "commit,");
+        }
+        if (force) {
+            ds_put_format(ds, "force_commit,");
         }
         if (zone) {
             ds_put_format(ds, "zone=%"PRIu16",", zone);
@@ -797,6 +807,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
     }
 
     switch (type) {
+    case OVS_ACTION_ATTR_METER:
+        ds_put_format(ds, "meter(%"PRIu32")", nl_attr_get_u32(a));
+        break;
     case OVS_ACTION_ATTR_OUTPUT:
         ds_put_format(ds, "%"PRIu32, nl_attr_get_u32(a));
         break;
@@ -849,6 +862,16 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
         ds_put_cstr(ds, "set(");
         format_odp_key_attr(nl_attr_get(a), NULL, NULL, ds, true);
         ds_put_cstr(ds, ")");
+        break;
+    case OVS_ACTION_ATTR_PUSH_ETH: {
+        const struct ovs_action_push_eth *eth = nl_attr_get(a);
+        ds_put_format(ds, "push_eth(src="ETH_ADDR_FMT",dst="ETH_ADDR_FMT")",
+                      ETH_ADDR_ARGS(eth->addresses.eth_src),
+                      ETH_ADDR_ARGS(eth->addresses.eth_dst));
+        break;
+    }
+    case OVS_ACTION_ATTR_POP_ETH:
+        ds_put_cstr(ds, "pop_eth");
         break;
     case OVS_ACTION_ATTR_PUSH_VLAN: {
         const struct ovs_action_push_vlan *vlan = nl_attr_get(a);
@@ -1055,14 +1078,41 @@ parse_odp_userspace_action(const char *s, struct ofpbuf *actions)
             odp_put_userspace_action(pid, user_data, user_data_size,
                                      tunnel_out_port, include_actions, actions);
             res = n + n1;
+            goto out;
         } else if (s[n] == ')') {
             odp_put_userspace_action(pid, user_data, user_data_size,
                                      ODPP_NONE, include_actions, actions);
             res = n + 1;
-        } else {
-            res = -EINVAL;
+            goto out;
         }
     }
+
+    {
+        struct ovs_action_push_eth push;
+        int eth_type = 0;
+        int n1 = -1;
+
+        if (ovs_scan(&s[n], "push_eth(src="ETH_ADDR_SCAN_FMT","
+                     "dst="ETH_ADDR_SCAN_FMT",type=%i)%n",
+                     ETH_ADDR_SCAN_ARGS(push.addresses.eth_src),
+                     ETH_ADDR_SCAN_ARGS(push.addresses.eth_dst),
+                     &eth_type, &n1)) {
+
+            nl_msg_put_unspec(actions, OVS_ACTION_ATTR_PUSH_ETH,
+                              &push, sizeof push);
+
+            res = n + n1;
+            goto out;
+        }
+    }
+
+    if (!strncmp(&s[n], "pop_eth", 7)) {
+        nl_msg_put_flag(actions, OVS_ACTION_ATTR_POP_ETH);
+        res = 7;
+        goto out;
+    }
+
+    res = -EINVAL;
 out:
     ofpbuf_uninit(&buf);
     return res;
@@ -1450,6 +1500,7 @@ parse_conntrack_action(const char *s_, struct ofpbuf *actions)
         const char *helper = NULL;
         size_t helper_len = 0;
         bool commit = false;
+        bool force_commit = false;
         uint16_t zone = 0;
         struct {
             uint32_t value;
@@ -1481,6 +1532,11 @@ find_end:
                 s += strspn(s, delimiters);
                 if (ovs_scan(s, "commit%n", &n)) {
                     commit = true;
+                    s += n;
+                    continue;
+                }
+                if (ovs_scan(s, "force_commit%n", &n)) {
+                    force_commit = true;
                     s += n;
                     continue;
                 }
@@ -1534,10 +1590,15 @@ find_end:
             }
             s++;
         }
+        if (commit && force_commit) {
+            return -EINVAL;
+        }
 
         start = nl_msg_start_nested(actions, OVS_ACTION_ATTR_CT);
         if (commit) {
             nl_msg_put_flag(actions, OVS_CT_ATTR_COMMIT);
+        } else if (force_commit) {
+            nl_msg_put_flag(actions, OVS_CT_ATTR_FORCE_COMMIT);
         }
         if (zone) {
             nl_msg_put_u16(actions, OVS_CT_ATTR_ZONE, zone);
@@ -1709,6 +1770,16 @@ parse_odp_action(const char *s, const struct simap *port_names,
     }
 
     {
+        unsigned long long int meter_id;
+        int n = -1;
+
+        if (sscanf(s, "meter(%lli)%n", &meter_id, &n) > 0 && n > 0) {
+            nl_msg_put_u32(actions, OVS_ACTION_ATTR_METER, meter_id);
+            return n;
+        }
+    }
+
+    {
         double percentage;
         int n = -1;
 
@@ -1874,6 +1945,8 @@ static const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1] = 
     [OVS_KEY_ATTR_CT_ZONE]   = { .len = 2 },
     [OVS_KEY_ATTR_CT_MARK]   = { .len = 4 },
     [OVS_KEY_ATTR_CT_LABELS] = { .len = sizeof(struct ovs_key_ct_labels) },
+    [OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4] = { .len = sizeof(struct ovs_key_ct_tuple_ipv4) },
+    [OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6] = { .len = sizeof(struct ovs_key_ct_tuple_ipv6) },
 };
 
 /* Returns the correct length of the payload for a flow key attribute of the
@@ -2823,6 +2896,40 @@ format_odp_key_attr(const struct nlattr *a, const struct nlattr *ma,
         break;
     }
 
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4: {
+        const struct ovs_key_ct_tuple_ipv4 *key = nl_attr_get(a);
+        const struct ovs_key_ct_tuple_ipv4 *mask = ma ? nl_attr_get(ma) : NULL;
+
+        format_ipv4(ds, "src", key->ipv4_src, MASK(mask, ipv4_src), verbose);
+        format_ipv4(ds, "dst", key->ipv4_dst, MASK(mask, ipv4_dst), verbose);
+        format_u8u(ds, "proto", key->ipv4_proto, MASK(mask, ipv4_proto),
+                   verbose);
+        format_be16(ds, "tp_src", key->src_port, MASK(mask, src_port),
+                    verbose);
+        format_be16(ds, "tp_dst", key->dst_port, MASK(mask, dst_port),
+                    verbose);
+        ds_chomp(ds, ',');
+        break;
+    }
+
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6: {
+        const struct ovs_key_ct_tuple_ipv6 *key = nl_attr_get(a);
+        const struct ovs_key_ct_tuple_ipv6 *mask = ma ? nl_attr_get(ma) : NULL;
+
+        format_in6_addr(ds, "src", &key->ipv6_src, MASK(mask, ipv6_src),
+                        verbose);
+        format_in6_addr(ds, "dst", &key->ipv6_dst, MASK(mask, ipv6_dst),
+                        verbose);
+        format_u8u(ds, "proto", key->ipv6_proto, MASK(mask, ipv6_proto),
+                   verbose);
+        format_be16(ds, "src_port", key->src_port, MASK(mask, src_port),
+                    verbose);
+        format_be16(ds, "dst_port", key->dst_port, MASK(mask, dst_port),
+                    verbose);
+        ds_chomp(ds, ',');
+        break;
+    }
+
     case OVS_KEY_ATTR_TUNNEL:
         format_odp_tun_attr(a, ma, ds, verbose);
         break;
@@ -3453,30 +3560,12 @@ ovs_to_odp_ct_state(uint8_t state)
 {
     uint32_t odp = 0;
 
-    if (state & CS_NEW) {
-        odp |= OVS_CS_F_NEW;
+#define CS_STATE(ENUM, INDEX, NAME)             \
+    if (state & CS_##ENUM) {                    \
+        odp |= OVS_CS_F_##ENUM;                 \
     }
-    if (state & CS_ESTABLISHED) {
-        odp |= OVS_CS_F_ESTABLISHED;
-    }
-    if (state & CS_RELATED) {
-        odp |= OVS_CS_F_RELATED;
-    }
-    if (state & CS_INVALID) {
-        odp |= OVS_CS_F_INVALID;
-    }
-    if (state & CS_REPLY_DIR) {
-        odp |= OVS_CS_F_REPLY_DIR;
-    }
-    if (state & CS_TRACKED) {
-        odp |= OVS_CS_F_TRACKED;
-    }
-    if (state & CS_SRC_NAT) {
-        odp |= OVS_CS_F_SRC_NAT;
-    }
-    if (state & CS_DST_NAT) {
-        odp |= OVS_CS_F_DST_NAT;
-    }
+    CS_STATES
+#undef CS_STATE
 
     return odp;
 }
@@ -3486,30 +3575,12 @@ odp_to_ovs_ct_state(uint32_t flags)
 {
     uint32_t state = 0;
 
-    if (flags & OVS_CS_F_NEW) {
-        state |= CS_NEW;
+#define CS_STATE(ENUM, INDEX, NAME) \
+    if (flags & OVS_CS_F_##ENUM) {  \
+        state |= CS_##ENUM;         \
     }
-    if (flags & OVS_CS_F_ESTABLISHED) {
-        state |= CS_ESTABLISHED;
-    }
-    if (flags & OVS_CS_F_RELATED) {
-        state |= CS_RELATED;
-    }
-    if (flags & OVS_CS_F_INVALID) {
-        state |= CS_INVALID;
-    }
-    if (flags & OVS_CS_F_REPLY_DIR) {
-        state |= CS_REPLY_DIR;
-    }
-    if (flags & OVS_CS_F_TRACKED) {
-        state |= CS_TRACKED;
-    }
-    if (flags & OVS_CS_F_SRC_NAT) {
-        state |= CS_SRC_NAT;
-    }
-    if (flags & OVS_CS_F_DST_NAT) {
-        state |= CS_DST_NAT;
-    }
+    CS_STATES
+#undef CS_STATE
 
     return state;
 }
@@ -4104,6 +4175,22 @@ parse_odp_key_mask_attr(const char *s, const struct simap *port_names,
     SCAN_SINGLE("ct_mark(", uint32_t, u32, OVS_KEY_ATTR_CT_MARK);
     SCAN_SINGLE("ct_label(", ovs_u128, u128, OVS_KEY_ATTR_CT_LABELS);
 
+    SCAN_BEGIN("ct_tuple4(", struct ovs_key_ct_tuple_ipv4) {
+        SCAN_FIELD("src=", ipv4, ipv4_src);
+        SCAN_FIELD("dst=", ipv4, ipv4_dst);
+        SCAN_FIELD("proto=", u8, ipv4_proto);
+        SCAN_FIELD("tp_src=", be16, src_port);
+        SCAN_FIELD("tp_dst=", be16, dst_port);
+    } SCAN_END(OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4);
+
+    SCAN_BEGIN("ct_tuple6(", struct ovs_key_ct_tuple_ipv6) {
+        SCAN_FIELD("src=", in6_addr, ipv6_src);
+        SCAN_FIELD("dst=", in6_addr, ipv6_dst);
+        SCAN_FIELD("proto=", u8, ipv6_proto);
+        SCAN_FIELD("tp_src=", be16, src_port);
+        SCAN_FIELD("tp_dst=", be16, dst_port);
+    } SCAN_END(OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6);
+
     SCAN_BEGIN_NESTED("tunnel(", OVS_KEY_ATTR_TUNNEL) {
         SCAN_FIELD_NESTED("tun_id=", ovs_be64, be64, OVS_TUNNEL_KEY_ATTR_ID);
         SCAN_FIELD_NESTED("src=", ovs_be32, ipv4, OVS_TUNNEL_KEY_ATTR_IPV4_SRC);
@@ -4327,7 +4414,8 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
                          bool export_mask, struct ofpbuf *buf)
 {
     struct ovs_key_ethernet *eth_key;
-    size_t encap;
+    size_t encap[FLOW_MAX_VLAN_HEADERS] = {0};
+    size_t max_vlans;
     const struct flow *flow = parms->flow;
     const struct flow *data = export_mask ? parms->mask : parms->flow;
 
@@ -4354,6 +4442,29 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
         nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_LABELS, &data->ct_label,
                           sizeof(data->ct_label));
     }
+    if (parms->support.ct_orig_tuple && flow->ct_nw_proto) {
+        if (flow->dl_type == htons(ETH_TYPE_IP)) {
+            struct ovs_key_ct_tuple_ipv4 ct = {
+                data->ct_nw_src,
+                data->ct_nw_dst,
+                data->ct_tp_src,
+                data->ct_tp_dst,
+                data->ct_nw_proto,
+            };
+            nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4, &ct,
+                              sizeof ct);
+        } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+            struct ovs_key_ct_tuple_ipv6 ct = {
+                data->ct_ipv6_src,
+                data->ct_ipv6_dst,
+                data->ct_tp_src,
+                data->ct_tp_dst,
+                data->ct_nw_proto,
+            };
+            nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6, &ct,
+                              sizeof ct);
+        }
+    }
     if (parms->support.recirc) {
         nl_msg_put_u32(buf, OVS_KEY_ATTR_RECIRC_ID, data->recirc_id);
         nl_msg_put_u32(buf, OVS_KEY_ATTR_DP_HASH, data->dp_hash);
@@ -4369,19 +4480,33 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
                                        sizeof *eth_key);
     get_ethernet_key(data, eth_key);
 
-    if (flow->vlan_tci != htons(0) || flow->dl_type == htons(ETH_TYPE_VLAN)) {
+    if (OVS_UNLIKELY(parms->probe)) {
+        max_vlans = FLOW_MAX_VLAN_HEADERS;
+    } else {
+        max_vlans = MIN(parms->support.max_vlan_headers, flow_vlan_limit);
+    }
+    for (int encaps = 0; encaps < max_vlans; encaps++) {
+        ovs_be16 tpid = flow->vlans[encaps].tpid;
+
+        if (flow->vlans[encaps].tci == htons(0)) {
+            if (eth_type_vlan(flow->dl_type)) {
+                /* If VLAN was truncated the tpid is in dl_type */
+                tpid = flow->dl_type;
+            } else {
+                break;
+            }
+        }
+
         if (export_mask) {
             nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, OVS_BE16_MAX);
         } else {
-            nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, htons(ETH_TYPE_VLAN));
+            nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, tpid);
         }
-        nl_msg_put_be16(buf, OVS_KEY_ATTR_VLAN, data->vlan_tci);
-        encap = nl_msg_start_nested(buf, OVS_KEY_ATTR_ENCAP);
-        if (flow->vlan_tci == htons(0)) {
+        nl_msg_put_be16(buf, OVS_KEY_ATTR_VLAN, data->vlans[encaps].tci);
+        encap[encaps] = nl_msg_start_nested(buf, OVS_KEY_ATTR_ENCAP);
+        if (flow->vlans[encaps].tci == htons(0)) {
             goto unencap;
         }
-    } else {
-        encap = 0;
     }
 
     if (ntohs(flow->dl_type) < ETH_TYPE_MIN) {
@@ -4403,6 +4528,10 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     }
 
     nl_msg_put_be16(buf, OVS_KEY_ATTR_ETHERTYPE, data->dl_type);
+
+    if (eth_type_vlan(flow->dl_type)) {
+        goto unencap;
+    }
 
     if (flow->dl_type == htons(ETH_TYPE_IP)) {
         struct ovs_key_ipv4 *ipv4_key;
@@ -4497,8 +4626,10 @@ odp_flow_key_from_flow__(const struct odp_flow_key_parms *parms,
     }
 
 unencap:
-    if (encap) {
-        nl_msg_end_nested(buf, encap);
+    for (int encaps = max_vlans - 1; encaps >= 0; encaps--) {
+        if (encap[encaps]) {
+            nl_msg_end_nested(buf, encap[encaps]);
+        }
     }
 }
 
@@ -4549,6 +4680,19 @@ odp_key_from_pkt_metadata(struct ofpbuf *buf, const struct pkt_metadata *md)
         if (!ovs_u128_is_zero(md->ct_label)) {
             nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_LABELS, &md->ct_label,
                               sizeof(md->ct_label));
+        }
+        if (md->ct_orig_tuple_ipv6) {
+            if (md->ct_orig_tuple.ipv6.ipv6_proto) {
+                nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6,
+                                  &md->ct_orig_tuple.ipv6,
+                                  sizeof md->ct_orig_tuple.ipv6);
+            }
+        } else {
+            if (md->ct_orig_tuple.ipv4.ipv4_proto) {
+                nl_msg_put_unspec(buf, OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4,
+                                  &md->ct_orig_tuple.ipv4,
+                                  sizeof md->ct_orig_tuple.ipv4);
+            }
         }
     }
 
@@ -4616,6 +4760,21 @@ odp_key_to_pkt_metadata(const struct nlattr *key, size_t key_len,
 
             md->ct_label = *cl;
             wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_LABELS);
+            break;
+        }
+        case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4: {
+            const struct ovs_key_ct_tuple_ipv4 *ct = nl_attr_get(nla);
+            md->ct_orig_tuple.ipv4 = *ct;
+            md->ct_orig_tuple_ipv6 = false;
+            wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4);
+            break;
+        }
+        case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6: {
+            const struct ovs_key_ct_tuple_ipv6 *ct = nl_attr_get(nla);
+
+            md->ct_orig_tuple.ipv6 = *ct;
+            md->ct_orig_tuple_ipv6 = true;
+            wanted_attrs &= ~(1u << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6);
             break;
         }
         case OVS_KEY_ATTR_TUNNEL: {
@@ -5064,63 +5223,78 @@ parse_8021q_onward(const struct nlattr *attrs[OVS_KEY_ATTR_MAX + 1],
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     bool is_mask = src_flow != flow;
 
-    const struct nlattr *encap
-        = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)
-           ? attrs[OVS_KEY_ATTR_ENCAP] : NULL);
+    const struct nlattr *encap;
     enum odp_key_fitness encap_fitness;
-    enum odp_key_fitness fitness;
+    enum odp_key_fitness fitness = ODP_FIT_ERROR;
+    int encaps = 0;
 
-    /* Calculate fitness of outer attributes. */
-    if (!is_mask) {
-        expected_attrs |= ((UINT64_C(1) << OVS_KEY_ATTR_VLAN) |
-                          (UINT64_C(1) << OVS_KEY_ATTR_ENCAP));
-    } else {
-        if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
-            expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
-        }
-        if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)) {
-            expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_ENCAP);
-        }
-    }
-    fitness = check_expectations(present_attrs, out_of_range_attr,
-                                 expected_attrs, key, key_len);
+    while (encaps < flow_vlan_limit &&
+           (is_mask
+            ? (src_flow->vlans[encaps].tci & htons(VLAN_CFI)) != 0
+            : eth_type_vlan(flow->dl_type))) {
 
-    /* Set vlan_tci.
-     * Remove the TPID from dl_type since it's not the real Ethertype.  */
-    flow->dl_type = htons(0);
-    flow->vlan_tci = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)
-                      ? nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN])
-                      : htons(0));
-    if (!is_mask) {
-        if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN))) {
-            return ODP_FIT_TOO_LITTLE;
-        } else if (flow->vlan_tci == htons(0)) {
-            /* Corner case for a truncated 802.1Q header. */
-            if (fitness == ODP_FIT_PERFECT && nl_attr_get_size(encap)) {
-                return ODP_FIT_TOO_MUCH;
+        encap = (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)
+                 ? attrs[OVS_KEY_ATTR_ENCAP] : NULL);
+
+        /* Calculate fitness of outer attributes. */
+        if (!is_mask) {
+            expected_attrs |= ((UINT64_C(1) << OVS_KEY_ATTR_VLAN) |
+                              (UINT64_C(1) << OVS_KEY_ATTR_ENCAP));
+        } else {
+            if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
+                expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
             }
-            return fitness;
-        } else if (!(flow->vlan_tci & htons(VLAN_CFI))) {
-            VLOG_ERR_RL(&rl, "OVS_KEY_ATTR_VLAN 0x%04"PRIx16" is nonzero "
-                        "but CFI bit is not set", ntohs(flow->vlan_tci));
+            if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP)) {
+                expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_ENCAP);
+            }
+        }
+        fitness = check_expectations(present_attrs, out_of_range_attr,
+                                     expected_attrs, key, key_len);
+
+        /* Set vlan_tci.
+         * Remove the TPID from dl_type since it's not the real Ethertype.  */
+        flow->vlans[encaps].tpid = flow->dl_type;
+        flow->dl_type = htons(0);
+        flow->vlans[encaps].tci =
+                        (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)
+                        ? nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN])
+                        : htons(0));
+        if (!is_mask) {
+            if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN))) {
+                return ODP_FIT_TOO_LITTLE;
+            } else if (flow->vlans[encaps].tci == htons(0)) {
+                /* Corner case for a truncated 802.1Q header. */
+                if (fitness == ODP_FIT_PERFECT && nl_attr_get_size(encap)) {
+                    return ODP_FIT_TOO_MUCH;
+                }
+                return fitness;
+            } else if (!(flow->vlans[encaps].tci & htons(VLAN_CFI))) {
+                VLOG_ERR_RL(&rl, "OVS_KEY_ATTR_VLAN 0x%04"PRIx16" is nonzero "
+                            "but CFI bit is not set",
+                            ntohs(flow->vlans[encaps].tci));
+                return ODP_FIT_ERROR;
+            }
+        } else {
+            if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP))) {
+                return fitness;
+            }
+        }
+
+        /* Now parse the encapsulated attributes. */
+        if (!parse_flow_nlattrs(nl_attr_get(encap), nl_attr_get_size(encap),
+                                attrs, &present_attrs, &out_of_range_attr)) {
             return ODP_FIT_ERROR;
         }
-    } else {
-        if (!(present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_ENCAP))) {
-            return fitness;
+        expected_attrs = 0;
+
+        if (!parse_ethertype(attrs, present_attrs, &expected_attrs,
+                             flow, src_flow)) {
+            return ODP_FIT_ERROR;
         }
+
+        encaps++;
     }
 
-    /* Now parse the encapsulated attributes. */
-    if (!parse_flow_nlattrs(nl_attr_get(encap), nl_attr_get_size(encap),
-                            attrs, &present_attrs, &out_of_range_attr)) {
-        return ODP_FIT_ERROR;
-    }
-    expected_attrs = 0;
-
-    if (!parse_ethertype(attrs, present_attrs, &expected_attrs, flow, src_flow)) {
-        return ODP_FIT_ERROR;
-    }
     encap_fitness = parse_l2_5_onward(attrs, present_attrs, out_of_range_attr,
                                       expected_attrs, flow, key, key_len,
                                       src_flow);
@@ -5191,6 +5365,25 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
         flow->ct_label = *cl;
         expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_CT_LABELS;
     }
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4)) {
+        const struct ovs_key_ct_tuple_ipv4 *ct = nl_attr_get(attrs[OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4]);
+        flow->ct_nw_src = ct->ipv4_src;
+        flow->ct_nw_dst = ct->ipv4_dst;
+        flow->ct_nw_proto = ct->ipv4_proto;
+        flow->ct_tp_src = ct->src_port;
+        flow->ct_tp_dst = ct->dst_port;
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4;
+    }
+    if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6)) {
+        const struct ovs_key_ct_tuple_ipv6 *ct = nl_attr_get(attrs[OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6]);
+
+        flow->ct_ipv6_src = ct->ipv6_src;
+        flow->ct_ipv6_dst = ct->ipv6_dst;
+        flow->ct_nw_proto = ct->ipv6_proto;
+        flow->ct_tp_src = ct->src_port;
+        flow->ct_tp_dst = ct->dst_port;
+        expected_attrs |= UINT64_C(1) << OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6;
+    }
 
     if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_TUNNEL)) {
         enum odp_key_fitness res;
@@ -5233,16 +5426,17 @@ odp_flow_key_to_flow__(const struct nlattr *key, size_t key_len,
     }
 
     if (is_mask
-        ? (src_flow->vlan_tci & htons(VLAN_CFI)) != 0
-        : src_flow->dl_type == htons(ETH_TYPE_VLAN)) {
+        ? (src_flow->vlans[0].tci & htons(VLAN_CFI)) != 0
+        : eth_type_vlan(src_flow->dl_type)) {
         return parse_8021q_onward(attrs, present_attrs, out_of_range_attr,
                                   expected_attrs, flow, key, key_len, src_flow);
     }
     if (is_mask) {
         /* A missing VLAN mask means exact match on vlan_tci 0 (== no VLAN). */
-        flow->vlan_tci = htons(0xffff);
+        flow->vlans[0].tpid = htons(0xffff);
+        flow->vlans[0].tci = htons(0xffff);
         if (present_attrs & (UINT64_C(1) << OVS_KEY_ATTR_VLAN)) {
-            flow->vlan_tci = nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN]);
+            flow->vlans[0].tci = nl_attr_get_be16(attrs[OVS_KEY_ATTR_VLAN]);
             expected_attrs |= (UINT64_C(1) << OVS_KEY_ATTR_VLAN);
         }
     }
@@ -5358,6 +5552,31 @@ odp_put_userspace_action(uint32_t pid,
     nl_msg_end_nested(odp_actions, offset);
 
     return userdata_ofs;
+}
+
+void
+odp_put_pop_eth_action(struct ofpbuf *odp_actions)
+{
+    nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_ETH);
+}
+
+void
+odp_put_push_eth_action(struct ofpbuf *odp_actions,
+                        const struct eth_addr *eth_src,
+                        const struct eth_addr *eth_dst)
+{
+    struct ovs_action_push_eth eth;
+
+    memset(&eth, 0, sizeof eth);
+    if (eth_src) {
+        eth.addresses.eth_src = *eth_src;
+    }
+    if (eth_dst) {
+        eth.addresses.eth_dst = *eth_dst;
+    }
+
+    nl_msg_put_unspec(odp_actions, OVS_ACTION_ATTR_PUSH_ETH,
+                      &eth, sizeof eth);
 }
 
 void
@@ -5493,35 +5712,28 @@ commit_set_ether_addr_action(const struct flow *flow, struct flow *base_flow,
 }
 
 static void
-pop_vlan(struct flow *base,
-         struct ofpbuf *odp_actions, struct flow_wildcards *wc)
-{
-    memset(&wc->masks.vlan_tci, 0xff, sizeof wc->masks.vlan_tci);
-
-    if (base->vlan_tci & htons(VLAN_CFI)) {
-        nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_VLAN);
-        base->vlan_tci = 0;
-    }
-}
-
-static void
-commit_vlan_action(ovs_be16 vlan_tci, struct flow *base,
+commit_vlan_action(const struct flow* flow, struct flow *base,
                    struct ofpbuf *odp_actions, struct flow_wildcards *wc)
 {
-    if (base->vlan_tci == vlan_tci) {
-        return;
+    int base_n = flow_count_vlan_headers(base);
+    int flow_n = flow_count_vlan_headers(flow);
+    flow_skip_common_vlan_headers(base, &base_n, flow, &flow_n);
+
+    /* Pop all mismatching vlan of base, push those of flow */
+    for (; base_n >= 0; base_n--) {
+        nl_msg_put_flag(odp_actions, OVS_ACTION_ATTR_POP_VLAN);
+        wc->masks.vlans[base_n].qtag = OVS_BE32_MAX;
     }
 
-    pop_vlan(base, odp_actions, wc);
-    if (vlan_tci & htons(VLAN_CFI)) {
+    for (; flow_n >= 0; flow_n--) {
         struct ovs_action_push_vlan vlan;
 
-        vlan.vlan_tpid = htons(ETH_TYPE_VLAN);
-        vlan.vlan_tci = vlan_tci;
+        vlan.vlan_tpid = flow->vlans[flow_n].tpid;
+        vlan.vlan_tci = flow->vlans[flow_n].tci;
         nl_msg_put_unspec(odp_actions, OVS_ACTION_ATTR_PUSH_VLAN,
                           &vlan, sizeof vlan);
     }
-    base->vlan_tci = vlan_tci;
+    memcpy(base->vlans, flow->vlans, sizeof(base->vlans));
 }
 
 /* Wildcarding already done at action translation time. */
@@ -5966,7 +6178,7 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
     if (!mpls_done) {
         commit_mpls_action(flow, base, odp_actions);
     }
-    commit_vlan_action(flow->vlan_tci, base, odp_actions, wc);
+    commit_vlan_action(flow, base, odp_actions, wc);
     commit_set_priority_action(flow, base, odp_actions, wc, use_masked);
     commit_set_pkt_mark_action(flow, base, odp_actions, wc, use_masked);
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -340,8 +340,8 @@ match_set_ct_state(struct match *match, uint32_t ct_state)
 void
 match_set_ct_state_masked(struct match *match, uint32_t ct_state, uint32_t mask)
 {
-    match->flow.ct_state = ct_state & mask & UINT16_MAX;
-    match->wc.masks.ct_state = mask & UINT16_MAX;
+    match->flow.ct_state = ct_state & mask & UINT8_MAX;
+    match->wc.masks.ct_state = mask & UINT8_MAX;
 }
 
 void
@@ -381,6 +381,99 @@ match_set_ct_label_masked(struct match *match, ovs_u128 value, ovs_u128 mask)
     match->flow.ct_label.u64.lo = value.u64.lo & mask.u64.lo;
     match->flow.ct_label.u64.hi = value.u64.hi & mask.u64.hi;
     match->wc.masks.ct_label = mask;
+}
+
+void
+match_set_ct_nw_src(struct match *match, ovs_be32 ct_nw_src)
+{
+    match->flow.ct_nw_src = ct_nw_src;
+    match->wc.masks.ct_nw_src = OVS_BE32_MAX;
+}
+
+void
+match_set_ct_nw_src_masked(struct match *match, ovs_be32 ct_nw_src,
+                           ovs_be32 mask)
+{
+    match->flow.ct_nw_src = ct_nw_src & mask;
+    match->wc.masks.ct_nw_src = mask;
+}
+
+void
+match_set_ct_nw_dst(struct match *match, ovs_be32 ct_nw_dst)
+{
+    match->flow.ct_nw_dst = ct_nw_dst;
+    match->wc.masks.ct_nw_dst = OVS_BE32_MAX;
+}
+
+void
+match_set_ct_nw_dst_masked(struct match *match, ovs_be32 ct_nw_dst,
+                           ovs_be32 mask)
+{
+    match->flow.ct_nw_dst = ct_nw_dst & mask;
+    match->wc.masks.ct_nw_dst = mask;
+}
+
+void
+match_set_ct_nw_proto(struct match *match, uint8_t ct_nw_proto)
+{
+    match->flow.ct_nw_proto = ct_nw_proto;
+    match->wc.masks.ct_nw_proto = UINT8_MAX;
+}
+
+void
+match_set_ct_tp_src(struct match *match, ovs_be16 ct_tp_src)
+{
+    match_set_ct_tp_src_masked(match, ct_tp_src, OVS_BE16_MAX);
+}
+
+void
+match_set_ct_tp_src_masked(struct match *match, ovs_be16 port, ovs_be16 mask)
+{
+    match->flow.ct_tp_src = port & mask;
+    match->wc.masks.ct_tp_src = mask;
+}
+
+void
+match_set_ct_tp_dst(struct match *match, ovs_be16 ct_tp_dst)
+{
+    match_set_ct_tp_dst_masked(match, ct_tp_dst, OVS_BE16_MAX);
+}
+
+void
+match_set_ct_tp_dst_masked(struct match *match, ovs_be16 port, ovs_be16 mask)
+{
+    match->flow.ct_tp_dst = port & mask;
+    match->wc.masks.ct_tp_dst = mask;
+}
+
+void
+match_set_ct_ipv6_src(struct match *match, const struct in6_addr *src)
+{
+    match->flow.ct_ipv6_src = *src;
+    match->wc.masks.ct_ipv6_src = in6addr_exact;
+}
+
+void
+match_set_ct_ipv6_src_masked(struct match *match, const struct in6_addr *src,
+                             const struct in6_addr *mask)
+{
+    match->flow.ct_ipv6_src = ipv6_addr_bitand(src, mask);
+    match->wc.masks.ct_ipv6_src = *mask;
+}
+
+void
+match_set_ct_ipv6_dst(struct match *match, const struct in6_addr *dst)
+{
+    match->flow.ct_ipv6_dst = *dst;
+    match->wc.masks.ct_ipv6_dst = in6addr_exact;
+}
+
+void
+match_set_ct_ipv6_dst_masked(struct match *match, const struct in6_addr *dst,
+                             const struct in6_addr *mask)
+{
+    match->flow.ct_ipv6_dst = ipv6_addr_bitand(dst, mask);
+    match->wc.masks.ct_ipv6_dst = *mask;
 }
 
 void
@@ -465,8 +558,8 @@ match_set_dl_tci(struct match *match, ovs_be16 tci)
 void
 match_set_dl_tci_masked(struct match *match, ovs_be16 tci, ovs_be16 mask)
 {
-    match->flow.vlan_tci = tci & mask;
-    match->wc.masks.vlan_tci = mask;
+    match->flow.vlans[0].tci = tci & mask;
+    match->wc.masks.vlans[0].tci = mask;
 }
 
 /* Modifies 'match' so that the VLAN VID is wildcarded.  If the PCP is already
@@ -475,9 +568,9 @@ match_set_dl_tci_masked(struct match *match, ovs_be16 tci, ovs_be16 mask)
 void
 match_set_any_vid(struct match *match)
 {
-    if (match->wc.masks.vlan_tci & htons(VLAN_PCP_MASK)) {
-        match->wc.masks.vlan_tci &= ~htons(VLAN_VID_MASK);
-        match->flow.vlan_tci &= ~htons(VLAN_VID_MASK);
+    if (match->wc.masks.vlans[0].tci & htons(VLAN_PCP_MASK)) {
+        match->wc.masks.vlans[0].tci &= ~htons(VLAN_VID_MASK);
+        match->flow.vlans[0].tci &= ~htons(VLAN_VID_MASK);
     } else {
         match_set_dl_tci_masked(match, htons(0), htons(0));
     }
@@ -496,9 +589,9 @@ match_set_dl_vlan(struct match *match, ovs_be16 dl_vlan)
 {
     flow_set_dl_vlan(&match->flow, dl_vlan);
     if (dl_vlan == htons(OFP10_VLAN_NONE)) {
-        match->wc.masks.vlan_tci = OVS_BE16_MAX;
+        match->wc.masks.vlans[0].tci = OVS_BE16_MAX;
     } else {
-        match->wc.masks.vlan_tci |= htons(VLAN_VID_MASK | VLAN_CFI);
+        match->wc.masks.vlans[0].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
     }
 }
 
@@ -523,7 +616,8 @@ match_set_vlan_vid_masked(struct match *match, ovs_be16 vid, ovs_be16 mask)
 
     mask &= vid_mask;
     flow_set_vlan_vid(&match->flow, vid & mask);
-    match->wc.masks.vlan_tci = mask | (match->wc.masks.vlan_tci & pcp_mask);
+    match->wc.masks.vlans[0].tci =
+        mask | (match->wc.masks.vlans[0].tci & pcp_mask);
 }
 
 /* Modifies 'match' so that the VLAN PCP is wildcarded.  If the VID is already
@@ -532,9 +626,9 @@ match_set_vlan_vid_masked(struct match *match, ovs_be16 vid, ovs_be16 mask)
 void
 match_set_any_pcp(struct match *match)
 {
-    if (match->wc.masks.vlan_tci & htons(VLAN_VID_MASK)) {
-        match->wc.masks.vlan_tci &= ~htons(VLAN_PCP_MASK);
-        match->flow.vlan_tci &= ~htons(VLAN_PCP_MASK);
+    if (match->wc.masks.vlans[0].tci & htons(VLAN_VID_MASK)) {
+        match->wc.masks.vlans[0].tci &= ~htons(VLAN_PCP_MASK);
+        match->flow.vlans[0].tci &= ~htons(VLAN_PCP_MASK);
     } else {
         match_set_dl_tci_masked(match, htons(0), htons(0));
     }
@@ -546,7 +640,7 @@ void
 match_set_dl_vlan_pcp(struct match *match, uint8_t dl_vlan_pcp)
 {
     flow_set_vlan_pcp(&match->flow, dl_vlan_pcp);
-    match->wc.masks.vlan_tci |= htons(VLAN_CFI | VLAN_PCP_MASK);
+    match->wc.masks.vlans[0].tci |= htons(VLAN_CFI | VLAN_PCP_MASK);
 }
 
 /* Modifies 'match' so that the MPLS label 'idx' matches 'lse' exactly. */
@@ -1075,7 +1169,7 @@ match_format(const struct match *match, struct ds *s, int priority)
 
     int i;
 
-    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 39);
 
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "%spriority=%s%d,",
@@ -1111,7 +1205,7 @@ match_format(const struct match *match, struct ds *s, int priority)
     }
 
     if (wc->masks.ct_state) {
-        if (wc->masks.ct_state == UINT16_MAX) {
+        if (wc->masks.ct_state == UINT8_MAX) {
             ds_put_format(s, "%sct_state=%s", colors.param, colors.end);
             if (f->ct_state) {
                 format_flags(s, ct_state_to_string, f->ct_state, '|');
@@ -1120,7 +1214,7 @@ match_format(const struct match *match, struct ds *s, int priority)
             }
         } else {
             format_flags_masked(s, "ct_state", ct_state_to_string,
-                                f->ct_state, wc->masks.ct_state, UINT16_MAX);
+                                f->ct_state, wc->masks.ct_state, UINT8_MAX);
         }
         ds_put_char(s, ',');
     }
@@ -1135,6 +1229,21 @@ match_format(const struct match *match, struct ds *s, int priority)
 
     if (!ovs_u128_is_zero(wc->masks.ct_label)) {
         format_ct_label_masked(s, &f->ct_label, &wc->masks.ct_label);
+    }
+
+    format_ip_netmask(s, "ct_nw_src", f->ct_nw_src,
+                      wc->masks.ct_nw_src);
+    format_ipv6_netmask(s, "ct_ipv6_src", &f->ct_ipv6_src,
+                        &wc->masks.ct_ipv6_src);
+    format_ip_netmask(s, "ct_nw_dst", f->ct_nw_dst,
+                      wc->masks.ct_nw_dst);
+    format_ipv6_netmask(s, "ct_ipv6_dst", &f->ct_ipv6_dst,
+                        &wc->masks.ct_ipv6_dst);
+    if (wc->masks.ct_nw_proto) {
+        ds_put_format(s, "%sct_nw_proto=%s%"PRIu8",",
+                      colors.param, colors.end, f->ct_nw_proto);
+        format_be16_masked(s, "ct_tp_src", f->ct_tp_src, wc->masks.ct_tp_src);
+        format_be16_masked(s, "ct_tp_dst", f->ct_tp_dst, wc->masks.ct_tp_dst);
     }
 
     if (wc->masks.dl_type) {
@@ -1207,30 +1316,46 @@ match_format(const struct match *match, struct ds *s, int priority)
         ofputil_format_port(f->in_port.ofp_port, s);
         ds_put_char(s, ',');
     }
-    if (wc->masks.vlan_tci) {
-        ovs_be16 vid_mask = wc->masks.vlan_tci & htons(VLAN_VID_MASK);
-        ovs_be16 pcp_mask = wc->masks.vlan_tci & htons(VLAN_PCP_MASK);
-        ovs_be16 cfi = wc->masks.vlan_tci & htons(VLAN_CFI);
+    for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
+        char str_i[8];
 
-        if (cfi && f->vlan_tci & htons(VLAN_CFI)
+        if (!wc->masks.vlans[i].tci) {
+            break;
+        }
+
+        /* Print VLAN tags as dl_vlan, dl_vlan1, dl_vlan2 ... */
+        if (i == 0) {
+            str_i[0] = '\0';
+        } else {
+            snprintf(str_i, sizeof(str_i), "%d", i);
+        }
+        ovs_be16 vid_mask = wc->masks.vlans[i].tci & htons(VLAN_VID_MASK);
+        ovs_be16 pcp_mask = wc->masks.vlans[i].tci & htons(VLAN_PCP_MASK);
+        ovs_be16 cfi = wc->masks.vlans[i].tci & htons(VLAN_CFI);
+
+        if (cfi && f->vlans[i].tci & htons(VLAN_CFI)
             && (!vid_mask || vid_mask == htons(VLAN_VID_MASK))
             && (!pcp_mask || pcp_mask == htons(VLAN_PCP_MASK))
             && (vid_mask || pcp_mask)) {
             if (vid_mask) {
-                ds_put_format(s, "%sdl_vlan=%s%"PRIu16",", colors.param,
-                              colors.end, vlan_tci_to_vid(f->vlan_tci));
+                ds_put_format(s, "%sdl_vlan%s=%s%"PRIu16",",
+                              colors.param, str_i, colors.end,
+                              vlan_tci_to_vid(f->vlans[i].tci));
             }
             if (pcp_mask) {
-                ds_put_format(s, "%sdl_vlan_pcp=%s%d,", colors.param,
-                              colors.end, vlan_tci_to_pcp(f->vlan_tci));
+                ds_put_format(s, "%sdl_vlan_pcp%s=%s%d,",
+                              colors.param, str_i, colors.end,
+                              vlan_tci_to_pcp(f->vlans[i].tci));
             }
-        } else if (wc->masks.vlan_tci == htons(0xffff)) {
-            ds_put_format(s, "%svlan_tci=%s0x%04"PRIx16",", colors.param,
-                          colors.end, ntohs(f->vlan_tci));
+        } else if (wc->masks.vlans[i].tci == htons(0xffff)) {
+            ds_put_format(s, "%svlan_tci%s=%s0x%04"PRIx16",",
+                          colors.param, str_i, colors.end,
+                          ntohs(f->vlans[i].tci));
         } else {
-            ds_put_format(s, "%svlan_tci=%s0x%04"PRIx16"/0x%04"PRIx16",",
-                          colors.param, colors.end,
-                          ntohs(f->vlan_tci), ntohs(wc->masks.vlan_tci));
+            ds_put_format(s, "%svlan_tci%s=%s0x%04"PRIx16"/0x%04"PRIx16",",
+                          colors.param, str_i, colors.end,
+                          ntohs(f->vlans[i].tci),
+                          ntohs(wc->masks.vlans[i].tci));
         }
     }
     format_eth_masked(s, "dl_src", f->dl_src, wc->masks.dl_src);
@@ -1277,15 +1402,15 @@ match_format(const struct match *match, struct ds *s, int priority)
         format_eth_masked(s, "arp_tha", f->arp_tha, wc->masks.arp_tha);
     }
     if (wc->masks.nw_tos & IP_DSCP_MASK) {
-        ds_put_format(s, "%snw_tos=%s%"PRIu8",",
+        ds_put_format(s, "%snw_tos=%s%d,",
                       colors.param, colors.end, f->nw_tos & IP_DSCP_MASK);
     }
     if (wc->masks.nw_tos & IP_ECN_MASK) {
-        ds_put_format(s, "%snw_ecn=%s%"PRIu8",",
+        ds_put_format(s, "%snw_ecn=%s%d,",
                       colors.param, colors.end, f->nw_tos & IP_ECN_MASK);
     }
     if (wc->masks.nw_ttl) {
-        ds_put_format(s, "%snw_ttl=%s%"PRIu8",",
+        ds_put_format(s, "%snw_ttl=%s%d,",
                       colors.param, colors.end, f->nw_ttl);
     }
     if (wc->masks.mpls_lse[0] & htonl(MPLS_LABEL_MASK)) {

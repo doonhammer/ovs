@@ -825,12 +825,13 @@
     <h1>Database Commands</h1>
     <p>These commands query and modify the contents of <code>ovsdb</code> tables.
     They are a slight abstraction of the <code>ovsdb</code> interface and
-    as suchthey operate at a lower level than other <code>ovn-nbctl</code> commands.</p>
+    as such they operate at a lower level than other <code>ovn-nbctl</code> commands.</p>
     <p><var>Identifying Tables, Records, and Columns</var></p>
     <p>Each of these commands has a <var>table</var> parameter to identify a table
     within the database.  Many of them also take a <var>record</var> parameter
     that identifies a particular record within a table.  The <var>record</var>
-    parameter may be the UUID for a record, and many tables offer
+    parameter may be the UUID for a record, which may be abbreviated to its
+    first 4 (or more) hex digits, as long as that is unique.  Many tables offer
     additional ways to identify records.  Some commands also take
     <var>column</var> parameters that identify a particular field within the
     records in a table.</p>
@@ -892,6 +893,16 @@
       </dd>
 
     </dl>
+
+    <p>
+      Record names must be specified in full and with correct capitalization,
+      except that UUIDs may be abbreviated to their first 4 (or more) hex
+      digits, as long as that is unique within the table.  Names of tables and
+      columns are not case-sensitive, and <code>-</code> and <code>_</code> are
+      treated interchangeably.  Unique abbreviations of table and column names
+      are acceptable, e.g. <code>d</code> or <code>dhcp</code> is sufficient
+      to identify the <code>DHCP_Options</code> table.
+    </p>
 
     <xi:include href="lib/db-ctl-base.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
@@ -995,7 +1006,7 @@
     <dd>
       The OVSDB database remote to contact.  If the <env>OVN_NB_DB</env>
       environment variable is set, its value is used as the default.
-      Otherwise, the default is <code>unix:@RUNDIR@/db.sock</code>, but this
+      Otherwise, the default is <code>unix:@RUNDIR@/ovnnb_db.sock</code>, but this
       default is unlikely to be useful outside of single-machine OVN test
       environments.
     </dd>
@@ -1003,6 +1014,12 @@
 
     <h1>Logging options</h1>
     <xi:include href="lib/vlog.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h1>Table Formatting Options</h1>
+    These options control the format of output from the <code>list</code> and
+    <code>find</code> commands.
+    <xi:include href="lib/table.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
     <h2>PKI Options</h2>
     <p>
       PKI configuration is required to use SSL for the connection to the

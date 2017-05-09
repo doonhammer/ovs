@@ -366,6 +366,7 @@ Options:\n\
   --dry-run                   do not commit changes to database\n\
   --oneline                   print exactly one line of output per command\n",
            program_name, program_name, ctl_get_db_cmd_usage(), ctl_default_db());
+    table_usage();
     vlog_usage();
     printf("\
   --no-syslog                 equivalent to --verbose=vtep_ctl:syslog:warn\n");
@@ -2177,20 +2178,19 @@ cmd_set_manager(struct ctl_context *ctx)
 /* Parameter commands. */
 static const struct ctl_table_class tables[VTEPREC_N_TABLES] = {
     [VTEPREC_TABLE_LOGICAL_SWITCH].row_ids[0]
-    = {&vteprec_table_logical_switch, &vteprec_logical_switch_col_name, NULL},
+    = {&vteprec_logical_switch_col_name, NULL, NULL},
 
     [VTEPREC_TABLE_MANAGER].row_ids[0]
-    = {&vteprec_table_manager, &vteprec_manager_col_target, NULL},
+    = {&vteprec_manager_col_target, NULL, NULL},
 
     [VTEPREC_TABLE_PHYSICAL_PORT].row_ids[0]
-    = {&vteprec_table_physical_port, &vteprec_physical_port_col_name, NULL},
+    = {&vteprec_physical_port_col_name, NULL, NULL},
 
     [VTEPREC_TABLE_PHYSICAL_SWITCH].row_ids[0]
-    = {&vteprec_table_physical_switch, &vteprec_physical_switch_col_name,
-       NULL},
+    = {&vteprec_physical_switch_col_name, NULL, NULL},
 
     [VTEPREC_TABLE_LOGICAL_ROUTER].row_ids[0]
-    = {&vteprec_table_logical_router, &vteprec_logical_router_col_name, NULL},
+    = {&vteprec_logical_router_col_name, NULL, NULL},
 };
 
 

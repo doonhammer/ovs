@@ -1,4 +1,4 @@
-/* Copyright (c) 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,7 +64,8 @@ static unixctl_cb_func inject_pkt;
 #define DEFAULT_BRIDGE_NAME "br-int"
 #define DEFAULT_PROBE_INTERVAL_MSEC 5000
 
-static void update_probe_interval(struct controller_ctx *);
+static void update_probe_interval(struct controller_ctx *,
+                                  const char *ovnsb_remote);
 static void parse_options(int argc, char *argv[]);
 OVS_NO_RETURN static void usage(void);
 
@@ -134,7 +135,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
 {
     /* Monitor Port_Bindings rows for local interfaces and local datapaths.
      *
-     * Monitor Logical_Flow, MAC_Binding, and Multicast_Group tables for
+     * Monitor Logical_Flow, MAC_Binding, Multicast_Group, and DNS tables for
      * local datapaths.
      *
      * We always monitor patch ports because they allow us to see the linkages
@@ -145,6 +146,7 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     struct ovsdb_idl_condition lf = OVSDB_IDL_CONDITION_INIT(&lf);
     struct ovsdb_idl_condition mb = OVSDB_IDL_CONDITION_INIT(&mb);
     struct ovsdb_idl_condition mg = OVSDB_IDL_CONDITION_INIT(&mg);
+    struct ovsdb_idl_condition dns = OVSDB_IDL_CONDITION_INIT(&dns);
     sbrec_port_binding_add_clause_type(&pb, OVSDB_F_EQ, "patch");
     if (chassis) {
         /* This should be mostly redundant with the other clauses for port
@@ -177,22 +179,26 @@ update_sb_monitors(struct ovsdb_idl *ovnsb_idl,
     if (local_datapaths) {
         const struct local_datapath *ld;
         HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
-            const struct uuid *uuid = &ld->datapath->header_.uuid;
+            struct uuid *uuid = CONST_CAST(struct uuid *,
+                                           &ld->datapath->header_.uuid);
             sbrec_port_binding_add_clause_datapath(&pb, OVSDB_F_EQ, uuid);
             sbrec_logical_flow_add_clause_logical_datapath(&lf, OVSDB_F_EQ,
                                                            uuid);
             sbrec_mac_binding_add_clause_datapath(&mb, OVSDB_F_EQ, uuid);
             sbrec_multicast_group_add_clause_datapath(&mg, OVSDB_F_EQ, uuid);
+            sbrec_dns_add_clause_datapaths(&dns, OVSDB_F_INCLUDES, &uuid, 1);
         }
     }
     sbrec_port_binding_set_condition(ovnsb_idl, &pb);
     sbrec_logical_flow_set_condition(ovnsb_idl, &lf);
     sbrec_mac_binding_set_condition(ovnsb_idl, &mb);
     sbrec_multicast_group_set_condition(ovnsb_idl, &mg);
+    sbrec_dns_set_condition(ovnsb_idl, &dns);
     ovsdb_idl_condition_destroy(&pb);
     ovsdb_idl_condition_destroy(&lf);
     ovsdb_idl_condition_destroy(&mb);
     ovsdb_idl_condition_destroy(&mg);
+    ovsdb_idl_condition_destroy(&dns);
 }
 
 static const struct ovsrec_bridge *
@@ -283,6 +289,17 @@ addr_sets_init(struct controller_ctx *ctx, struct shash *addr_sets)
     }
 }
 
+static void
+update_ssl_config(const struct ovsdb_idl *ovs_idl)
+{
+    const struct ovsrec_ssl *ssl = ovsrec_ssl_first(ovs_idl);
+
+    if (ssl) {
+        stream_ssl_set_key_and_cert(ssl->private_key, ssl->certificate);
+        stream_ssl_set_ca_cert_file(ssl->ca_cert, ssl->bootstrap_ca_cert);
+    }
+}
+
 /* Retrieves the OVN Southbound remote location from the
  * "external-ids:ovn-remote" key in 'ovs_idl' and returns a copy of it. */
 static char *
@@ -296,6 +313,7 @@ get_ovnsb_remote(struct ovsdb_idl *ovs_idl)
         if (cfg) {
             const char *remote = smap_get(&cfg->external_ids, "ovn-remote");
             if (remote) {
+                update_ssl_config(ovs_idl);
                 return xstrdup(remote);
             }
         }
@@ -518,6 +536,7 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_interface_col_name);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_interface_col_type);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_interface_col_options);
+    ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_interface_col_ofport);
     ovsdb_idl_add_table(ovs_idl_loop.idl, &ovsrec_table_port);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_port_col_name);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_port_col_interfaces);
@@ -528,6 +547,11 @@ main(int argc, char *argv[])
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_bridge_col_fail_mode);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_bridge_col_other_config);
     ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_bridge_col_external_ids);
+    ovsdb_idl_add_table(ovs_idl_loop.idl, &ovsrec_table_ssl);
+    ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_ssl_col_bootstrap_ca_cert);
+    ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_ssl_col_ca_cert);
+    ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_ssl_col_certificate);
+    ovsdb_idl_add_column(ovs_idl_loop.idl, &ovsrec_ssl_col_private_key);
     chassis_register_ovs_idl(ovs_idl_loop.idl);
     encaps_register_ovs_idl(ovs_idl_loop.idl);
     binding_register_ovs_idl(ovs_idl_loop.idl);
@@ -576,7 +600,9 @@ main(int argc, char *argv[])
             .ovnsb_idl_txn = ovsdb_idl_loop_run(&ovnsb_idl_loop),
         };
 
-        update_probe_interval(&ctx);
+        update_probe_interval(&ctx, ovnsb_remote);
+
+        update_ssl_config(ctx.ovs_idl);
 
         /* Contains "struct local_datapath" nodes. */
         struct hmap local_datapaths = HMAP_INITIALIZER(&local_datapaths);
@@ -619,23 +645,23 @@ main(int argc, char *argv[])
             update_ct_zones(&local_lports, &local_datapaths, &ct_zones,
                             ct_zone_bitmap, &pending_ct_zones);
             if (ctx.ovs_idl_txn) {
+                if (ofctrl_can_put()) {
+                    commit_ct_zones(br_int, &pending_ct_zones);
 
-                commit_ct_zones(br_int, &pending_ct_zones);
+                    struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
+                    lflow_run(&ctx, chassis, &lports, &mcgroups,
+                              &local_datapaths, &group_table,
+                              &addr_sets, &flow_table);
 
-                struct hmap flow_table = HMAP_INITIALIZER(&flow_table);
-                lflow_run(&ctx, chassis, &lports, &mcgroups,
-                          &local_datapaths, &group_table, &ct_zones,
-                          &addr_sets, &flow_table);
+                    physical_run(&ctx, mff_ovn_geneve,
+                                 br_int, chassis, &ct_zones, &lports,
+                                 &flow_table, &local_datapaths);
 
-                physical_run(&ctx, mff_ovn_geneve,
-                             br_int, chassis, &ct_zones, &lports,
-                             &flow_table, &local_datapaths);
+                    ofctrl_put(&flow_table, &pending_ct_zones,
+                               get_nb_cfg(ctx.ovnsb_idl));
 
-                ofctrl_put(&flow_table, &pending_ct_zones,
-                           get_nb_cfg(ctx.ovnsb_idl));
-
-                hmap_destroy(&flow_table);
-
+                    hmap_destroy(&flow_table);
+                }
                 if (ctx.ovnsb_idl_txn) {
                     int64_t cur_cfg = ofctrl_get_cur_cfg();
                     if (cur_cfg && cur_cfg != chassis->nb_cfg) {
@@ -905,14 +931,21 @@ inject_pkt(struct unixctl_conn *conn, int argc OVS_UNUSED,
 /* Get the desired SB probe timer from the OVS database and configure it into
  * the SB database. */
 static void
-update_probe_interval(struct controller_ctx *ctx)
+update_probe_interval(struct controller_ctx *ctx, const char *ovnsb_remote)
 {
     const struct ovsrec_open_vswitch *cfg
         = ovsrec_open_vswitch_first(ctx->ovs_idl);
-    int interval = (cfg
-                    ? smap_get_int(&cfg->external_ids,
-                                   "ovn-remote-probe-interval",
-                                   DEFAULT_PROBE_INTERVAL_MSEC)
-                    : DEFAULT_PROBE_INTERVAL_MSEC);
+    int interval = -1;
+    if (cfg) {
+        interval = smap_get_int(&cfg->external_ids,
+                                "ovn-remote-probe-interval",
+                                -1);
+    }
+    if (interval == -1) {
+        interval = stream_or_pstream_needs_probes(ovnsb_remote)
+                   ? DEFAULT_PROBE_INTERVAL_MSEC
+                   : 0;
+    }
+
     ovsdb_idl_set_probe_interval(ctx->ovnsb_idl, interval);
 }

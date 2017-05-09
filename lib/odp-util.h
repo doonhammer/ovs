@@ -127,6 +127,7 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  *  OVS_KEY_ATTR_CT_ZONE                 2     2     4      8
  *  OVS_KEY_ATTR_CT_MARK                 4    --     4      8
  *  OVS_KEY_ATTR_CT_LABEL               16    --     4     20
+ *  OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6     40    --     4     44
  *  OVS_KEY_ATTR_ETHERNET               12    --     4     16
  *  OVS_KEY_ATTR_ETHERTYPE               2     2     4      8  (outer VLAN ethertype)
  *  OVS_KEY_ATTR_VLAN                    2     2     4      8
@@ -136,13 +137,13 @@ void odp_portno_names_destroy(struct hmap *portno_names);
  *  OVS_KEY_ATTR_ICMPV6                  2     2     4      8
  *  OVS_KEY_ATTR_ND                     28    --     4     32
  *  ----------------------------------------------------------
- *  total                                                 572
+ *  total                                                 616
  *
  * We include some slack space in case the calculation isn't quite right or we
  * add another field and forget to adjust this value.
  */
 #define ODPUTIL_FLOW_KEY_BYTES 640
-BUILD_ASSERT_DECL(FLOW_WC_SEQ == 36);
+BUILD_ASSERT_DECL(FLOW_WC_SEQ == 39);
 
 /* A buffer with sufficient size and alignment to hold an nlattr-formatted flow
  * key.  An array of "struct nlattr" might not, in theory, be sufficiently
@@ -166,25 +167,40 @@ int odp_flow_from_string(const char *s,
                          const struct simap *port_names,
                          struct ofpbuf *, struct ofpbuf *);
 
+/* ODP_SUPPORT_FIELD(TYPE, FIELD_NAME, FIELD_DESCRIPTION)
+ *
+ * Each 'ODP_SUPPORT_FIELD' defines a member in 'struct odp_support',
+ * and represents support for related OVS_KEY_ATTR_* fields.
+ * They are defined as macros to keep 'dpif_show_support()' in sync
+ * as new fields are added.   */
+#define ODP_SUPPORT_FIELDS                                                   \
+    /* Maximum number of 802.1q VLAN headers to serialize in a mask. */      \
+    ODP_SUPPORT_FIELD(size_t, max_vlan_headers, "Max VLAN headers")          \
+    /* Maximum number of MPLS label stack entries to serialise in a mask. */ \
+    ODP_SUPPORT_FIELD(size_t, max_mpls_depth, "Max MPLS depth")              \
+    /* If this is true, then recirculation fields will always be             \
+     * serialised. */                                                        \
+    ODP_SUPPORT_FIELD(bool, recirc, "Recirc")                                \
+    /* If true, serialise the corresponding OVS_KEY_ATTR_CONN_* field. */    \
+    ODP_SUPPORT_FIELD(bool, ct_state, "CT state")                            \
+    ODP_SUPPORT_FIELD(bool, ct_zone, "CT zone")                              \
+    ODP_SUPPORT_FIELD(bool, ct_mark, "CT mark")                              \
+    ODP_SUPPORT_FIELD(bool, ct_label, "CT label")                            \
+                                                                             \
+    /* If true, it means that the datapath supports the NAT bits in          \
+     * 'ct_state'.  The above 'ct_state' member must be true for this        \
+     * to make sense */                                                      \
+    ODP_SUPPORT_FIELD(bool, ct_state_nat, "CT state NAT")                    \
+                                                                             \
+    /* Conntrack original direction tuple matching * supported. */           \
+    ODP_SUPPORT_FIELD(bool, ct_orig_tuple, "CT orig tuple")
+
 /* Indicates support for various fields. This defines how flows will be
  * serialised. */
 struct odp_support {
-    /* Maximum number of MPLS label stack entries to serialise in a mask. */
-    size_t max_mpls_depth;
-
-    /* If this is true, then recirculation fields will always be serialised. */
-    bool recirc;
-
-    /* If true, serialise the corresponding OVS_KEY_ATTR_CONN_* field. */
-    bool ct_state;
-    bool ct_zone;
-    bool ct_mark;
-    bool ct_label;
-
-    /* If true, it means that the datapath supports the NAT bits in
-     * 'ct_state'.  The above 'ct_state' member must be true for this
-     * to make sense */
-    bool ct_state_nat;
+#define ODP_SUPPORT_FIELD(TYPE, NAME, TITLE) TYPE NAME;
+    ODP_SUPPORT_FIELDS
+#undef ODP_SUPPORT_FIELD
 };
 
 struct odp_flow_key_parms {
@@ -199,6 +215,10 @@ struct odp_flow_key_parms {
     /* Indicates support for various fields. If the datapath supports a field,
      * then it will always be serialised. */
     struct odp_support support;
+
+    /* Indicates if we are probing datapath capability. If true, ignore the
+     * configured flow limits. */
+    bool probe;
 
     /* The netlink formatted version of the flow. It is used in cases where
      * the mask cannot be constructed from the OVS internal representation
@@ -308,4 +328,10 @@ void odp_put_tunnel_action(const struct flow_tnl *tunnel,
 
 void odp_put_tnl_push_action(struct ofpbuf *odp_actions,
                              struct ovs_action_push_tnl *data);
+
+void odp_put_pop_eth_action(struct ofpbuf *odp_actions);
+void odp_put_push_eth_action(struct ofpbuf *odp_actions,
+                             const struct eth_addr *eth_src,
+                             const struct eth_addr *eth_dst);
+
 #endif /* odp-util.h */

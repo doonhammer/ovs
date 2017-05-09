@@ -421,6 +421,7 @@ Options:\n\
   --dry-run                   do not commit changes to database\n\
   --oneline                   print exactly one line of output per command\n",
            program_name, program_name, ctl_get_db_cmd_usage(), ctl_default_db());
+    table_usage();
     vlog_usage();
     printf("\
   --no-syslog             equivalent to --verbose=vsctl:syslog:warn\n");
@@ -2290,57 +2291,41 @@ cmd_get_aa_mapping(struct ctl_context *ctx)
 
 
 static const struct ctl_table_class tables[OVSREC_N_TABLES] = {
-    [OVSREC_TABLE_BRIDGE].row_ids = {
-        {&ovsrec_table_bridge, &ovsrec_bridge_col_name, NULL},
-        {&ovsrec_table_flow_sample_collector_set, NULL,
-         &ovsrec_flow_sample_collector_set_col_bridge}},
+    [OVSREC_TABLE_BRIDGE].row_ids[0] = {&ovsrec_bridge_col_name, NULL, NULL},
 
     [OVSREC_TABLE_CONTROLLER].row_ids[0]
-    = {&ovsrec_table_bridge, &ovsrec_bridge_col_name,
-       &ovsrec_bridge_col_controller},
+    = {&ovsrec_bridge_col_name, NULL, &ovsrec_bridge_col_controller},
 
     [OVSREC_TABLE_INTERFACE].row_ids[0]
-    = {&ovsrec_table_interface, &ovsrec_interface_col_name, NULL},
+    = {&ovsrec_interface_col_name, NULL, NULL},
 
-    [OVSREC_TABLE_MIRROR].row_ids[0]
-    = {&ovsrec_table_mirror, &ovsrec_mirror_col_name, NULL},
+    [OVSREC_TABLE_MIRROR].row_ids[0] = {&ovsrec_mirror_col_name, NULL, NULL},
 
     [OVSREC_TABLE_MANAGER].row_ids[0]
-    = {&ovsrec_table_manager, &ovsrec_manager_col_target, NULL},
+    = {&ovsrec_manager_col_target, NULL, NULL},
 
     [OVSREC_TABLE_NETFLOW].row_ids[0]
-    = {&ovsrec_table_bridge, &ovsrec_bridge_col_name,
-       &ovsrec_bridge_col_netflow},
+    = {&ovsrec_bridge_col_name, NULL, &ovsrec_bridge_col_netflow},
 
-    [OVSREC_TABLE_PORT].row_ids[0]
-    = {&ovsrec_table_port, &ovsrec_port_col_name, NULL},
+    [OVSREC_TABLE_PORT].row_ids[0] = {&ovsrec_port_col_name, NULL, NULL},
 
     [OVSREC_TABLE_QOS].row_ids[0]
-    = {&ovsrec_table_port, &ovsrec_port_col_name, &ovsrec_port_col_qos},
-
-    [OVSREC_TABLE_SSL].row_ids[0]
-    = {&ovsrec_table_open_vswitch, NULL, &ovsrec_open_vswitch_col_ssl},
+    = {&ovsrec_port_col_name, NULL, &ovsrec_port_col_qos},
 
     [OVSREC_TABLE_SFLOW].row_ids[0]
-    = {&ovsrec_table_bridge, &ovsrec_bridge_col_name,
-       &ovsrec_bridge_col_sflow},
+    = {&ovsrec_bridge_col_name, NULL, &ovsrec_bridge_col_sflow},
 
     [OVSREC_TABLE_FLOW_TABLE].row_ids[0]
-    = {&ovsrec_table_flow_table, &ovsrec_flow_table_col_name, NULL},
+    = {&ovsrec_flow_table_col_name, NULL, NULL},
 
-    [OVSREC_TABLE_IPFIX].row_ids = {
-     {&ovsrec_table_bridge, &ovsrec_bridge_col_name, &ovsrec_bridge_col_ipfix},
-     {&ovsrec_table_flow_sample_collector_set, NULL,
-      &ovsrec_flow_sample_collector_set_col_ipfix}},
+    [OVSREC_TABLE_IPFIX].row_ids[0]
+    = {&ovsrec_bridge_col_name, NULL, &ovsrec_bridge_col_ipfix},
 
     [OVSREC_TABLE_AUTOATTACH].row_ids[0]
-    = {&ovsrec_table_bridge, &ovsrec_bridge_col_name,
-       &ovsrec_bridge_col_auto_attach},
+    = {&ovsrec_bridge_col_name, NULL, &ovsrec_bridge_col_auto_attach},
 
     [OVSREC_TABLE_FLOW_SAMPLE_COLLECTOR_SET].row_ids[0]
-    = {&ovsrec_table_flow_sample_collector_set,
-       &ovsrec_flow_sample_collector_set_col_id,
-       NULL},
+    = {&ovsrec_flow_sample_collector_set_col_id, NULL, NULL},
 };
 
 static void

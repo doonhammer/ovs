@@ -281,6 +281,10 @@ struct udpif_key {
     uint64_t reval_seq OVS_GUARDED;           /* Tracks udpif->reval_seq. */
     enum ukey_state state OVS_GUARDED;        /* Tracks ukey lifetime. */
 
+    /* 'state' debug information. */
+    unsigned int state_thread OVS_GUARDED;    /* Thread that transitions. */
+    const char *state_where OVS_GUARDED;      /* transition_ukey() locator. */
+
     /* Datapath flow actions as nlattrs.  Protected by RCU.  Read with
      * ukey_get_actions(), and write with ukey_set_actions(). */
     OVSRCU_TYPE(struct ofpbuf *) actions;
@@ -350,8 +354,11 @@ static void ukey_get_actions(struct udpif_key *, const struct nlattr **actions,
 static bool ukey_install__(struct udpif *, struct udpif_key *ukey)
     OVS_TRY_LOCK(true, ukey->mutex);
 static bool ukey_install(struct udpif *udpif, struct udpif_key *ukey);
-static void transition_ukey(struct udpif_key *ukey, enum ukey_state dst)
+static void transition_ukey_at(struct udpif_key *ukey, enum ukey_state dst,
+                               const char *where)
     OVS_REQUIRES(ukey->mutex);
+#define transition_ukey(UKEY, DST) \
+    transition_ukey_at(UKEY, DST, OVS_SOURCE_LOCATOR)
 static struct udpif_key *ukey_lookup(struct udpif *udpif,
                                      const ovs_u128 *ufid,
                                      const unsigned pmd_id);
@@ -1018,7 +1025,8 @@ classify_upcall(enum dpif_upcall_type type, const struct nlattr *userdata)
 static void
 compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
                   const struct flow *flow, odp_port_t odp_in_port,
-                  struct ofpbuf *buf)
+                  struct ofpbuf *buf, uint32_t slowpath_meter_id,
+                  uint32_t controller_meter_id)
 {
     union user_action_cookie cookie;
     odp_port_t port;
@@ -1032,8 +1040,28 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
         ? ODPP_NONE
         : odp_in_port;
     pid = dpif_port_get_pid(udpif->dpif, port, flow_hash_5tuple(flow, 0));
+
+    size_t offset;
+    size_t ac_offset;
+    uint32_t meter_id = xout->slow & SLOW_CONTROLLER ? controller_meter_id
+                                                     : slowpath_meter_id;
+
+    if (meter_id != UINT32_MAX) {
+        /* If slowpath meter is configured, generate clone(meter, userspace)
+         * action. */
+        offset = nl_msg_start_nested(buf, OVS_ACTION_ATTR_SAMPLE);
+        nl_msg_put_u32(buf, OVS_SAMPLE_ATTR_PROBABILITY, UINT32_MAX);
+        ac_offset = nl_msg_start_nested(buf, OVS_SAMPLE_ATTR_ACTIONS);
+        nl_msg_put_u32(buf, OVS_ACTION_ATTR_METER, meter_id);
+    }
+
     odp_put_userspace_action(pid, &cookie, sizeof cookie.slow_path,
                              ODPP_NONE, false, buf);
+
+    if (meter_id != UINT32_MAX) {
+        nl_msg_end_nested(buf, ac_offset);
+        nl_msg_end_nested(buf, offset);
+    }
 }
 
 /* If there is no error, the upcall must be destroyed with upcall_uninit()
@@ -1136,10 +1164,12 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
         ofpbuf_use_const(&upcall->put_actions,
                          odp_actions->data, odp_actions->size);
     } else {
+        uint32_t smid = upcall->ofproto->up.slowpath_meter_id;
+        uint32_t cmid = upcall->ofproto->up.controller_meter_id;
         /* upcall->put_actions already initialized by upcall_receive(). */
         compose_slow_path(udpif, &upcall->xout, upcall->flow,
                           upcall->flow->in_port.odp_port,
-                          &upcall->put_actions);
+                          &upcall->put_actions, smid, cmid);
     }
 
     /* This function is also called for slow-pathed flows.  As we are only
@@ -1352,11 +1382,14 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
 
     /* Handle the packets individually in order of arrival.
      *
-     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, and SLOW_BFD, translation is what
-     *     processes received packets for these protocols.
+     *   - For SLOW_CFM, SLOW_LACP, SLOW_STP, SLOW_BFD, and SLOW_LLDP,
+     *     translation is what processes received packets for these
+     *     protocols.
      *
      *   - For SLOW_CONTROLLER, translation sends the packet to the OpenFlow
      *     controller.
+     *
+     *   - For SLOW_ACTION, translation executes the actions directly.
      *
      * The loop fills 'ops' with an array of operations to execute in the
      * datapath. */
@@ -1404,7 +1437,7 @@ handle_upcalls(struct udpif *udpif, struct upcall *upcalls,
             ovs_mutex_lock(&ukey->mutex);
             if (ops[i].dop.error) {
                 transition_ukey(ukey, UKEY_EVICTED);
-            } else {
+            } else if (ukey->state < UKEY_OPERATIONAL) {
                 transition_ukey(ukey, UKEY_OPERATIONAL);
             }
             ovs_mutex_unlock(&ukey->mutex);
@@ -1481,6 +1514,8 @@ ukey_create__(const struct nlattr *key, size_t key_len,
     ukey->dump_seq = dump_seq;
     ukey->reval_seq = reval_seq;
     ukey->state = UKEY_CREATED;
+    ukey->state_thread = ovsthread_id_self();
+    ukey->state_where = OVS_SOURCE_LOCATOR;
     ukey->created = time_msec();
     memset(&ukey->stats, 0, sizeof ukey->stats);
     ukey->stats.used = used;
@@ -1577,7 +1612,7 @@ ukey_create_from_dpif_flow(const struct udpif *udpif,
     }
 
     dump_seq = seq_read(udpif->dump_seq);
-    reval_seq = seq_read(udpif->reval_seq);
+    reval_seq = seq_read(udpif->reval_seq) - 1; /* Ensure revalidation. */
     ofpbuf_use_const(&actions, &flow->actions, flow->actions_len);
     *ukey = ukey_create__(flow->key, flow->key_len,
                           flow->mask, flow->mask_len, flow->ufid_present,
@@ -1668,10 +1703,15 @@ ukey_install__(struct udpif *udpif, struct udpif_key *new_ukey)
 }
 
 static void
-transition_ukey(struct udpif_key *ukey, enum ukey_state dst)
+transition_ukey_at(struct udpif_key *ukey, enum ukey_state dst,
+                   const char *where)
     OVS_REQUIRES(ukey->mutex)
 {
-    ovs_assert(dst >= ukey->state);
+    if (dst < ukey->state) {
+        VLOG_ABORT("Invalid ukey transition %d->%d (last transitioned from "
+                   "thread %u at %s)", ukey->state, dst, ukey->state_thread,
+                   ukey->state_where);
+    }
     if (ukey->state == dst && dst == UKEY_OPERATIONAL) {
         return;
     }
@@ -1706,6 +1746,8 @@ transition_ukey(struct udpif_key *ukey, enum ukey_state dst)
                      ds_cstr(&ds), ukey->state, dst);
         ds_destroy(&ds);
     }
+    ukey->state_thread = ovsthread_id_self();
+    ukey->state_where = where;
 }
 
 static bool
@@ -1948,10 +1990,19 @@ revalidate_ukey__(struct udpif *udpif, const struct udpif_key *ukey,
     }
     xoutp = &ctx.xout;
 
+    if (xoutp->avoid_caching) {
+        goto exit;
+    }
+
     if (xoutp->slow) {
+        struct ofproto_dpif *ofproto;
+        ofproto = xlate_lookup_ofproto(udpif->backer, &ctx.flow, NULL);
+        uint32_t smid = ofproto->up.slowpath_meter_id;
+        uint32_t cmid = ofproto->up.controller_meter_id;
+
         ofpbuf_clear(odp_actions);
         compose_slow_path(udpif, xoutp, &ctx.flow, ctx.flow.in_port.odp_port,
-                          odp_actions);
+                          odp_actions, smid, cmid);
     }
 
     if (odp_flow_key_to_mask(ukey->mask, ukey->mask_len, &dp_mask, &ctx.flow)
@@ -2166,8 +2217,8 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
             if (error) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
-                VLOG_WARN_RL(&rl, "xlate_actions failed (%s)!",
-                             xlate_strerror(error));
+                VLOG_WARN_RL(&rl, "xlate_key failed (%s)!",
+                             ovs_strerror(error));
             } else {
                 xlate_out_uninit(&ctx.xout);
                 if (netflow) {
@@ -2316,8 +2367,16 @@ revalidate(struct revalidator *revalidator)
                 continue;
             }
 
-            /* The flow is now confirmed to be in the datapath. */
-            transition_ukey(ukey, UKEY_OPERATIONAL);
+            if (ukey->state <= UKEY_OPERATIONAL) {
+                /* The flow is now confirmed to be in the datapath. */
+                transition_ukey(ukey, UKEY_OPERATIONAL);
+            } else {
+                VLOG_INFO("Unexpected ukey transition from state %d "
+                          "(last transitioned from thread %u at %s)",
+                          ukey->state, ukey->state_thread, ukey->state_where);
+                ovs_mutex_unlock(&ukey->mutex);
+                continue;
+            }
 
             if (!used) {
                 used = ukey->created;

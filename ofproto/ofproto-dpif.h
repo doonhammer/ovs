@@ -51,6 +51,7 @@
 #include "hmapx.h"
 #include "odp-util.h"
 #include "openvswitch/ofp-util.h"
+#include "id-pool.h"
 #include "ovs-thread.h"
 #include "ofproto-provider.h"
 #include "util.h"
@@ -143,31 +144,50 @@ struct group_dpif *group_dpif_lookup(struct ofproto_dpif *,
  * ofproto-dpif) resides.  A backer can host several bridges, but a bridge is
  * backed by only a single dpif. */
 
+
+/* DPIF_SUPPORT_FIELD(TYPE, FIELD_NAME, FIELD_DESCRIPTION)
+ *
+ * Each 'DPIF_SUPPORT_FIELD' defines a member in 'struct dpif_backer_support'
+ * and represents support for a datapath action.
+ * They are defined as macros to keep 'dpif_show_support()' in sync
+ * as new fields are added.  */
+#define DPIF_SUPPORT_FIELDS                                                 \
+    /* True if the datapath supports variable-length                        \
+     * OVS_USERSPACE_ATTR_USERDATA in OVS_ACTION_ATTR_USERSPACE actions.    \
+     * False if the datapath supports only 8-byte (or shorter) userdata. */ \
+    DPIF_SUPPORT_FIELD(bool, variable_length_userdata,                      \
+                       "Variable length userdata")                          \
+                                                                            \
+    /* True if the datapath supports masked data in OVS_ACTION_ATTR_SET     \
+     * actions. */                                                          \
+    DPIF_SUPPORT_FIELD(bool, masked_set_action, "Masked set action")        \
+                                                                            \
+    /* True if the datapath supports tnl_push and pop actions. */           \
+    DPIF_SUPPORT_FIELD(bool, tnl_push_pop, "Tunnel push pop")               \
+                                                                            \
+    /* True if the datapath supports OVS_FLOW_ATTR_UFID. */                 \
+    DPIF_SUPPORT_FIELD(bool, ufid, "Ufid")                                  \
+                                                                            \
+    /* True if the datapath supports OVS_ACTION_ATTR_TRUNC action. */       \
+    DPIF_SUPPORT_FIELD(bool, trunc, "Truncate action")                      \
+                                                                            \
+    /* True if the datapath supports OVS_ACTION_ATTR_CLONE action. */       \
+    DPIF_SUPPORT_FIELD(bool, clone, "Clone action")                         \
+                                                                            \
+    /* Maximum level of nesting allowed by OVS_ACTION_ATTR_SAMPLE action. */\
+    DPIF_SUPPORT_FIELD(size_t, sample_nesting, "Sample nesting")            \
+                                                                            \
+    /* OVS_CT_ATTR_EVENTMASK supported by OVS_ACTION_ATTR_CT action. */     \
+    DPIF_SUPPORT_FIELD(bool, ct_eventmask, "Conntrack eventmask")
+
 /* Stores the various features which the corresponding backer supports. */
 struct dpif_backer_support {
-    /* True if the datapath supports variable-length
-     * OVS_USERSPACE_ATTR_USERDATA in OVS_ACTION_ATTR_USERSPACE actions.
-     * False if the datapath supports only 8-byte (or shorter) userdata. */
-    bool variable_length_userdata;
-
-    /* True if the datapath supports masked data in OVS_ACTION_ATTR_SET
-     * actions. */
-    bool masked_set_action;
-
-    /* True if the datapath supports tnl_push and pop actions. */
-    bool tnl_push_pop;
-
-    /* True if the datapath supports OVS_FLOW_ATTR_UFID. */
-    bool ufid;
-
-    /* True if the datapath supports OVS_ACTION_ATTR_TRUNC action. */
-    bool trunc;
+#define DPIF_SUPPORT_FIELD(TYPE, NAME, TITLE) TYPE NAME;
+    DPIF_SUPPORT_FIELDS
+#undef DPIF_SUPPORT_FIELD
 
     /* Each member represents support for related OVS_KEY_ATTR_* fields. */
     struct odp_support odp;
-
-    /* True if the datapath supports OVS_ACTION_ATTR_CLONE action. */
-    bool clone;
 };
 
 /* Reasons that we might need to revalidate every datapath flow, and
@@ -204,6 +224,9 @@ struct dpif_backer {
     enum revalidate_reason need_revalidate; /* Revalidate all flows. */
 
     bool recv_set_enable; /* Enables or disables receiving packets. */
+
+    /* Meter. */
+    struct id_pool *meter_ids;     /* Datapath meter allocation. */
 
     /* Version string of the datapath stored in OVSDB. */
     char *dp_version_string;

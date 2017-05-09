@@ -389,9 +389,10 @@
 #include <stdint.h>
 
 #include "dpdk.h"
-#include "netdev.h"
 #include "dp-packet.h"
+#include "netdev.h"
 #include "openflow/openflow.h"
+#include "openvswitch/ofp-util.h"
 #include "ovs-numa.h"
 #include "packets.h"
 #include "util.h"
@@ -518,7 +519,8 @@ enum dpif_flow_put_flags {
 };
 
 bool dpif_probe_feature(struct dpif *, const char *name,
-                        const struct ofpbuf *key, const ovs_u128 *ufid);
+                        const struct ofpbuf *key, const struct ofpbuf *actions,
+                        const ovs_u128 *ufid);
 void dpif_flow_hash(const struct dpif *, const void *key, size_t key_len,
                     ovs_u128 *hash);
 int dpif_flow_flush(struct dpif *);
@@ -855,6 +857,16 @@ void dpif_enable_upcall(struct dpif *);
 void dpif_disable_upcall(struct dpif *);
 
 void dpif_print_packet(struct dpif *, struct dpif_upcall *);
+
+/* Meters. */
+void dpif_meter_get_features(const struct dpif *,
+                             struct ofputil_meter_features *);
+int dpif_meter_set(struct dpif *, ofproto_meter_id *meter_id,
+                   struct ofputil_meter_config *);
+int dpif_meter_get(const struct dpif *, ofproto_meter_id meter_id,
+                   struct ofputil_meter_stats *, uint16_t n_bands);
+int dpif_meter_del(struct dpif *, ofproto_meter_id meter_id,
+                   struct ofputil_meter_stats *, uint16_t n_bands);
 
 /* Miscellaneous. */
 

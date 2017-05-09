@@ -34,28 +34,18 @@ Q: What versions of OpenFlow does Open vSwitch support?
     Open vSwitch    OF1.0 OF1.1 OF1.2 OF1.3 OF1.4 OF1.5 OF1.6
     =============== ===== ===== ===== ===== ===== ===== =====
     1.9 and earlier  yes   ---   ---   ---   ---   ---   ---
-    1.10             yes   ---   (*)   (*)   ---   ---   ---
-    1.11             yes   ---   (*)   (*)   ---   ---   ---
-    2.0              yes   (*)   (*)   (*)   ---   ---   ---
-    2.1              yes   (*)   (*)   (*)   ---   ---   ---
+    1.10, 1.11       yes   ---   (*)   (*)   ---   ---   ---
+    2.0, 2.1         yes   (*)   (*)   (*)   ---   ---   ---
     2.2              yes   (*)   (*)   (*)   (%)   (*)   ---
-    2.3              yes   yes   yes   yes   (*)   (*)   ---
-    2.4              yes   yes   yes   yes   (*)   (*)   ---
-    2.5              yes   yes   yes   yes   (*)   (*)   (*)
+    2.3, 2.4         yes   yes   yes   yes   (*)   (*)   ---
+    2.5, 2.6, 2.7    yes   yes   yes   yes   (*)   (*)   (*)
+    2.8              yes   yes   yes   yes   yes   (*)   (*)
     =============== ===== ===== ===== ===== ===== ===== =====
 
-    (*) Supported, with one or more missing features.
+    --- Not supported.
+    yes Supported and enabled by default
+    (*) Supported, but missing features, and must be enabled by user.
     (%) Experimental, unsafe implementation.
-
-    Open vSwitch 2.3 enables OpenFlow 1.0, 1.1, 1.2, and 1.3 by default in
-    ovs-vswitchd.  In Open vSwitch 1.10 through 2.2, OpenFlow 1.1, 1.2, and 1.3
-    must be enabled manually in ovs-vswitchd.
-
-    Some versions of OpenFlow are supported with missing features and therefore
-    not enabled by default: OpenFlow 1.4 and 1.5, in Open vSwitch 2.3 and
-    later, as well as OpenFlow 1.6 in Open vSwitch 2.5 and later.  Also, the
-    OpenFlow 1.6 specification is still under development and thus subject to
-    change.
 
     In any case, the user may override the default:
 
@@ -83,7 +73,7 @@ Q: What versions of OpenFlow does Open vSwitch support?
     could cause crashes.  We don't recommend enabling it.)
 
     :doc:`/topics/openflow` tracks support for OpenFlow 1.1 and later features.
-    When support for OpenFlow 1.4 and 1.5 is solidly implemented, Open vSwitch
+    When support for OpenFlow 1.5 and 1.6 is solidly implemented, Open vSwitch
     will enable those version by default.
 
 Q: Does Open vSwitch support MPLS?
@@ -462,6 +452,15 @@ What's going on?
     messages and will send an error response if any other value of this field
     is included in a "packet-out" or a "flow mod" sent by a controller.
 
+    Packet buffers have limited usefulness in any case.  Table-miss packet-in
+    messages most commonly pass the first packet in a microflow to the OpenFlow
+    controller, which then sets up an OpenFlow flow that handles remaining
+    traffic in the microflow without further controller intervention.  In such
+    a case, the packet that initiates the microflow is in practice usually
+    small (certainly for TCP), which means that the switch sends the entire
+    packet to the controller and the buffer only saves a small number of bytes
+    in the reverse direction.
+
 Q: How does OVS divide flows among buckets in an OpenFlow "select" group?
 
     A: In Open vSwitch 2.3 and earlier, Open vSwitch used the destination
@@ -495,6 +494,27 @@ but the packets are actually being output in VLAN 123.  Why?
     headers happen before output, e.g.::
 
         $ ovs-ofctl add-flow br0 dl_vlan=123,actions=mod_vlan_vid:456,output:1
+
+    See also the following question.
+
+Q: I added a flow to a redirect packets for TCP port 80 to port 443,
+like so::
+
+    $ ovs-ofctl add-flow br0 tcp,tcp_dst=123,actions=mod_tp_dst:443
+
+but the packets are getting dropped instead.  Why?
+
+    A: This set of actions does change the TCP destination port to 443, but
+    then it does nothing more.  It doesn't, for example, say to continue to
+    another flow table or to output the packet.  Therefore, the packet is
+    dropped.
+
+    To solve the problem, add an action that does something with the modified
+    packet.  For example::
+
+        $ ovs-ofctl add-flow br0 tcp,tcp_dst=123,actions=mod_tp_dst:443,normal
+
+    See also the preceding question.
 
 Q: The "learn" action can't learn the action I want, can you improve it?
 

@@ -34,6 +34,7 @@
 #include "Vport.h"
 #include "Vxlan.h"
 #include "Geneve.h"
+#include "IpFragment.h"
 
 #ifdef OVS_DBG_MOD
 #undef OVS_DBG_MOD
@@ -69,63 +70,6 @@ typedef struct _OVS_ACTION_STATS {
 } OVS_ACTION_STATS, *POVS_ACTION_STATS;
 
 OVS_ACTION_STATS ovsActionStats;
-
-/*
- * There a lot of data that needs to be maintained while executing the pipeline
- * as dictated by the actions of a flow, across different functions at different
- * levels. Such data is put together in a 'context' structure. Care should be
- * exercised while adding new members to the structure - only add ones that get
- * used across multiple stages in the pipeline/get used in multiple functions.
- */
-typedef struct OvsForwardingContext {
-    POVS_SWITCH_CONTEXT switchContext;
-    /* The NBL currently used in the pipeline. */
-    PNET_BUFFER_LIST curNbl;
-    /* NDIS forwarding detail for 'curNbl'. */
-    PNDIS_SWITCH_FORWARDING_DETAIL_NET_BUFFER_LIST_INFO fwdDetail;
-    /* Array of destination ports for 'curNbl'. */
-    PNDIS_SWITCH_FORWARDING_DESTINATION_ARRAY destinationPorts;
-    /* send flags while sending 'curNbl' into NDIS. */
-    ULONG sendFlags;
-    /* Total number of output ports, used + unused, in 'curNbl'. */
-    UINT32 destPortsSizeIn;
-    /* Total number of used output ports in 'curNbl'. */
-    UINT32 destPortsSizeOut;
-    /*
-     * If 'curNbl' is not owned by OVS, they need to be tracked, if they need to
-     * be freed/completed.
-     */
-    OvsCompletionList *completionList;
-    /*
-     * vport number of 'curNbl' when it is passed from the PIF bridge to the INT
-     * bridge. ie. during tunneling on the Rx side.
-     */
-    UINT32 srcVportNo;
-
-    /*
-     * Tunnel key:
-     * - specified in actions during tunneling Tx
-     * - extracted from an NBL during tunneling Rx
-     */
-    OvsIPv4TunnelKey tunKey;
-
-    /*
-     * Tunneling - Tx:
-     * To store the output port, when it is a tunneled port. We don't foresee
-     * multiple tunneled ports as outport for any given NBL.
-     */
-    POVS_VPORT_ENTRY tunnelTxNic;
-
-    /*
-     * Tunneling - Rx:
-     * Points to the Internal port on the PIF Bridge, if the packet needs to be
-     * de-tunneled.
-     */
-    POVS_VPORT_ENTRY tunnelRxNic;
-
-    /* header information */
-    OVS_PACKET_HDR_INFO layers;
-} OvsForwardingContext;
 
 /*
  * --------------------------------------------------------------------------
@@ -197,6 +141,36 @@ OvsInitForwardingCtx(OvsForwardingContext *ovsFwdCtx,
     }
 
     return NDIS_STATUS_SUCCESS;
+}
+
+/*
+ * --------------------------------------------------------------------------
+ * OvsDoFragmentNbl --
+ *     Utility function to Fragment nbl based on mru.
+ * --------------------------------------------------------------------------
+ */
+static __inline VOID
+OvsDoFragmentNbl(OvsForwardingContext *ovsFwdCtx, UINT16 mru)
+{
+    PNET_BUFFER_LIST fragNbl = NULL;
+    fragNbl = OvsFragmentNBL(ovsFwdCtx->switchContext,
+                             ovsFwdCtx->curNbl,
+                             &(ovsFwdCtx->layers),
+                             mru, 0, TRUE);
+
+   if (fragNbl != NULL) {
+        OvsCompleteNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl, TRUE);
+        OvsInitForwardingCtx(ovsFwdCtx,
+                            ovsFwdCtx->switchContext,
+                             fragNbl,
+                             ovsFwdCtx->srcVportNo,
+                             ovsFwdCtx->sendFlags,
+                             NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(fragNbl),
+                             ovsFwdCtx->completionList,
+                             &ovsFwdCtx->layers, FALSE);
+    } else {
+        OVS_LOG_INFO("Fragment NBL failed for MRU = %u", mru);
+    }
 }
 
 /*
@@ -661,6 +635,7 @@ OvsTunnelPortTx(OvsForwardingContext *ovsFwdCtx)
     UINT32 srcVportNo;
     NDIS_SWITCH_NIC_INDEX srcNicIndex;
     NDIS_SWITCH_PORT_ID srcPortId;
+    POVS_BUFFER_CONTEXT ctx;
 
     /*
      * Setup the source port to be the internal port to as to facilitate the
@@ -674,6 +649,10 @@ OvsTunnelPortTx(OvsForwardingContext *ovsFwdCtx)
         return NDIS_STATUS_FAILURE;
     }
 
+    ctx = (POVS_BUFFER_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(ovsFwdCtx->curNbl);
+    if (ctx->mru != 0) {
+        OvsDoFragmentNbl(ovsFwdCtx, ctx->mru);
+    }
     OVS_FWD_INFO switchFwdInfo = { 0 };
     /* Apply the encapsulation. The encapsulation will not consume the NBL. */
     switch(ovsFwdCtx->tunnelTxNic->ovsType) {
@@ -864,6 +843,7 @@ OvsOutputForwardingCtx(OvsForwardingContext *ovsFwdCtx)
     NDIS_STATUS status = STATUS_SUCCESS;
     POVS_SWITCH_CONTEXT switchContext = ovsFwdCtx->switchContext;
     PCWSTR dropReason;
+    POVS_BUFFER_CONTEXT ctx;
 
     /*
      * Handle the case where the some of the destination ports are tunneled
@@ -886,8 +866,12 @@ OvsOutputForwardingCtx(OvsForwardingContext *ovsFwdCtx)
          * before doing encapsulation.
          */
         if (ovsFwdCtx->tunnelTxNic != NULL || ovsFwdCtx->tunnelRxNic != NULL) {
+            POVS_BUFFER_CONTEXT oldCtx, newCtx;
             nb = NET_BUFFER_LIST_FIRST_NB(ovsFwdCtx->curNbl);
-            newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
+            oldCtx = (POVS_BUFFER_CONTEXT)
+                NET_BUFFER_LIST_CONTEXT_DATA_START(ovsFwdCtx->curNbl);
+            newNbl = OvsPartialCopyNBL(ovsFwdCtx->switchContext,
+                                       ovsFwdCtx->curNbl,
                                        0, 0, TRUE /*copy NBL info*/);
             if (newNbl == NULL) {
                 status = NDIS_STATUS_RESOURCES;
@@ -895,6 +879,9 @@ OvsOutputForwardingCtx(OvsForwardingContext *ovsFwdCtx)
                 dropReason = L"Dropped due to failure to create NBL copy.";
                 goto dropit;
             }
+            newCtx = (POVS_BUFFER_CONTEXT)
+                NET_BUFFER_LIST_CONTEXT_DATA_START(newNbl);
+            newCtx->mru = oldCtx->mru;
         }
 
         /* It does not seem like we'll get here unless 'portsToUpdate' > 0. */
@@ -907,6 +894,11 @@ OvsOutputForwardingCtx(OvsForwardingContext *ovsFwdCtx)
             ovsActionStats.cannotGrowDest++;
             dropReason = L"Dropped due to failure to update destinations.";
             goto dropit;
+        }
+
+        ctx = (POVS_BUFFER_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(ovsFwdCtx->curNbl);
+        if (ctx->mru != 0) {
+            OvsDoFragmentNbl(ovsFwdCtx, ctx->mru);
         }
 
         OvsSendNBLIngress(ovsFwdCtx->switchContext, ovsFwdCtx->curNbl,
@@ -2032,12 +2024,29 @@ OvsDoExecuteActions(POVS_SWITCH_CONTEXT switchContext,
                 }
             }
 
-            status = OvsExecuteConntrackAction(ovsFwdCtx.curNbl, layers,
-                                               key, (const PNL_ATTR)a);
+            PNET_BUFFER_LIST oldNbl = ovsFwdCtx.curNbl;
+            status = OvsExecuteConntrackAction(&ovsFwdCtx, key,
+                                               (const PNL_ATTR)a);
             if (status != NDIS_STATUS_SUCCESS) {
-                OVS_LOG_ERROR("CT Action failed");
-                dropReason = L"OVS-conntrack action failed";
+                /* Pending NBLs are consumed by Defragmentation. */
+                if (status != NDIS_STATUS_PENDING) {
+                    OVS_LOG_ERROR("CT Action failed");
+                    dropReason = L"OVS-conntrack action failed";
+                }
                 goto dropit;
+            } else if (oldNbl != ovsFwdCtx.curNbl) {
+               /*
+                * OvsIpv4Reassemble consumes the original NBL and creates a
+                * new one and assigns it to the curNbl of ovsFwdCtx.
+                */
+               OvsInitForwardingCtx(&ovsFwdCtx,
+                                    ovsFwdCtx.switchContext,
+                                    ovsFwdCtx.curNbl,
+                                    ovsFwdCtx.srcVportNo,
+                                    ovsFwdCtx.sendFlags,
+                                    NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(ovsFwdCtx.curNbl),
+                                    ovsFwdCtx.completionList,
+                                    &ovsFwdCtx.layers, FALSE);
             }
             break;
         }

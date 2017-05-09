@@ -89,14 +89,25 @@ static const struct ethtool_ops internal_dev_ethtool_ops = {
 	.get_link	= ethtool_op_get_link,
 };
 
-static int internal_dev_change_mtu(struct net_device *netdev, int new_mtu)
+#ifndef HAVE_NET_DEVICE_WITH_MAX_MTU
+static int internal_dev_change_mtu(struct net_device *dev, int new_mtu)
 {
-	if (new_mtu < 68)
+	if (new_mtu < ETH_MIN_MTU) {
+		net_err_ratelimited("%s: Invalid MTU %d requested, hw min %d\n",
+				    dev->name, new_mtu, ETH_MIN_MTU);
 		return -EINVAL;
+	}
 
-	netdev->mtu = new_mtu;
+	if (new_mtu > ETH_MAX_MTU) {
+		net_err_ratelimited("%s: Invalid MTU %d requested, hw max %d\n",
+				    dev->name, new_mtu, ETH_MAX_MTU);
+		return -EINVAL;
+	}
+
+	dev->mtu = new_mtu;
 	return 0;
 }
+#endif
 
 static void internal_dev_destructor(struct net_device *dev)
 {
@@ -106,7 +117,7 @@ static void internal_dev_destructor(struct net_device *dev)
 	free_netdev(dev);
 }
 
-static struct rtnl_link_stats64 *
+static void
 internal_get_stats(struct net_device *dev, struct rtnl_link_stats64 *stats)
 {
 	int i;
@@ -134,8 +145,6 @@ internal_get_stats(struct net_device *dev, struct rtnl_link_stats64 *stats)
 		stats->tx_bytes         += local_stats.tx_bytes;
 		stats->tx_packets       += local_stats.tx_packets;
 	}
-
-	return stats;
 }
 
 #ifdef HAVE_IFF_PHONY_HEADROOM
@@ -150,8 +159,10 @@ static const struct net_device_ops internal_dev_netdev_ops = {
 	.ndo_stop = internal_dev_stop,
 	.ndo_start_xmit = internal_dev_xmit,
 	.ndo_set_mac_address = eth_mac_addr,
+#ifndef HAVE_NET_DEVICE_WITH_MAX_MTU
 	.ndo_change_mtu = internal_dev_change_mtu,
-	.ndo_get_stats64 = internal_get_stats,
+#endif
+	.ndo_get_stats64 = (void *)internal_get_stats,
 #ifdef HAVE_IFF_PHONY_HEADROOM
 #ifndef HAVE_NET_DEVICE_OPS_WITH_EXTENDED
 	.ndo_set_rx_headroom = internal_set_rx_headroom,
@@ -169,6 +180,9 @@ static void do_setup(struct net_device *netdev)
 {
 	ether_setup(netdev);
 
+#ifdef HAVE_NET_DEVICE_WITH_MAX_MTU
+	netdev->max_mtu = ETH_MAX_MTU;
+#endif
 	netdev->netdev_ops = &internal_dev_netdev_ops;
 
 	netdev->priv_flags &= ~IFF_TX_SKB_SHARING;
@@ -188,7 +202,7 @@ static void do_setup(struct net_device *netdev)
 
 	netdev->vlan_features = netdev->features;
 	netdev->hw_enc_features = netdev->features;
-	netdev->features |= NETIF_F_HW_VLAN_CTAG_TX;
+	netdev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_STAG_TX;
 	netdev->hw_features = netdev->features & ~NETIF_F_LLTX;
 
 	eth_hw_addr_random(netdev);

@@ -38,10 +38,28 @@ struct mcast_snooping;
 struct xlate_cache;
 
 struct xlate_out {
-    enum slow_path_reason slow; /* 0 if fast path may be used. */
+    /* Caching exceptions:
+     *
+     *   - If 'slow' is nonzero, the translation needs to be slow-pathed for
+     *     one reason or another.  (The particular value is only important for
+     *     explaining to an administrator why the flow is slow-pathed.)  This
+     *     makes OVS install a datapath flow with a send-to-userspace action.
+     *     Only on revalidation will the flow be replaced, if appropriate, by
+     *     one that does something else with the traffic.
+     *
+     *   - If 'avoid_caching' is true, then OVS won't install a datapath flow
+     *     at all.  If the reason to avoid caching goes away, the next upcall
+     *     will immediately install a correct datapath flow.
+     *
+     *   - Otherwise a datapath flow can be installed in the usual way.
+     *
+     * If 'avoid_caching' is true then 'slow' doesn't matter.
+     */
+    enum slow_path_reason slow;
+    bool avoid_caching;
 
-    struct recirc_refs recircs; /* Recirc action IDs on which references are
-                                 * held. */
+    /* Recirc action IDs on which references are held. */
+    struct recirc_refs recircs;
 };
 
 struct xlate_in {
@@ -137,6 +155,9 @@ struct xlate_in {
 
     /* The frozen state to be resumed, as returned by xlate_lookup(). */
     const struct frozen_state *frozen_state;
+
+    /* If true, the packet to be translated is from a packet_out msg. */
+    bool in_packet_out;
 };
 
 void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
@@ -149,8 +170,10 @@ void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
 void xlate_remove_ofproto(struct ofproto_dpif *);
 
 void xlate_bundle_set(struct ofproto_dpif *, struct ofbundle *,
-                      const char *name, enum port_vlan_mode, int vlan,
-                      unsigned long *trunks, bool use_priority_tags,
+                      const char *name, enum port_vlan_mode,
+                      uint16_t qinq_ethtype, int vlan,
+                      unsigned long *trunks, unsigned long *cvlans,
+                      bool use_priority_tags,
                       const struct bond *, const struct lacp *,
                       bool floodable, bool protected);
 void xlate_bundle_remove(struct ofbundle *);

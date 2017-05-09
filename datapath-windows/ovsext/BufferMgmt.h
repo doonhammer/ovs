@@ -58,9 +58,10 @@ typedef union _OVS_BUFFER_CONTEXT {
             UINT32 origDataLength;
             UINT32 dataOffsetDelta;
         };
+        UINT16 mru;
     };
 
-    UINT64 value[MEM_ALIGN_SIZE(16) >> 3];
+    UINT64 value[MEM_ALIGN_SIZE(32) >> 3];
 } OVS_BUFFER_CONTEXT, *POVS_BUFFER_CONTEXT;
 
 typedef struct _OVS_NBL_POOL {
@@ -115,7 +116,15 @@ PNET_BUFFER_LIST OvsTcpSegmentNBL(PVOID context,
                                   PNET_BUFFER_LIST nbl,
                                   POVS_PACKET_HDR_INFO hdrInfo,
                                   UINT32 MSS,
-                                  UINT32 headRoom);
+                                  UINT32 headRoom,
+                                  BOOLEAN isIpFragment);
+
+PNET_BUFFER_LIST OvsFragmentNBL(PVOID context,
+                                PNET_BUFFER_LIST nbl,
+                                POVS_PACKET_HDR_INFO hdrInfo,
+                                UINT32 MSS,
+                                UINT32 headRoom,
+                                BOOLEAN isIpFragment);
 
 PNET_BUFFER_LIST OvsAllocateNBLFromBuffer(PVOID context,
                                           PVOID buffer,

@@ -451,14 +451,12 @@ free_dpdk_buf(struct dp_packet *p)
 }
 
 static void
-ovs_rte_pktmbuf_init(struct rte_mempool *mp,
+ovs_rte_pktmbuf_init(struct rte_mempool *mp OVS_UNUSED,
                      void *opaque_arg OVS_UNUSED,
                      void *_p,
                      unsigned i OVS_UNUSED)
 {
     struct rte_mbuf *pkt = _p;
-
-    rte_pktmbuf_init(mp, opaque_arg, _p, i);
 
     dp_packet_init_dpdk((struct dp_packet *) pkt, pkt->buf_len);
 }
@@ -466,7 +464,6 @@ ovs_rte_pktmbuf_init(struct rte_mempool *mp,
 static struct dpdk_mp *
 dpdk_mp_create(int socket_id, int mtu)
 {
-    struct rte_pktmbuf_pool_private mbp_priv;
     struct dpdk_mp *dmp;
     unsigned mp_size;
     char *mp_name;
@@ -478,9 +475,6 @@ dpdk_mp_create(int socket_id, int mtu)
     dmp->socket_id = socket_id;
     dmp->mtu = mtu;
     dmp->refcount = 1;
-    mbp_priv.mbuf_data_room_size = MBUF_SIZE(mtu) - sizeof(struct dp_packet);
-    mbp_priv.mbuf_priv_size = sizeof(struct dp_packet)
-                              - sizeof(struct rte_mbuf);
     /* XXX: this is a really rough method of provisioning memory.
      * It's impossible to determine what the exact memory requirements are
      * when the number of ports and rxqs that utilize a particular mempool can
@@ -496,18 +490,24 @@ dpdk_mp_create(int socket_id, int mtu)
         mp_name = xasprintf("ovs_mp_%d_%d_%u", dmp->mtu, dmp->socket_id,
                             mp_size);
 
-        dmp->mp = rte_mempool_create(mp_name, mp_size, MBUF_SIZE(mtu),
-                                     MP_CACHE_SZ,
-                                     sizeof(struct rte_pktmbuf_pool_private),
-                                     rte_pktmbuf_pool_init, &mbp_priv,
-                                     ovs_rte_pktmbuf_init, NULL,
-                                     socket_id, 0);
+        dmp->mp = rte_pktmbuf_pool_create(mp_name, mp_size,
+                                          MP_CACHE_SZ,
+                                          sizeof (struct dp_packet)
+                                                 - sizeof (struct rte_mbuf),
+                                          MBUF_SIZE(mtu)
+                                                 - sizeof(struct dp_packet),
+                                          socket_id);
         if (dmp->mp) {
             VLOG_DBG("Allocated \"%s\" mempool with %u mbufs",
                      mp_name, mp_size);
         }
         free(mp_name);
         if (dmp->mp) {
+            /* rte_pktmbuf_pool_create has done some initialization of the
+             * rte_mbuf part of each dp_packet, while ovs_rte_pktmbuf_init
+             * initializes some OVS specific fields of dp_packet.
+             */
+            rte_mempool_obj_iter(dmp->mp, ovs_rte_pktmbuf_init, NULL);
             return dmp;
         }
     } while (rte_errno == ENOMEM && (mp_size /= 2) >= MIN_NB_MBUF);
@@ -530,7 +530,9 @@ dpdk_mp_get(int socket_id, int mtu)
     }
 
     dmp = dpdk_mp_create(socket_id, mtu);
-    ovs_list_push_back(&dpdk_mp_list, &dmp->list_node);
+    if (dmp) {
+        ovs_list_push_back(&dpdk_mp_list, &dmp->list_node);
+    }
 
 out:
     ovs_mutex_unlock(&dpdk_mp_mutex);
@@ -569,10 +571,11 @@ netdev_dpdk_mempool_configure(struct netdev_dpdk *dev)
 
     mp = dpdk_mp_get(dev->requested_socket_id, FRAME_LEN_TO_MTU(buf_size));
     if (!mp) {
-        VLOG_ERR("Insufficient memory to create memory pool for netdev "
-                 "%s, with MTU %d on socket %d\n",
-                 dev->up.name, dev->requested_mtu, dev->requested_socket_id);
-        return ENOMEM;
+        VLOG_ERR("Failed to create memory pool for netdev "
+                 "%s, with MTU %d on socket %d: %s\n",
+                 dev->up.name, dev->requested_mtu, dev->requested_socket_id,
+                 rte_strerror(rte_errno));
+        return rte_errno;
     } else {
         dpdk_mp_put(dev->dpdk_mp);
         dev->dpdk_mp = mp;
@@ -2067,8 +2070,7 @@ out:
     stats->tx_packets = rte_stats.opackets;
     stats->rx_bytes = rte_stats.ibytes;
     stats->tx_bytes = rte_stats.obytes;
-    /* DPDK counts imissed as errors, but count them here as dropped instead */
-    stats->rx_errors = rte_stats.ierrors - rte_stats.imissed;
+    stats->rx_errors = rte_stats.ierrors;
     stats->tx_errors = rte_stats.oerrors;
 
     rte_spinlock_lock(&dev->stats_lock);
@@ -2770,8 +2772,7 @@ netdev_dpdk_vhost_class_init(void)
         rte_vhost_driver_callback_register(&virtio_net_device_ops);
         rte_vhost_feature_disable(1ULL << VIRTIO_NET_F_HOST_TSO4
                                   | 1ULL << VIRTIO_NET_F_HOST_TSO6
-                                  | 1ULL << VIRTIO_NET_F_CSUM
-                                  | 1ULL << VIRTIO_RING_F_INDIRECT_DESC);
+                                  | 1ULL << VIRTIO_NET_F_CSUM);
         ovs_thread_create("vhost_thread", start_vhost_loop, NULL);
 
         ovsthread_once_done(&once);
@@ -3132,7 +3133,10 @@ netdev_dpdk_reconfigure(struct netdev *netdev)
 
     if (dev->mtu != dev->requested_mtu
         || dev->socket_id != dev->requested_socket_id) {
-        netdev_dpdk_mempool_configure(dev);
+        err = netdev_dpdk_mempool_configure(dev);
+        if (err) {
+            goto out;
+        }
     }
 
     netdev->n_txq = dev->requested_n_txq;
@@ -3161,6 +3165,7 @@ dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
 {
     dev->up.n_txq = dev->requested_n_txq;
     dev->up.n_rxq = dev->requested_n_rxq;
+    int err;
 
     /* Enable TX queue 0 by default if it wasn't disabled. */
     if (dev->tx_q[0].map == OVS_VHOST_QUEUE_MAP_UNKNOWN) {
@@ -3171,13 +3176,12 @@ dpdk_vhost_reconfigure_helper(struct netdev_dpdk *dev)
 
     if (dev->requested_socket_id != dev->socket_id
         || dev->requested_mtu != dev->mtu) {
-        if (!netdev_dpdk_mempool_configure(dev)) {
+        err = netdev_dpdk_mempool_configure(dev);
+        if (err) {
+            return err;
+        } else {
             netdev_change_seq_changed(&dev->up);
         }
-    }
-
-    if (!dev->dpdk_mp) {
-        return ENOMEM;
     }
 
     if (netdev_dpdk_get_vid(dev) >= 0) {

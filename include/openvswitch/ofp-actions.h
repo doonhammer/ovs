@@ -26,6 +26,8 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/types.h"
 
+struct vl_mff_map;
+
 /* List of OVS abstracted actions.
  *
  * This macro is used directly only internally by this header, but the list is
@@ -66,7 +68,7 @@
     OFPACT(SET_VLAN_VID,    ofpact_vlan_vid,    ofpact, "set_vlan_vid") \
     OFPACT(SET_VLAN_PCP,    ofpact_vlan_pcp,    ofpact, "set_vlan_pcp") \
     OFPACT(STRIP_VLAN,      ofpact_null,        ofpact, "strip_vlan")   \
-    OFPACT(PUSH_VLAN,       ofpact_null,        ofpact, "push_vlan")    \
+    OFPACT(PUSH_VLAN,       ofpact_push_vlan,   ofpact, "push_vlan")    \
     OFPACT(SET_ETH_SRC,     ofpact_mac,         ofpact, "mod_dl_src")   \
     OFPACT(SET_ETH_DST,     ofpact_mac,         ofpact, "mod_dl_dst")   \
     OFPACT(SET_IPV4_SRC,    ofpact_ipv4,        ofpact, "mod_nw_src")   \
@@ -388,6 +390,14 @@ struct ofpact_vlan_pcp {
     bool flow_has_vlan;         /* VLAN present at action validation time? */
 };
 
+/* OFPACT_PUSH_VLAN.
+ *
+ * Used for OFPAT11_PUSH_VLAN. */
+struct ofpact_push_vlan {
+    struct ofpact ofpact;
+    ovs_be16 ethertype;
+};
+
 /* OFPACT_SET_ETH_SRC, OFPACT_SET_ETH_DST.
  *
  * Used for OFPAT10_SET_DL_SRC, OFPAT10_SET_DL_DST. */
@@ -532,6 +542,7 @@ struct ofpact_metadata {
 struct ofpact_meter {
     struct ofpact ofpact;
     uint32_t meter_id;
+    uint32_t provider_meter_id;
 };
 
 /* OFPACT_WRITE_ACTIONS, OFPACT_CLONE.
@@ -554,9 +565,14 @@ ofpact_nest_get_action_len(const struct ofpact_nest *on)
 /* Bits for 'flags' in struct nx_action_conntrack.
  *
  * If NX_CT_F_COMMIT is set, then the connection entry is moved from the
- * unconfirmed to confirmed list in the tracker. */
+ * unconfirmed to confirmed list in the tracker.
+ * If NX_CT_F_FORCE is set, in addition to NX_CT_F_COMMIT, then the conntrack
+ * entry is replaced with a new one in case the original direction of the
+ * existing entry is opposite of the current packet direction.
+ */
 enum nx_conntrack_flags {
     NX_CT_F_COMMIT = 1 << 0,
+    NX_CT_F_FORCE  = 1 << 1,
 };
 
 /* Magic value for struct nx_action_conntrack 'recirc_table' field, to specify
@@ -638,17 +654,23 @@ struct ofpact_nat {
 
 /* OFPACT_RESUBMIT.
  *
- * Used for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE. */
+ * Used for NXAST_RESUBMIT, NXAST_RESUBMIT_TABLE, NXAST_RESUBMIT_TABLE_CT. */
 struct ofpact_resubmit {
     struct ofpact ofpact;
     ofp_port_t in_port;
     uint8_t table_id;
+    bool with_ct_orig;   /* Resubmit with Conntrack original direction tuple
+                          * fields in place of IP header fields. */
 };
 
 /* Bits for 'flags' in struct nx_action_learn.
  *
  * If NX_LEARN_F_SEND_FLOW_REM is set, then the learned flows will have their
  * OFPFF_SEND_FLOW_REM flag set.
+ *
+ * If NX_LEARN_F_WRITE_RESULT is set, then the actions will write whether the
+ * learn operation succeded on a bit.  If the learn is successful the bit will
+ * be set, otherwise (e.g. if the limit is hit) the bit will be unset.
  *
  * If NX_LEARN_F_DELETE_LEARNED is set, then removing this action will delete
  * all the flows from the learn action's 'table_id' that have the learn
@@ -675,6 +697,7 @@ struct ofpact_resubmit {
 enum nx_learn_flags {
     NX_LEARN_F_SEND_FLOW_REM = 1 << 0,
     NX_LEARN_F_DELETE_LEARNED = 1 << 1,
+    NX_LEARN_F_WRITE_RESULT = 1 << 2,
 };
 
 #define NX_LEARN_N_BITS_MASK    0x3ff
@@ -738,6 +761,13 @@ struct ofpact_learn {
         ovs_be64 cookie;           /* Cookie for new flow. */
         uint16_t fin_idle_timeout; /* Idle timeout after FIN, if nonzero. */
         uint16_t fin_hard_timeout; /* Hard timeout after FIN, if nonzero. */
+        /* If the number of flows on 'table_id' with 'cookie' exceeds this,
+         * the action will not add a new flow. 0 indicates unlimited. */
+        uint32_t limit;
+        /* Used only if 'flags' has NX_LEARN_F_WRITE_RESULT.  If the execution
+         * failed to install a new flow because 'limit' is exceeded,
+         * result_dst will be set to 0, otherwise to 1. */
+        struct mf_subfield result_dst;
     );
 
     struct ofpact_learn_spec specs[];
@@ -944,19 +974,21 @@ enum ofperr ofpacts_pull_openflow_actions(struct ofpbuf *openflow,
                                           unsigned int actions_len,
                                           enum ofp_version version,
                                           const struct vl_mff_map *,
+                                          uint64_t *ofpacts_tlv_bitmap,
                                           struct ofpbuf *ofpacts);
 enum ofperr
 ofpacts_pull_openflow_instructions(struct ofpbuf *openflow,
                                    unsigned int instructions_len,
                                    enum ofp_version version,
                                    const struct vl_mff_map *vl_mff_map,
+                                   uint64_t *ofpacts_tlv_bitmap,
                                    struct ofpbuf *ofpacts);
 enum ofperr ofpacts_check(struct ofpact[], size_t ofpacts_len,
-                          struct flow *, ofp_port_t max_ports,
+                          struct match *, ofp_port_t max_ports,
                           uint8_t table_id, uint8_t n_tables,
                           enum ofputil_protocol *usable_protocols);
 enum ofperr ofpacts_check_consistency(struct ofpact[], size_t ofpacts_len,
-                                      struct flow *, ofp_port_t max_ports,
+                                      struct match *, ofp_port_t max_ports,
                                       uint8_t table_id, uint8_t n_tables,
                                       enum ofputil_protocol usable_protocols);
 enum ofperr ofpact_check_output_port(ofp_port_t port, ofp_port_t max_ports);
