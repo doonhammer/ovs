@@ -113,7 +113,7 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    11, "ls_in_arp_rsp")       \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  12, "ls_in_dhcp_options")  \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 13, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,      14, "ls_in_dns_lookup") \
+    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    14, "ls_in_dns_lookup") \
     PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  15, "ls_in_dns_response") \
     PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       16, "ls_in_l2_lkup")       \
                                                                       \
@@ -3076,7 +3076,6 @@ cmp_port_pair_groups(const void *ppg1_, const void *ppg2_)
     const struct nbrec_logical_port_pair_group *ppg1 = *ppg1p;
     const struct nbrec_logical_port_pair_group *ppg2 = *ppg2p;
 
-
     return ( (int)ppg1->sortkey - (int)ppg2->sortkey);
 }
 
@@ -3410,6 +3409,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     free(port_pair_groups);
     }
 }
+
 static void
 build_qos(struct ovn_datapath *od, struct hmap *lflows) {
     ovn_lflow_add(lflows, od, S_SWITCH_IN_QOS_MARK, 0, "1", "next;");
@@ -3895,7 +3895,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 0, "1", "next;");
     }
-
 
     /* Ingress table 15: Destination lookup, broadcast and multicast handling
      * (priority 100). */
