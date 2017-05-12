@@ -106,27 +106,26 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         4, "ls_in_pre_lb")        \
     PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   5, "ls_in_pre_stateful")  \
     PIPELINE_STAGE(SWITCH, IN,  ACL,            6, "ls_in_acl")           \
-    PIPELINE_STAGE(SWITCH, IN,  CHAIN,          7, "ls_in_chain")        \
+    PIPELINE_STAGE(SWITCH, IN,  CHAIN,          7, "ls_in_chain")         \
     PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       8, "ls_in_qos_mark")      \
     PIPELINE_STAGE(SWITCH, IN,  LB,             9, "ls_in_lb")            \
-    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       10, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       10, "ls_in_stateful")     \
     PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    11, "ls_in_arp_rsp")       \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  12, "ls_in_dhcp_options")  \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 13, "ls_in_dhcp_response") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_LOOKUP,    14, "ls_in_dns_lookup") \
-    PIPELINE_STAGE(SWITCH, IN,  DNS_RESPONSE,  15, "ls_in_dns_response") \
-    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       16, "ls_in_l2_lkup")       \
-                                                                      \
-    /* Logical switch egress stages. */                               \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       0, "ls_out_pre_lb")     \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,      1, "ls_out_pre_acl")     \
-    PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL, 2, "ls_out_pre_stateful")  \
-    PIPELINE_STAGE(SWITCH, OUT, LB,           3, "ls_out_lb")            \
-    PIPELINE_STAGE(SWITCH, OUT, ACL,          4, "ls_out_acl")            \
-    PIPELINE_STAGE(SWITCH, OUT, QOS_MARK,     5, "ls_out_qos_mark")       \
-    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     6, "ls_out_stateful")       \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  7, "ls_out_port_sec_ip")    \
-    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  8, "ls_out_port_sec_l2")    \
+    PIPELINE_STAGE(SWITCH, IN,  L2_LKUP,       14, "ls_in_l2_lkup")       \
+                                                                          \
+    /* Logical switch egress stages. */                                   \
+    PIPELINE_STAGE(SWITCH, OUT, CHAIN,        0, "ls_out_chain")          \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_LB,       1, "ls_out_pre_lb")         \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_ACL,      2, "ls_out_pre_acl")        \
+    PIPELINE_STAGE(SWITCH, OUT, PRE_STATEFUL, 3, "ls_out_pre_stateful")   \
+    PIPELINE_STAGE(SWITCH, OUT, LB,           4, "ls_out_lb")             \
+    PIPELINE_STAGE(SWITCH, OUT, ACL,          5, "ls_out_acl")            \
+    PIPELINE_STAGE(SWITCH, OUT, QOS_MARK,     6, "ls_out_qos_mark")       \
+    PIPELINE_STAGE(SWITCH, OUT, STATEFUL,     7, "ls_out_stateful")       \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_IP,  8, "ls_out_port_sec_ip")    \
+    PIPELINE_STAGE(SWITCH, OUT, PORT_SEC_L2,  9, "ls_out_port_sec_l2")    \
                                                                       \
     /* Logical router ingress stages. */                              \
     PIPELINE_STAGE(ROUTER, IN,  ADMISSION,   0, "lr_in_admission")    \
@@ -163,7 +162,9 @@ enum ovn_stage {
 #define REGBIT_CONNTRACK_COMMIT "reg0[1]"
 #define REGBIT_CONNTRACK_NAT    "reg0[2]"
 #define REGBIT_DHCP_OPTS_RESULT "reg0[3]"
+#ifdef INCLUDE_DNS
 #define REGBIT_DNS_LOOKUP_RESULT "reg0[4]"
+#endif
 
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
@@ -2695,7 +2696,7 @@ ip_address_and_port_from_lb_key(const char *key, char **ip_address,
     *ip_address = strdup(ip_str);
     free(start);
 }
-
+#ifdef INCLUDE_DNS
 /*
  * Returns true if logical switch is configured with DNS records, false
  * otherwise.
@@ -2711,6 +2712,7 @@ ls_has_dns_records(const struct nbrec_logical_switch *nbs)
 
     return false;
 }
+#endif
 
 static void
 build_pre_lb(struct ovn_datapath *od, struct hmap *lflows)
@@ -3056,7 +3058,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
             }
         }
     }
-
+#ifdef INCLUDE_DNS
     /* Add a 34000 priority flow to advance the DNS reply from ovn-controller,
      * if the CMS has configured DNS records for the datapath.
      */
@@ -3066,6 +3068,7 @@ build_acls(struct ovn_datapath *od, struct hmap *lflows)
             lflows, od, S_SWITCH_OUT_ACL, 34000, "udp.src == 53",
             actions);
     }
+#endif
 }
 
 static int
@@ -3120,6 +3123,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
      * (priority 0)
      */
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, 0, "1", "next;");
+    ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHAIN, 0, "1", "next;");
 
     /* No port chains defined therefore, no further work to do here. */
     if (!od->nbs->port_chain_classifiers) {
@@ -3624,7 +3628,6 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
     /* Ingress table 11: ARP/ND responder, skip requests coming from localnet
      * ports. (priority 100). */
-
     HMAP_FOR_EACH (op, key_node, ports) {
         if (!op->nbsp) {
             continue;
@@ -3845,7 +3848,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
             }
         }
     }
-
+#ifdef INCLUDE_DNS
     /* Logical switch ingress table 13 and 14: DNS lookup and response
      * priority 100 flows.
      */
@@ -3879,7 +3882,7 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         ds_destroy(&match);
         ds_destroy(&action);
     }
-
+#endif
     /* Ingress table 11 and 12: DHCP options and response, by default goto next.
      * (priority 0).
      * Ingress table 13 and 14: DNS lookup and response, by default goto next.
@@ -3892,8 +3895,10 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
 
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_OPTIONS, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DHCP_RESPONSE, 0, "1", "next;");
+#ifdef INCLUDE_DNS
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_LOOKUP, 0, "1", "next;");
         ovn_lflow_add(lflows, od, S_SWITCH_IN_DNS_RESPONSE, 0, "1", "next;");
+#endif
     }
 
     /* Ingress table 15: Destination lookup, broadcast and multicast handling
@@ -5843,7 +5848,7 @@ sync_address_sets(struct northd_context *ctx)
     }
     shash_destroy(&sb_address_sets);
 }
-
+#ifdef INCLUDE_DNS
 /*
  * struct 'dns_info' is used to sync the DNS records between OVN Northbound db
  * and Southbound db.
@@ -5944,7 +5949,7 @@ sync_dns_entries(struct northd_context *ctx, struct hmap *datapaths)
     }
     hmap_destroy(&dns_map);
 }
-
+#endif
 
 static void
 ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
@@ -5959,8 +5964,9 @@ ovnnb_db_run(struct northd_context *ctx, struct ovsdb_idl_loop *sb_loop)
     build_lflows(ctx, &datapaths, &ports);
 
     sync_address_sets(ctx);
+#ifdef INCLUDE_DNS
     sync_dns_entries(ctx, &datapaths);
-
+#endif
     struct ovn_datapath *dp, *next_dp;
     HMAP_FOR_EACH_SAFE (dp, next_dp, key_node, &datapaths) {
         ovn_datapath_destroy(&datapaths, dp);
