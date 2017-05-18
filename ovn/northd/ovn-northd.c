@@ -106,10 +106,10 @@ enum ovn_stage {
     PIPELINE_STAGE(SWITCH, IN,  PRE_LB,         4, "ls_in_pre_lb")        \
     PIPELINE_STAGE(SWITCH, IN,  PRE_STATEFUL,   5, "ls_in_pre_stateful")  \
     PIPELINE_STAGE(SWITCH, IN,  ACL,            6, "ls_in_acl")           \
-    PIPELINE_STAGE(SWITCH, IN,  CHAIN,          7, "ls_in_chain")        \
-    PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       8, "ls_in_qos_mark")      \
-    PIPELINE_STAGE(SWITCH, IN,  LB,             9, "ls_in_lb")            \
-    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       10, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  QOS_MARK,       7, "ls_in_qos_mark")      \
+    PIPELINE_STAGE(SWITCH, IN,  LB,             8, "ls_in_lb")            \
+    PIPELINE_STAGE(SWITCH, IN,  STATEFUL,       9, "ls_in_stateful")      \
+    PIPELINE_STAGE(SWITCH, IN,  CHAIN,         10, "ls_in_chain")        \
     PIPELINE_STAGE(SWITCH, IN,  ARP_ND_RSP,    11, "ls_in_arp_rsp")       \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_OPTIONS,  12, "ls_in_dhcp_options")  \
     PIPELINE_STAGE(SWITCH, IN,  DHCP_RESPONSE, 13, "ls_in_dhcp_response") \
