@@ -2492,26 +2492,6 @@ nbctl_acl_add(struct ctl_context *ctx)
         return;
     }
 
-    /* Validate ACL Options, if there were any provided. */
-    struct smap acl_options = SMAP_INITIALIZER(&acl_options);
-    if (ctx->argc >= 7) {
-        struct sset acl_options_set;
-        sset_from_delimited_string(&acl_options_set, ctx->argv[6], " ");
-
-        const char *acl_option_tuple;
-        SSET_FOR_EACH (acl_option_tuple, &acl_options_set) {
-            char *key, *value;
-            value = xstrdup(acl_option_tuple);
-            key = strsep(&value, "=");
-            if (value) {
-                smap_add(&acl_options, key, value);
-            }
-            free(key);
-        }
-
-        sset_destroy(&acl_options_set);
-    }
-
     /* Create the acl. */
     struct nbrec_acl *acl = nbrec_acl_insert(ctx->txn);
     nbrec_acl_set_priority(acl, priority);
@@ -2541,8 +2521,6 @@ nbctl_acl_add(struct ctl_context *ctx)
     new_acls[ls->n_acls] = acl;
     nbrec_logical_switch_set_acls(ls, new_acls, ls->n_acls + 1);
     free(new_acls);
-
-    smap_destroy(&acl_options);
 }
 
 static void
@@ -4506,8 +4484,6 @@ static const struct ctl_command_syntax nbctl_commands[] = {
     { "init", 0, 0, "", NULL, nbctl_init, NULL, "", RW },
     { "sync", 0, 0, "", nbctl_pre_sync, nbctl_sync, NULL, "", RO },
     { "show", 0, 1, "[SWITCH]", NULL, nbctl_show, NULL, "", RO },
-
-
 
     /* logical switch commands. */
     { "ls-add", 0, 1, "[SWITCH]", NULL, nbctl_ls_add, NULL,
