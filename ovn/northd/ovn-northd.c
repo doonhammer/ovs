@@ -3037,7 +3037,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     ds_destroy(&ds_action);
 }
 
-static void.
+static void
 build_qos(struct ovn_datapath *od, struct hmap *lflows) {
     ovn_lflow_add(lflows, od, S_SWITCH_IN_QOS_MARK, 0, "1", "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_OUT_QOS_MARK, 0, "1", "next;");
