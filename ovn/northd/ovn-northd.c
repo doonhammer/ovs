@@ -168,7 +168,7 @@ enum ovn_stage {
 /*
 * Register to store input port for port chain
 */
-#define REGBIT_CHAIN_INPUT_PORT "reg8[0]"
+//#define REGBIT_CHAIN_INPUT_PORT "reg8[0]"
 /* Register definitions for switches and routers. */
 #define REGBIT_NAT_REDIRECT     "reg9[0]"
 /* Indicate that this packet has been recirculated using egress
@@ -3116,6 +3116,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
     char *lcc_match = NULL;
     char *lcc_action = NULL;
     struct ovn_port *traffic_port;
+    struct ovn_port *input_port;
     unsigned int chain_direction = 2;
     unsigned int chain_path = 2;
     char * chain_match = NULL;
@@ -3248,9 +3249,10 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
             "eth.dst == "ETH_ADDR_FMT,
              ETH_ADDR_ARGS(traffic_logical_port_ea));
         }
-           lcc_action = xasprintf("outport = %s; output;",
+           lcc_action = xasprintf(" outport = %s; output;",
                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
     }
+    //VLOG_INFO("Inport port: %s", REGBIT_CHAIN_INPUT_PORT);
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_outer_priority,
                        lcc_match, lcc_action);
     free(lcc_match);
@@ -3274,15 +3276,33 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
              //lcc_action = xasprintf("flags.loopback = 1; "
              //    REGBIT_CHAIN_LOOPBACK" = 1;"
              //   "next(pipeline=ingress, table=0);");
+     
+     /*
+     input_port =  ovn_port_find(ports,REGBIT_CHAIN_INPUT_PORT);
+        if (input_port == NULL) {
+            static struct vlog_rate_limit rl =
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                        "Traffic port %s does not exist\n",
+                              REGBIT_CHAIN_INPUT_PORT);
+            break;
+        } else {
+            VLOG_INFO("Input Port: %s", input_port->json_key);
+        }
+    */
     struct ds actions = DS_EMPTY_INITIALIZER;
-    ds_put_format(&actions, "clone { ct_clear; "
-                              "inport = outport; outport = \"\"; "
-                              "flags = 0; flags.loopback = 1; ");
-    for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
-            ds_put_format(&actions, "reg%d = 0; ", ii);
-    }
-    ds_put_format(&actions, "next(pipeline=ingress, table=%d); };",
-                            ovn_stage_get_table(S_SWITCH_IN_CHAIN) + 1);
+    //ds_put_format(&actions, "clone { ct_clear; "
+    //                          "outport = inport; "
+    //                          "flags = 0; ");
+    //ds_put_format(&actions, "ct_clear; "
+    //                          "outport = inport; "
+    //                          "flags = 0; ");
+    //for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
+    //        ds_put_format(&actions, "reg%d = 0; ", ii);
+    //}
+    //ds_put_format(&actions, "next(pipeline=ingress, table=%d);",
+    //                        ovn_stage_get_table(S_SWITCH_IN_CHAIN) + 1);
+    ds_put_format(&actions, "next;");
     ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, ingress_inner_priority,
                         lcc_match, ds_cstr(&actions));
     free(lcc_match);
@@ -3330,7 +3350,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                  lcc_match =  xasprintf("eth.dst == "ETH_ADDR_FMT,
                                     ETH_ADDR_ARGS(traffic_logical_port_ea));
             }
-            lcc_action = xasprintf(REGBIT_CHAIN_INPUT_PORT" = inport; outport = %s; output;",
+            lcc_action = xasprintf("outport = %s; output;",
                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
         } else { /* Path from destination port. */
            if (strcmp(chain_match,"")!=0) {
@@ -3340,9 +3360,10 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                 lcc_match =  xasprintf("eth.src == "ETH_ADDR_FMT,
                         ETH_ADDR_ARGS(traffic_logical_port_ea));
             }
-            lcc_action = xasprintf(REGBIT_CHAIN_INPUT_PORT" = inport; outport = %s;  output;",
+            lcc_action = xasprintf("outport = %s;  output;",
                     input_port_array[0]->json_key);
         }
+        //VLOG_INFO("Inport port: %s", REGBIT_CHAIN_INPUT_PORT);
         ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN, egress_outer_priority,
                        lcc_match, lcc_action);
         free(lcc_match);
@@ -3364,16 +3385,33 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                     output_port_array[lpc->n_port_pair_groups-1]->json_key);
         }
         struct ds actions = DS_EMPTY_INITIALIZER;
+        
+        /*
+        input_port =  ovn_port_find(ports,REGBIT_CHAIN_INPUT_PORT);
+        if (input_port == NULL) {
+            static struct vlog_rate_limit rl =
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                        "Traffic port %s does not exist\n",
+                              REGBIT_CHAIN_INPUT_PORT);
+            break;
+        } else {
+            VLOG_INFO("Input Port: %s", input_port->json_key);
+        }
+        */
+        /*
         ds_put_format(&actions,
-                              "clone { ct_clear; "
-                              "outport = "REGBIT_CHAIN_INPUT_PORT
-                              "; flags = 0; ");
+                              "ct_clear; "
+                              "outport = inport; "
+                              "flags = 0; ");
         for (int ii = 0; ii < MFF_N_LOG_REGS; ii++) {
                     ds_put_format(&actions, "reg%d = 0; ", ii);
         }
-        ds_put_format(&actions, "next(pipeline=ingress, table=%d); };",
+        ds_put_format(&actions, "next(pipeline=ingress, table=%d);",
                               ovn_stage_get_table(S_SWITCH_IN_CHAIN) + 1);
-        ovn_lflow_add(lflows, od, S_SWITCH_OUT_CHAIN,
+        */
+        ds_put_format(&actions, "next;");
+        ovn_lflow_add(lflows, od, S_SWITCH_IN_CHAIN,
                         egress_inner_priority, lcc_match, ds_cstr(&actions));
         ds_destroy(&actions);
         free(lcc_match);
