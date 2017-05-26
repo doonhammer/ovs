@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -118,6 +118,7 @@ BUILD_ASSERT_DECL((MAX_NB_MBUF / ROUND_DOWN_POW2(MAX_NB_MBUF/MIN_NB_MBUF))
 #define XSTAT_TX_1024_TO_1522_PACKETS    "tx_size_1024_to_1522_packets"
 #define XSTAT_TX_1523_TO_MAX_PACKETS     "tx_size_1523_to_max_packets"
 
+#define XSTAT_RX_MULTICAST_PACKETS       "rx_multicast_packets"
 #define XSTAT_TX_MULTICAST_PACKETS       "tx_multicast_packets"
 #define XSTAT_RX_BROADCAST_PACKETS       "rx_broadcast_packets"
 #define XSTAT_TX_BROADCAST_PACKETS       "tx_broadcast_packets"
@@ -1125,7 +1126,8 @@ netdev_dpdk_process_devargs(const char *devargs, char **errp)
             VLOG_INFO("Device '%s' attached to DPDK", devargs);
         } else {
             /* Attach unsuccessful */
-            VLOG_WARN_BUF(errp, "Error attaching device '%s' to DPDK", devargs);
+            VLOG_WARN_BUF(errp, "Error attaching device '%s' to DPDK",
+                          devargs);
             return -1;
         }
     }
@@ -1997,6 +1999,8 @@ netdev_dpdk_convert_xstats(struct netdev_stats *stats,
             stats->tx_1024_to_1522_packets = xstats[i].value;
         } else if (strcmp(XSTAT_TX_1523_TO_MAX_PACKETS, names[i].name) == 0) {
             stats->tx_1523_to_max_packets = xstats[i].value;
+        } else if (strcmp(XSTAT_RX_MULTICAST_PACKETS, names[i].name) == 0) {
+            stats->multicast = xstats[i].value;
         } else if (strcmp(XSTAT_TX_MULTICAST_PACKETS, names[i].name) == 0) {
             stats->tx_multicast_packets = xstats[i].value;
         } else if (strcmp(XSTAT_RX_BROADCAST_PACKETS, names[i].name) == 0) {
@@ -2213,10 +2217,12 @@ static int
 netdev_dpdk_get_ifindex(const struct netdev *netdev)
 {
     struct netdev_dpdk *dev = netdev_dpdk_cast(netdev);
-    int ifindex;
 
     ovs_mutex_lock(&dev->mutex);
-    ifindex = dev->port_id;
+    /* Calculate hash from the netdev name. Ensure that ifindex is a 24-bit
+     * postive integer to meet RFC 2863 recommendations.
+     */
+    int ifindex = hash_string(netdev->name, 0) % 0xfffffe + 1;
     ovs_mutex_unlock(&dev->mutex);
 
     return ifindex;
@@ -3078,7 +3084,8 @@ egress_policer_qos_get(const struct qos_conf *conf, struct smap *details)
 }
 
 static bool
-egress_policer_qos_is_equal(const struct qos_conf *conf, const struct smap *details)
+egress_policer_qos_is_equal(const struct qos_conf *conf,
+                            const struct smap *details)
 {
     struct egress_policer *policer =
         CONTAINER_OF(conf, struct egress_policer, qos_conf);

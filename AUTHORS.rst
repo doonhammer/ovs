@@ -243,6 +243,7 @@ Philippe Jung                   phil.jung@free.fr
 Pim van den Berg                pim@nethuis.nl
 pritesh                         pritesh.kothari@cisco.com
 Pravin B Shelar                 pshelar@nicira.com
+Przemyslaw Szczerbik            przemyslawx.szczerbik@intel.com
 Quentin Monnet                  quentin.monnet@6wind.com
 Raju Subramanian                rsubramanian@nicira.com
 Rami Rosen                      ramirose@gmail.com
@@ -530,6 +531,7 @@ Teemu Koponen                   koponen@nicira.com
 Thomas Morin                    thomas.morin@orange.com
 Timothy Chen                    tchen@nicira.com
 Torbjorn Tornkvist              kruskakli@gmail.com
+Tulio Ribeiro                   tribeiro@lasige.di.fc.ul.pt
 Tytus Kurek                     Tytus.Kurek@pega.com
 Valentin Bud                    valentin@hackaserver.com
 Vasiliy Tolstov                 v.tolstov@selfip.ru

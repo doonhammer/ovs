@@ -2032,21 +2032,27 @@ OvsDoExecuteActions(POVS_SWITCH_CONTEXT switchContext,
                 if (status != NDIS_STATUS_PENDING) {
                     OVS_LOG_ERROR("CT Action failed");
                     dropReason = L"OVS-conntrack action failed";
+                } else {
+                    /* We added a new pending NBL to be consumed later.
+                     * Report to the userspace that the action applied
+                     * successfully */
+                    status = NDIS_STATUS_SUCCESS;
                 }
                 goto dropit;
             } else if (oldNbl != ovsFwdCtx.curNbl) {
-               /*
-                * OvsIpv4Reassemble consumes the original NBL and creates a
-                * new one and assigns it to the curNbl of ovsFwdCtx.
-                */
-               OvsInitForwardingCtx(&ovsFwdCtx,
-                                    ovsFwdCtx.switchContext,
-                                    ovsFwdCtx.curNbl,
-                                    ovsFwdCtx.srcVportNo,
-                                    ovsFwdCtx.sendFlags,
-                                    NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(ovsFwdCtx.curNbl),
-                                    ovsFwdCtx.completionList,
-                                    &ovsFwdCtx.layers, FALSE);
+                /*
+                 * OvsIpv4Reassemble consumes the original NBL and creates a
+                 * new one and assigns it to the curNbl of ovsFwdCtx.
+                 */
+                OvsInitForwardingCtx(&ovsFwdCtx,
+                                     ovsFwdCtx.switchContext,
+                                     ovsFwdCtx.curNbl,
+                                     ovsFwdCtx.srcVportNo,
+                                     ovsFwdCtx.sendFlags,
+                                     NET_BUFFER_LIST_SWITCH_FORWARDING_DETAIL(ovsFwdCtx.curNbl),
+                                     ovsFwdCtx.completionList,
+                                     &ovsFwdCtx.layers, FALSE);
+                key->ipKey.nwFrag = OVS_FRAG_TYPE_NONE;
             }
             break;
         }
