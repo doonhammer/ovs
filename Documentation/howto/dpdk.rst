@@ -262,7 +262,7 @@ vHost ports:
    and CRC lengths (i.e. 18B) from the max supported frame size.  So, to set
    the MTU for a 9018B Jumbo Frame::
 
-       $ ifconfig eth1 mtu 9000
+       $ ip link set eth1 mtu 9000
 
 When Jumbo Frames are enabled, the size of a DPDK port's mbuf segments are
 increased, such that a full Jumbo Frame of a specific size may be accommodated
@@ -342,10 +342,9 @@ Then it can be attached to OVS::
     $ ovs-vsctl add-port br0 dpdkx -- set Interface dpdkx type=dpdk \
         options:dpdk-devargs=0000:01:00.0
 
-It is also possible to detach a port from ovs, the user has to remove the
-port using the del-port command, then it can be detached using::
+Detaching will be performed while processing del-port command::
 
-    $ ovs-appctl netdev-dpdk/detach 0000:01:00.0
+    $ ovs-vsctl del-port dpdkx
 
 This feature is not supported with VFIO and does not work with some NICs.
 For more information please refer to the `DPDK Port Hotplug Framework
@@ -565,8 +564,10 @@ testcase and packet forwarding using DPDK testpmd application in the Guest VM.
 For users wishing to do packet forwarding using kernel stack below, you need to
 run the below commands on the guest::
 
-    $ ifconfig eth1 1.1.1.2/24
-    $ ifconfig eth2 1.1.2.2/24
+    $ ip addr add 1.1.1.2/24 dev eth1
+    $ ip addr add 1.1.2.2/24 dev eth2
+    $ ip link set eth1 up
+    $ ip link set eth2 up
     $ systemctl stop firewalld.service
     $ systemctl stop iptables.service
     $ sysctl -w net.ipv4.ip_forward=1
@@ -656,8 +657,10 @@ devices to bridge ``br0``. Once complete, follow the below steps:
 
    Configure IP and enable interfaces::
 
-       $ ifconfig eth0 5.5.5.1/24 up
-       $ ifconfig eth1 90.90.90.1/24 up
+       $ ip addr add 5.5.5.1/24 dev eth0
+       $ ip addr add 90.90.90.1/24 dev eth1
+       $ ip link set eth0 up
+       $ ip link set eth1 up
 
    Configure IP forwarding and add route entries::
 

@@ -792,17 +792,17 @@ sbctl_dump_openflow(struct vconn *vconn, const struct uuid *uuid, bool stats)
 
             ds_clear(&s);
             if (stats) {
-                ofp_print_flow_stats(&s, fs);
+                ofp_print_flow_stats(&s, fs, NULL);
             } else {
                 ds_put_format(&s, " %stable=%s%"PRIu8" ",
                               colors.special, colors.end, fs->table_id);
-                match_format(&fs->match, &s, OFP_DEFAULT_PRIORITY);
+                match_format(&fs->match, NULL, &s, OFP_DEFAULT_PRIORITY);
                 if (ds_last(&s) != ' ') {
                     ds_put_char(&s, ' ');
                 }
 
                 ds_put_format(&s, "%sactions=%s", colors.actions, colors.end);
-                ofpacts_format(fs->ofpacts, fs->ofpacts_len, &s);
+                ofpacts_format(fs->ofpacts, fs->ofpacts_len, NULL, &s);
             }
             printf("   %s\n", ds_cstr(&s));
         }
@@ -1344,11 +1344,10 @@ do_sbctl(const char *args, struct ctl_command *commands, size_t n_commands,
 try_again:
     /* Our transaction needs to be rerun, or a prerequisite was not met.  Free
      * resources and return so that the caller can try again. */
-    if (txn) {
-        ovsdb_idl_txn_abort(txn);
-        ovsdb_idl_txn_destroy(txn);
-        the_idl_txn = NULL;
-    }
+    ovsdb_idl_txn_abort(txn);
+    ovsdb_idl_txn_destroy(txn);
+    the_idl_txn = NULL;
+
     ovsdb_symbol_table_destroy(symtab);
     for (c = commands; c < &commands[n_commands]; c++) {
         ds_destroy(&c->output);

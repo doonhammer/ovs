@@ -30,6 +30,7 @@
 
 struct ds;
 struct match;
+struct ofputil_port_map;
 struct ofputil_tlv_table_mod;
 
 /* Open vSwitch fields
@@ -985,7 +986,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: MAC.
      * Maskable: bitwise.
      * Formatting: Ethernet.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: NXM_OF_ETH_SRC(2) since v1.1.
      * OXM: OXM_OF_ETH_SRC(4) since OF1.2 and v1.7.
@@ -1001,7 +1002,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: MAC.
      * Maskable: bitwise.
      * Formatting: Ethernet.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: NXM_OF_ETH_DST(1) since v1.1.
      * OXM: OXM_OF_ETH_DST(3) since OF1.2 and v1.7.
@@ -1020,7 +1021,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: be16.
      * Maskable: no.
      * Formatting: hexadecimal.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read-only.
      * NXM: NXM_OF_ETH_TYPE(3) since v1.1.
      * OXM: OXM_OF_ETH_TYPE(5) since OF1.2 and v1.7.
@@ -1050,7 +1051,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: be16.
      * Maskable: bitwise.
      * Formatting: hexadecimal.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: NXM_OF_VLAN_TCI(4) since v1.1.
      * OXM: none.
@@ -1066,7 +1067,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: be16 (low 12 bits).
      * Maskable: no.
      * Formatting: decimal.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: none.
      * OXM: none.
@@ -1084,7 +1085,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: be16 (low 12 bits).
      * Maskable: bitwise.
      * Formatting: decimal.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: none.
      * OXM: OXM_OF_VLAN_VID(6) since OF1.2 and v1.7.
@@ -1100,7 +1101,7 @@ enum OVS_PACKED_ENUM mf_field_id {
      * Type: u8 (low 3 bits).
      * Maskable: no.
      * Formatting: decimal.
-     * Prerequisites: none.
+     * Prerequisites: Ethernet.
      * Access: read/write.
      * NXM: none.
      * OXM: none.
@@ -1808,6 +1809,7 @@ enum OVS_PACKED_ENUM mf_prereqs {
     MFP_NONE,
 
     /* L2 requirements. */
+    MFP_ETHERNET,
     MFP_ARP,
     MFP_VLAN_VID,
     MFP_IPV4,
@@ -2055,6 +2057,7 @@ void mf_set_flow_value_masked(const struct mf_field *,
                               const union mf_value *mask,
                               struct flow *);
 bool mf_is_tun_metadata(const struct mf_field *);
+bool mf_is_pipeline_field(const struct mf_field *);
 bool mf_is_set(const struct mf_field *, const struct flow *);
 void mf_mask_field(const struct mf_field *, struct flow_wildcards *);
 void mf_mask_field_masked(const struct mf_field *, const union mf_value *mask,
@@ -2100,10 +2103,13 @@ enum ofperr mf_check_dst(const struct mf_subfield *, const struct match *);
 
 /* Parsing and formatting. */
 char *mf_parse(const struct mf_field *, const char *,
+               const struct ofputil_port_map *,
                union mf_value *value, union mf_value *mask);
-char *mf_parse_value(const struct mf_field *, const char *, union mf_value *);
+char *mf_parse_value(const struct mf_field *, const char *,
+                     const struct ofputil_port_map *, union mf_value *);
 void mf_format(const struct mf_field *,
                const union mf_value *value, const union mf_value *mask,
+               const struct ofputil_port_map *,
                struct ds *);
 void mf_format_subvalue(const union mf_subvalue *subvalue, struct ds *s);
 

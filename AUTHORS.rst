@@ -87,6 +87,7 @@ Damien Millescamps              damien.millescamps@6wind.com
 Dan Carpenter                   dan.carpenter@oracle.com
 Dan McGregor                    dan.mcgregor@usask.ca
 Dan Wendlandt                   dan@nicira.com
+Daniel Alvarez                  dalvarez@redhat.com
 Daniel Borkmann                 dborkman@redhat.com
 Daniel Hiltgen                  daniel@netkine.com
 Daniel Roman                    droman@nicira.com
@@ -250,6 +251,7 @@ Rami Rosen                      ramirose@gmail.com
 Ramu Ramamurthy                 ramu.ramamurthy@us.ibm.com
 Randall Sharo                   andall.sharo@navy.mil
 Ravi Kerur                      Ravi.Kerur@telekom.com
+Raymond Burkholder              ray@oneunified.net
 Reid Price                      reid@nicira.com
 Remko Tronçon                   git@el-tramo.be
 Rich Lane                       rlane@bigswitch.com
@@ -323,12 +325,14 @@ Yi-Hung Wei                     yihung.wei@gmail.com
 Yin Lin                         linyi@vmware.com
 Yu Zhiguo                       yuzg@cn.fujitsu.com
 Yuanhan Liu                     yuanhan.liu@linux.intel.com
+Yunjian Wang                    wangyunjian@huawei.com
 ZhengLingyun                    konghuarukhr@163.com
 Zoltán Balogh                   zoltan.balogh@ericsson.com
 Zoltan Kiss                     zoltan.kiss@citrix.com
 Zongkai LI                      zealokii@gmail.com
 Zhi Yong Wu                     zwu.kernel@gmail.com
 Zang MingJie                    zealot0630@gmail.com
+Zhenyu Gao                      sysugaozhenyu@gmail.com
 nickcooper-zhangtonghao         nickcooper-zhangtonghao@opencloud.tech
 wenxu                           wenxu@ucloud.cn
 wisd0me                         ak47izatool@gmail.com

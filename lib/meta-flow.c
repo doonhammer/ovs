@@ -404,6 +404,8 @@ mf_are_prereqs_ok__(const struct mf_field *mf, const struct flow *flow,
     switch (mf->prereqs) {
     case MFP_NONE:
         return true;
+    case MFP_ETHERNET:
+        return is_ethernet(flow, wc);
     case MFP_ARP:
         return (flow->dl_type == htons(ETH_TYPE_ARP) ||
                 flow->dl_type == htons(ETH_TYPE_RARP));
@@ -1553,6 +1555,96 @@ mf_is_tun_metadata(const struct mf_field *mf)
            mf->id < MFF_TUN_METADATA0 + TUN_METADATA_NUM_OPTS;
 }
 
+bool
+mf_is_pipeline_field(const struct mf_field *mf)
+{
+    switch (mf->id) {
+    case MFF_TUN_ID:
+    case MFF_TUN_SRC:
+    case MFF_TUN_DST:
+    case MFF_TUN_IPV6_SRC:
+    case MFF_TUN_IPV6_DST:
+    case MFF_TUN_FLAGS:
+    case MFF_TUN_GBP_ID:
+    case MFF_TUN_GBP_FLAGS:
+    CASE_MFF_TUN_METADATA:
+    case MFF_METADATA:
+    case MFF_IN_PORT:
+    case MFF_IN_PORT_OXM:
+    CASE_MFF_REGS:
+    CASE_MFF_XREGS:
+    CASE_MFF_XXREGS:
+        return true;
+
+    case MFF_DP_HASH:
+    case MFF_RECIRC_ID:
+    case MFF_CONJ_ID:
+    case MFF_TUN_TTL:
+    case MFF_TUN_TOS:
+    case MFF_ACTSET_OUTPUT:
+    case MFF_SKB_PRIORITY:
+    case MFF_PKT_MARK:
+    case MFF_CT_STATE:
+    case MFF_CT_ZONE:
+    case MFF_CT_MARK:
+    case MFF_CT_LABEL:
+    case MFF_CT_NW_PROTO:
+    case MFF_CT_NW_SRC:
+    case MFF_CT_NW_DST:
+    case MFF_CT_IPV6_SRC:
+    case MFF_CT_IPV6_DST:
+    case MFF_CT_TP_SRC:
+    case MFF_CT_TP_DST:
+    case MFF_ETH_SRC:
+    case MFF_ETH_DST:
+    case MFF_ETH_TYPE:
+    case MFF_VLAN_TCI:
+    case MFF_DL_VLAN:
+    case MFF_VLAN_VID:
+    case MFF_DL_VLAN_PCP:
+    case MFF_VLAN_PCP:
+    case MFF_MPLS_LABEL:
+    case MFF_MPLS_TC:
+    case MFF_MPLS_BOS:
+    case MFF_MPLS_TTL:
+    case MFF_IPV4_SRC:
+    case MFF_IPV4_DST:
+    case MFF_IPV6_SRC:
+    case MFF_IPV6_DST:
+    case MFF_IPV6_LABEL:
+    case MFF_IP_PROTO:
+    case MFF_IP_DSCP:
+    case MFF_IP_DSCP_SHIFTED:
+    case MFF_IP_ECN:
+    case MFF_IP_TTL:
+    case MFF_IP_FRAG:
+    case MFF_ARP_OP:
+    case MFF_ARP_SPA:
+    case MFF_ARP_TPA:
+    case MFF_ARP_SHA:
+    case MFF_ARP_THA:
+    case MFF_TCP_SRC:
+    case MFF_TCP_DST:
+    case MFF_TCP_FLAGS:
+    case MFF_UDP_SRC:
+    case MFF_UDP_DST:
+    case MFF_SCTP_SRC:
+    case MFF_SCTP_DST:
+    case MFF_ICMPV4_TYPE:
+    case MFF_ICMPV4_CODE:
+    case MFF_ICMPV6_TYPE:
+    case MFF_ICMPV6_CODE:
+    case MFF_ND_TARGET:
+    case MFF_ND_SLL:
+    case MFF_ND_TLL:
+        return false;
+
+    case MFF_N_IDS:
+    default:
+        OVS_NOT_REACHED();
+    }
+}
+
 /* Returns true if 'mf' has previously been set in 'flow', false if
  * it contains a non-default value.
  *
@@ -2026,7 +2118,7 @@ mf_set(const struct mf_field *mf,
 
     case MFF_CT_LABEL:
         match_set_ct_label_masked(match, ntoh128(value->be128),
-                                  mask ? ntoh128(mask->be128) : OVS_U128_MAX);
+                                  ntoh128(mask->be128));
         break;
 
     case MFF_ETH_DST:
@@ -2336,28 +2428,30 @@ mf_from_ipv6_string(const struct mf_field *mf, const char *s,
 
 static char *
 mf_from_ofp_port_string(const struct mf_field *mf, const char *s,
+                        const struct ofputil_port_map *port_map,
                         ovs_be16 *valuep, ovs_be16 *maskp)
 {
     ofp_port_t port;
 
     ovs_assert(mf->n_bytes == sizeof(ovs_be16));
 
-    if (ofputil_port_from_string(s, &port)) {
+    if (ofputil_port_from_string(s, port_map, &port)) {
         *valuep = htons(ofp_to_u16(port));
         *maskp = OVS_BE16_MAX;
         return NULL;
     }
-    return xasprintf("%s: port value out of range for %s", s, mf->name);
+    return xasprintf("%s: invalid or unknown port for %s", s, mf->name);
 }
 
 static char *
 mf_from_ofp_port_string32(const struct mf_field *mf, const char *s,
+                          const struct ofputil_port_map *port_map,
                           ovs_be32 *valuep, ovs_be32 *maskp)
 {
     ofp_port_t port;
 
     ovs_assert(mf->n_bytes == sizeof(ovs_be32));
-    if (ofputil_port_from_string(s, &port)) {
+    if (ofputil_port_from_string(s, port_map, &port)) {
         *valuep = ofputil_port_to_ofp11(port);
         *maskp = OVS_BE32_MAX;
         return NULL;
@@ -2470,6 +2564,7 @@ mf_from_ct_state_string(const char *s, ovs_be32 *flagsp, ovs_be32 *maskp)
  * NULL if successful, otherwise a malloc()'d string describing the error. */
 char *
 mf_parse(const struct mf_field *mf, const char *s,
+         const struct ofputil_port_map *port_map,
          union mf_value *value, union mf_value *mask)
 {
     char *error;
@@ -2505,11 +2600,13 @@ mf_parse(const struct mf_field *mf, const char *s,
         break;
 
     case MFS_OFP_PORT:
-        error = mf_from_ofp_port_string(mf, s, &value->be16, &mask->be16);
+        error = mf_from_ofp_port_string(mf, s, port_map,
+                                        &value->be16, &mask->be16);
         break;
 
     case MFS_OFP_PORT_OXM:
-        error = mf_from_ofp_port_string32(mf, s, &value->be32, &mask->be32);
+        error = mf_from_ofp_port_string32(mf, s, port_map,
+                                          &value->be32, &mask->be32);
         break;
 
     case MFS_FRAG:
@@ -2539,12 +2636,13 @@ mf_parse(const struct mf_field *mf, const char *s,
 /* Parses 's', a string value for field 'mf', into 'value'.  Returns NULL if
  * successful, otherwise a malloc()'d string describing the error. */
 char *
-mf_parse_value(const struct mf_field *mf, const char *s, union mf_value *value)
+mf_parse_value(const struct mf_field *mf, const char *s,
+               const struct ofputil_port_map *port_map, union mf_value *value)
 {
     union mf_value mask;
     char *error;
 
-    error = mf_parse(mf, s, value, &mask);
+    error = mf_parse(mf, s, port_map, value, &mask);
     if (error) {
         return error;
     }
@@ -2624,6 +2722,7 @@ mf_format_ct_state_string(ovs_be32 value, ovs_be32 mask, struct ds *s)
 void
 mf_format(const struct mf_field *mf,
           const union mf_value *value, const union mf_value *mask,
+          const struct ofputil_port_map *port_map,
           struct ds *s)
 {
     if (mask) {
@@ -2640,13 +2739,13 @@ mf_format(const struct mf_field *mf,
         if (!mask) {
             ofp_port_t port;
             ofputil_port_from_ofp11(value->be32, &port);
-            ofputil_format_port(port, s);
+            ofputil_format_port(port, port_map, s);
             break;
         }
         /* fall through */
     case MFS_OFP_PORT:
         if (!mask) {
-            ofputil_format_port(u16_to_ofp(ntohs(value->be16)), s);
+            ofputil_format_port(u16_to_ofp(ntohs(value->be16)), port_map, s);
             break;
         }
         /* fall through */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2016 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,7 +100,8 @@ static struct shash dp_netdevs OVS_GUARDED_BY(dp_netdev_mutex)
 static struct vlog_rate_limit upcall_rl = VLOG_RATE_LIMIT_INIT(600, 600);
 
 #define DP_NETDEV_CS_SUPPORTED_MASK (CS_NEW | CS_ESTABLISHED | CS_RELATED \
-                                     | CS_INVALID | CS_REPLY_DIR | CS_TRACKED)
+                                     | CS_INVALID | CS_REPLY_DIR | CS_TRACKED \
+                                     | CS_SRC_NAT | CS_DST_NAT)
 #define DP_NETDEV_CS_UNSUPPORTED_MASK (~(uint32_t)DP_NETDEV_CS_SUPPORTED_MASK)
 
 static struct odp_support dp_netdev_support = {
@@ -1918,24 +1919,6 @@ netdev_flow_key_clone(struct netdev_flow_key *dst,
            offsetof(struct netdev_flow_key, mf) + src->len);
 }
 
-/* Slow. */
-static void
-netdev_flow_key_from_flow(struct netdev_flow_key *dst,
-                          const struct flow *src)
-{
-    struct dp_packet packet;
-    uint64_t buf_stub[512 / 8];
-
-    dp_packet_use_stub(&packet, buf_stub, sizeof buf_stub);
-    pkt_metadata_from_flow(&packet.md, src);
-    flow_compose(&packet, src);
-    miniflow_extract(&packet, &dst->mf);
-    dp_packet_uninit(&packet);
-
-    dst->len = netdev_flow_key_size(miniflow_n_values(&dst->mf));
-    dst->hash = 0; /* Not computed yet. */
-}
-
 /* Initialize a netdev_flow_key 'mask' from 'match'. */
 static inline void
 netdev_flow_mask_init(struct netdev_flow_key *mask,
@@ -2411,7 +2394,7 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
     cmap_insert(&pmd->flow_table, CONST_CAST(struct cmap_node *, &flow->node),
                 dp_netdev_flow_hash(&flow->ufid));
 
-    if (OVS_UNLIKELY(VLOG_IS_DBG_ENABLED())) {
+    if (OVS_UNLIKELY(!VLOG_DROP_DBG((&upcall_rl)))) {
         struct ds ds = DS_EMPTY_INITIALIZER;
         struct ofpbuf key_buf, mask_buf;
         struct odp_flow_key_parms odp_parms = {
@@ -2436,10 +2419,21 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
         ds_put_cstr(&ds, ", actions:");
         format_odp_actions(&ds, actions, actions_len);
 
-        VLOG_DBG_RL(&upcall_rl, "%s", ds_cstr(&ds));
+        VLOG_DBG("%s", ds_cstr(&ds));
 
         ofpbuf_uninit(&key_buf);
         ofpbuf_uninit(&mask_buf);
+
+        /* Add a printout of the actual match installed. */
+        struct match m;
+        ds_clear(&ds);
+        ds_put_cstr(&ds, "flow match: ");
+        miniflow_expand(&flow->cr.flow.mf, &m.flow);
+        miniflow_expand(&flow->cr.mask->mf, &m.wc.masks);
+        match_format(&m, NULL, &ds, OFP_DEFAULT_PRIORITY);
+
+        VLOG_DBG("%s", ds_cstr(&ds));
+
         ds_destroy(&ds);
     }
 
@@ -2476,8 +2470,7 @@ flow_put_on_pmd(struct dp_netdev_pmd_thread *pmd,
             error = ENOENT;
         }
     } else {
-        if (put->flags & DPIF_FP_MODIFY
-            && flow_equal(&match->flow, &netdev_flow->flow)) {
+        if (put->flags & DPIF_FP_MODIFY) {
             struct dp_netdev_actions *new_actions;
             struct dp_netdev_actions *old_actions;
 
@@ -2519,7 +2512,7 @@ static int
 dpif_netdev_flow_put(struct dpif *dpif, const struct dpif_flow_put *put)
 {
     struct dp_netdev *dp = get_dp_netdev(dpif);
-    struct netdev_flow_key key;
+    struct netdev_flow_key key, mask;
     struct dp_netdev_pmd_thread *pmd;
     struct match match;
     ovs_u128 ufid;
@@ -2548,9 +2541,10 @@ dpif_netdev_flow_put(struct dpif *dpif, const struct dpif_flow_put *put)
     }
 
     /* Must produce a netdev_flow_key for lookup.
-     * This interface is no longer performance critical, since it is not used
-     * for upcall processing any more. */
-    netdev_flow_key_from_flow(&key, &match.flow);
+     * Use the same method as employed to create the key when adding
+     * the flow to the dplcs to make sure they match. */
+    netdev_flow_mask_init(&mask, &match);
+    netdev_flow_key_init_masked(&key, &match.flow, &mask);
 
     if (put->pmd_id == PMD_ID_NULL) {
         if (cmap_count(&dp->poll_threads) == 0) {
@@ -3456,7 +3450,8 @@ reconfigure_datapath(struct dp_netdev *dp)
     /* We only reconfigure the ports that we determined above, because they're
      * not being used by any pmd thread at the moment.  If a port fails to
      * reconfigure we remove it from the datapath. */
-    HMAP_FOR_EACH (port, node, &dp->ports) {
+    struct dp_netdev_port *next_port;
+    HMAP_FOR_EACH_SAFE (port, next_port, node, &dp->ports) {
         int err;
 
         if (!port->need_reconfigure) {
@@ -5166,6 +5161,9 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         const char *helper = NULL;
         const uint32_t *setmark = NULL;
         const struct ovs_key_ct_labels *setlabel = NULL;
+        struct nat_action_info_t nat_action_info;
+        struct nat_action_info_t *nat_action_info_ref = NULL;
+        bool nat_config = false;
 
         NL_ATTR_FOR_EACH_UNSAFE (b, left, nl_attr_get(a),
                                  nl_attr_get_size(a)) {
@@ -5194,15 +5192,90 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 /* Silently ignored, as userspace datapath does not generate
                  * netlink events. */
                 break;
-            case OVS_CT_ATTR_NAT:
+            case OVS_CT_ATTR_NAT: {
+                const struct nlattr *b_nest;
+                unsigned int left_nest;
+                bool ip_min_specified = false;
+                bool proto_num_min_specified = false;
+                bool ip_max_specified = false;
+                bool proto_num_max_specified = false;
+                memset(&nat_action_info, 0, sizeof nat_action_info);
+                nat_action_info_ref = &nat_action_info;
+
+                NL_NESTED_FOR_EACH_UNSAFE (b_nest, left_nest, b) {
+                    enum ovs_nat_attr sub_type_nest = nl_attr_type(b_nest);
+
+                    switch (sub_type_nest) {
+                    case OVS_NAT_ATTR_SRC:
+                    case OVS_NAT_ATTR_DST:
+                        nat_config = true;
+                        nat_action_info.nat_action |=
+                            ((sub_type_nest == OVS_NAT_ATTR_SRC)
+                                ? NAT_ACTION_SRC : NAT_ACTION_DST);
+                        break;
+                    case OVS_NAT_ATTR_IP_MIN:
+                        memcpy(&nat_action_info.min_addr,
+                               nl_attr_get(b_nest),
+                               nl_attr_get_size(b_nest));
+                        ip_min_specified = true;
+                        break;
+                    case OVS_NAT_ATTR_IP_MAX:
+                        memcpy(&nat_action_info.max_addr,
+                               nl_attr_get(b_nest),
+                               nl_attr_get_size(b_nest));
+                        ip_max_specified = true;
+                        break;
+                    case OVS_NAT_ATTR_PROTO_MIN:
+                        nat_action_info.min_port =
+                            nl_attr_get_u16(b_nest);
+                        proto_num_min_specified = true;
+                        break;
+                    case OVS_NAT_ATTR_PROTO_MAX:
+                        nat_action_info.max_port =
+                            nl_attr_get_u16(b_nest);
+                        proto_num_max_specified = true;
+                        break;
+                    case OVS_NAT_ATTR_PERSISTENT:
+                    case OVS_NAT_ATTR_PROTO_HASH:
+                    case OVS_NAT_ATTR_PROTO_RANDOM:
+                        break;
+                    case OVS_NAT_ATTR_UNSPEC:
+                    case __OVS_NAT_ATTR_MAX:
+                        OVS_NOT_REACHED();
+                    }
+                }
+
+                if (ip_min_specified && !ip_max_specified) {
+                    nat_action_info.max_addr = nat_action_info.min_addr;
+                }
+                if (proto_num_min_specified && !proto_num_max_specified) {
+                    nat_action_info.max_port = nat_action_info.min_port;
+                }
+                if (proto_num_min_specified || proto_num_max_specified) {
+                    if (nat_action_info.nat_action & NAT_ACTION_SRC) {
+                        nat_action_info.nat_action |= NAT_ACTION_SRC_PORT;
+                    } else if (nat_action_info.nat_action & NAT_ACTION_DST) {
+                        nat_action_info.nat_action |= NAT_ACTION_DST_PORT;
+                    }
+                }
+                break;
+            }
             case OVS_CT_ATTR_UNSPEC:
             case __OVS_CT_ATTR_MAX:
                 OVS_NOT_REACHED();
             }
         }
 
+        /* We won't be able to function properly in this case, hence
+         * complain loudly. */
+        if (nat_config && !commit) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
+            VLOG_WARN_RL(&rl, "NAT specified without commit.");
+        }
+
         conntrack_execute(&dp->conntrack, packets_, aux->flow->dl_type, force,
-                          commit, zone, setmark, setlabel, helper);
+                          commit, zone, setmark, setlabel, helper,
+                          nat_action_info_ref);
         break;
     }
 

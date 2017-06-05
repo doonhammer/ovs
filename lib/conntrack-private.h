@@ -29,15 +29,6 @@
 #include "packets.h"
 #include "unaligned.h"
 
-struct ct_addr {
-    union {
-        ovs_16aligned_be32 ipv4;
-        union ovs_16aligned_in6_addr ipv6;
-        ovs_be32 ipv4_aligned;
-        struct in6_addr ipv6_aligned;
-    };
-};
-
 struct ct_endpoint {
     struct ct_addr addr;
     union {
@@ -60,20 +51,34 @@ struct conn_key {
     uint16_t zone;
 };
 
+struct nat_conn_key_node {
+    struct hmap_node node;
+    struct conn_key key;
+    struct conn_key value;
+};
+
 struct conn {
     struct conn_key key;
     struct conn_key rev_key;
     long long expiration;
     struct ovs_list exp_node;
     struct hmap_node node;
-    uint32_t mark;
     ovs_u128 label;
+    /* XXX: consider flattening. */
+    struct nat_action_info_t *nat_info;
+    uint32_t mark;
+    uint8_t conn_type;
 };
 
 enum ct_update_res {
     CT_UPDATE_INVALID,
     CT_UPDATE_VALID,
     CT_UPDATE_NEW,
+};
+
+enum ct_conn_type {
+    CT_CONN_TYPE_DEFAULT,
+    CT_CONN_TYPE_UN_NAT,
 };
 
 struct ct_l4_proto {

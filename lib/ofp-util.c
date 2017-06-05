@@ -33,6 +33,7 @@
 #include "id-pool.h"
 #include "openflow/netronome-ext.h"
 #include "openvswitch/dynamic-string.h"
+#include "openvswitch/json.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofp-errors.h"
@@ -309,7 +310,7 @@ ofputil_pull_ofp11_match(struct ofpbuf *buf, const struct tun_table *tun_table,
         if (padded_match_len) {
             *padded_match_len = ROUND_UP(match_len, 8);
         }
-        return oxm_pull_match(buf, tun_table, vl_mff_map, match);
+        return oxm_pull_match(buf, false, tun_table, vl_mff_map, match);
 
     default:
         return OFPERR_OFPBMC_BAD_TYPE;
@@ -1685,7 +1686,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
             nfm = ofpbuf_pull(&b, sizeof *nfm);
             error = nx_pull_match(&b, ntohs(nfm->match_len),
                                   &fm->match, &fm->cookie, &fm->cookie_mask,
-                                  tun_table, vl_mff_map);
+                                  false, tun_table, vl_mff_map);
             if (error) {
                 return error;
             }
@@ -2324,7 +2325,7 @@ ofputil_decode_nxst_flow_request(struct ofputil_flow_stats_request *fsr,
 
     nfsr = ofpbuf_pull(b, sizeof *nfsr);
     error = nx_pull_match(b, ntohs(nfsr->match_len), &fsr->match,
-                          &fsr->cookie, &fsr->cookie_mask, tun_table,
+                          &fsr->cookie, &fsr->cookie_mask, false, tun_table,
                           vl_mff_map);
     if (error) {
         return error;
@@ -2996,7 +2997,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
                          "claims invalid length %"PRIuSIZE, match_len, length);
             return EINVAL;
         }
-        if (nx_pull_match(msg, match_len, &fs->match, NULL, NULL, NULL,
+        if (nx_pull_match(msg, match_len, &fs->match, NULL, NULL, false, NULL,
                           NULL)) {
             return EINVAL;
         }
@@ -3253,7 +3254,7 @@ ofputil_decode_flow_removed(struct ofputil_flow_removed *fr,
 
         nfr = ofpbuf_pull(&b, sizeof *nfr);
         error = nx_pull_match(&b, ntohs(nfr->match_len), &fr->match, NULL,
-                              NULL, NULL, NULL);
+                              NULL, false, NULL, NULL);
         if (error) {
             return error;
         }
@@ -3514,7 +3515,7 @@ ofputil_decode_packet_in(const struct ofp_header *oh, bool loose,
         const ovs_be64 *cookie = (raw == OFPRAW_OFPT13_PACKET_IN
                                   ? ofpbuf_pull(&b, sizeof *cookie)
                                   : NULL);
-        enum ofperr error = oxm_pull_match_loose(&b, tun_table,
+        enum ofperr error = oxm_pull_match_loose(&b, false, tun_table,
                                                  &pin->flow_metadata);
         if (error) {
             return error;
@@ -3574,7 +3575,8 @@ ofputil_decode_packet_in(const struct ofp_header *oh, bool loose,
 
         npi = ofpbuf_pull(&b, sizeof *npi);
         error = nx_pull_match_loose(&b, ntohs(npi->match_len),
-                                    &pin->flow_metadata, NULL, NULL, NULL);
+                                    &pin->flow_metadata, NULL, NULL, false,
+                                    NULL);
         if (error) {
             return error;
         }
@@ -4198,21 +4200,45 @@ ofputil_packet_in_private_destroy(struct ofputil_packet_in_private *pin)
 enum ofperr
 ofputil_decode_packet_out(struct ofputil_packet_out *po,
                           const struct ofp_header *oh,
+                          const struct tun_table *tun_table,
                           struct ofpbuf *ofpacts)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
 
     ofpbuf_clear(ofpacts);
-    if (raw == OFPRAW_OFPT11_PACKET_OUT) {
+    match_init_catchall(&po->flow_metadata);
+    if (raw == OFPRAW_OFPT15_PACKET_OUT) {
         enum ofperr error;
-        const struct ofp11_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
+        const struct ofp15_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
 
         po->buffer_id = ntohl(opo->buffer_id);
-        error = ofputil_port_from_ofp11(opo->in_port, &po->in_port);
+        error = oxm_pull_match_loose(&b, true, tun_table, &po->flow_metadata);
         if (error) {
             return error;
         }
+
+        if (!po->flow_metadata.wc.masks.in_port.ofp_port) {
+            return OFPERR_OFPBRC_BAD_PORT;
+        }
+
+        error = ofpacts_pull_openflow_actions(&b, ntohs(opo->actions_len),
+                                              oh->version, NULL, NULL,
+                                              ofpacts);
+        if (error) {
+            return error;
+        }
+    } else if (raw == OFPRAW_OFPT11_PACKET_OUT) {
+        enum ofperr error;
+        ofp_port_t in_port;
+        const struct ofp11_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
+
+        po->buffer_id = ntohl(opo->buffer_id);
+        error = ofputil_port_from_ofp11(opo->in_port, &in_port);
+        if (error) {
+            return error;
+        }
+        match_set_in_port(&po->flow_metadata, in_port);
 
         error = ofpacts_pull_openflow_actions(&b, ntohs(opo->actions_len),
                                               oh->version, NULL, NULL,
@@ -4225,7 +4251,7 @@ ofputil_decode_packet_out(struct ofputil_packet_out *po,
         const struct ofp10_packet_out *opo = ofpbuf_pull(&b, sizeof *opo);
 
         po->buffer_id = ntohl(opo->buffer_id);
-        po->in_port = u16_to_ofp(ntohs(opo->in_port));
+        match_set_in_port(&po->flow_metadata, u16_to_ofp(ntohs(opo->in_port)));
 
         error = ofpacts_pull_openflow_actions(&b, ntohs(opo->actions_len),
                                               oh->version, NULL, NULL,
@@ -4237,11 +4263,13 @@ ofputil_decode_packet_out(struct ofputil_packet_out *po,
         OVS_NOT_REACHED();
     }
 
-    if (ofp_to_u16(po->in_port) >= ofp_to_u16(OFPP_MAX)
-        && po->in_port != OFPP_LOCAL
-        && po->in_port != OFPP_NONE && po->in_port != OFPP_CONTROLLER) {
+    ofp_port_t in_port = po->flow_metadata.flow.in_port.ofp_port;
+    if (ofp_to_u16(in_port) >= ofp_to_u16(OFPP_MAX)
+        && in_port != OFPP_LOCAL
+        && in_port != OFPP_NONE
+        && in_port != OFPP_CONTROLLER) {
         VLOG_WARN_RL(&bad_ofmsg_rl, "packet-out has bad input port %#"PRIx32,
-                     po->in_port);
+                     po->flow_metadata.flow.in_port.ofp_port);
         return OFPERR_OFPBRC_BAD_PORT;
     }
 
@@ -5153,20 +5181,22 @@ ofputil_decode_port_mod(const struct ofp_header *oh,
 
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
+
+    enum ofperr error;
     if (raw == OFPRAW_OFPT10_PORT_MOD) {
-        return ofputil_decode_ofp10_port_mod(b.data, pm);
+        error = ofputil_decode_ofp10_port_mod(b.data, pm);
     } else if (raw == OFPRAW_OFPT11_PORT_MOD) {
-        return ofputil_decode_ofp11_port_mod(b.data, pm);
+        error = ofputil_decode_ofp11_port_mod(b.data, pm);
     } else if (raw == OFPRAW_OFPT14_PORT_MOD) {
-        return ofputil_decode_ofp14_port_mod(&b, loose, pm);
+        error = ofputil_decode_ofp14_port_mod(&b, loose, pm);
     } else if (raw == OFPRAW_OFPT16_PORT_MOD) {
-        return ofputil_decode_ofp16_port_mod(&b, loose, pm);
+        error = ofputil_decode_ofp16_port_mod(&b, loose, pm);
     } else {
-        return OFPERR_OFPBRC_BAD_TYPE;
+        error = OFPERR_OFPBRC_BAD_TYPE;
     }
 
     pm->config &= pm->mask;
-    return 0;
+    return error;
 }
 
 /* Converts the abstract form of a "port mod" message in '*pm' into an OpenFlow
@@ -6806,7 +6836,7 @@ ofputil_decode_flow_monitor_request(struct ofputil_flow_monitor_request *rq,
     rq->table_id = nfmr->table_id;
 
     return nx_pull_match(msg, ntohs(nfmr->match_len), &rq->match, NULL,
-                         NULL, NULL, NULL);
+                         NULL, false, NULL, NULL);
 }
 
 void
@@ -6914,8 +6944,8 @@ ofputil_decode_flow_update(struct ofputil_flow_update *update,
         update->cookie = nfuf->cookie;
         update->priority = ntohs(nfuf->priority);
 
-        error = nx_pull_match(msg, match_len, &update->match, NULL, NULL, NULL,
-                              NULL);
+        error = nx_pull_match(msg, match_len, &update->match, NULL, NULL,
+                              false, NULL, NULL);
         if (error) {
             return error;
         }
@@ -7051,7 +7081,8 @@ ofputil_encode_packet_out(const struct ofputil_packet_out *po,
 
         opo = msg->msg;
         opo->buffer_id = htonl(po->buffer_id);
-        opo->in_port = htons(ofp_to_u16(po->in_port));
+        opo->in_port =htons(ofp_to_u16(
+                                po->flow_metadata.flow.in_port.ofp_port));
         opo->actions_len = htons(msg->size - actions_ofs);
         break;
     }
@@ -7059,9 +7090,7 @@ ofputil_encode_packet_out(const struct ofputil_packet_out *po,
     case OFP11_VERSION:
     case OFP12_VERSION:
     case OFP13_VERSION:
-    case OFP14_VERSION:
-    case OFP15_VERSION:
-    case OFP16_VERSION: {
+    case OFP14_VERSION: {
         struct ofp11_packet_out *opo;
         size_t len;
 
@@ -7071,7 +7100,26 @@ ofputil_encode_packet_out(const struct ofputil_packet_out *po,
                                            ofp_version);
         opo = msg->msg;
         opo->buffer_id = htonl(po->buffer_id);
-        opo->in_port = ofputil_port_to_ofp11(po->in_port);
+        opo->in_port =
+            ofputil_port_to_ofp11(po->flow_metadata.flow.in_port.ofp_port);
+        opo->actions_len = htons(len);
+        break;
+    }
+
+    case OFP15_VERSION:
+    case OFP16_VERSION: {
+        struct ofp15_packet_out *opo;
+        size_t len;
+
+        /* The final argument is just an estimate of the space required. */
+        msg = ofpraw_alloc(OFPRAW_OFPT15_PACKET_OUT, ofp_version,
+                           size + NXM_TYPICAL_LEN);
+        ofpbuf_put_zeros(msg, sizeof *opo);
+        oxm_put_match(msg, &po->flow_metadata, ofp_version);
+        len = ofpacts_put_openflow_actions(po->ofpacts, po->ofpacts_len, msg,
+                                           ofp_version);
+        opo = msg->msg;
+        opo->buffer_id = htonl(po->buffer_id);
         opo->actions_len = htons(len);
         break;
     }
@@ -7225,7 +7273,8 @@ ofputil_port_to_ofp11(ofp_port_t ofp10_port)
 
 /* Stores the port number represented by 's' into '*portp'.  's' may be an
  * integer or, for reserved ports, the standard OpenFlow name for the port
- * (e.g. "LOCAL").
+ * (e.g. "LOCAL").  If 'port_map' is nonnull, also accepts names in it (quoted
+ * or unquoted).
  *
  * Returns true if successful, false if 's' is not a valid OpenFlow port number
  * or name.  The caller should issue an error message in this case, because
@@ -7237,7 +7286,9 @@ ofputil_port_to_ofp11(ofp_port_t ofp10_port)
  * of OpenFlow 1.1+ port numbers, mapping those port numbers into the 16-bit
  * range as described in include/openflow/openflow-1.1.h. */
 bool
-ofputil_port_from_string(const char *s, ofp_port_t *portp)
+ofputil_port_from_string(const char *s,
+                         const struct ofputil_port_map *port_map,
+                         ofp_port_t *portp)
 {
     unsigned int port32; /* int is at least 32 bits wide. */
 
@@ -7256,7 +7307,8 @@ ofputil_port_from_string(const char *s, ofp_port_t *portp)
         } else if (port32 <= ofp_to_u16(OFPP_LAST_RESV)) {
             char name[OFP10_MAX_PORT_NAME_LEN];
 
-            ofputil_port_to_string(u16_to_ofp(port32), name, sizeof name);
+            ofputil_port_to_string(u16_to_ofp(port32), NULL,
+                                   name, sizeof name);
             VLOG_WARN_ONCE("referring to port %s as %"PRIu32" is deprecated "
                            "for compatibility with OpenFlow 1.1 and later",
                            name, port32);
@@ -7289,7 +7341,66 @@ ofputil_port_from_string(const char *s, ofp_port_t *portp)
                 return true;
             }
         }
+
+        ofp_port_t ofp_port = OFPP_NONE;
+        if (s[0] != '"') {
+            ofp_port = ofputil_port_map_get_number(port_map, s);
+        } else {
+            size_t length = strlen(s);
+            char *name = NULL;
+            if (length > 1
+                && s[length - 1] == '"'
+                && json_string_unescape(s + 1, length - 2, &name)) {
+                ofp_port = ofputil_port_map_get_number(port_map, name);
+            }
+            free(name);
+        }
+        if (ofp_port != OFPP_NONE) {
+            *portp = ofp_port;
+            return true;
+        }
+
         return false;
+    }
+}
+
+const char *
+ofputil_port_get_reserved_name(ofp_port_t port)
+{
+    switch (port) {
+#define OFPUTIL_NAMED_PORT(NAME) case OFPP_##NAME: return #NAME;
+        OFPUTIL_NAMED_PORTS
+#undef OFPUTIL_NAMED_PORT
+
+    default:
+        return NULL;
+    }
+}
+
+/* A port name doesn't need to be quoted if it is alphanumeric and starts with
+ * a letter. */
+static bool
+port_name_needs_quotes(const char *port_name)
+{
+    if (!isalpha((unsigned char) port_name[0])) {
+        return true;
+    }
+
+    for (const char *p = port_name + 1; *p; p++) {
+        if (!isalnum((unsigned char) *p)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void
+put_port_name(const char *port_name, struct ds *s)
+{
+    if (port_name_needs_quotes(port_name)) {
+        json_string_escape(port_name, s);
+    } else {
+        ds_put_cstr(s, port_name);
     }
 }
 
@@ -7297,12 +7408,22 @@ ofputil_port_from_string(const char *s, ofp_port_t *portp)
  * Most ports' string representation is just the port number, but for special
  * ports, e.g. OFPP_LOCAL, it is the name, e.g. "LOCAL". */
 void
-ofputil_format_port(ofp_port_t port, struct ds *s)
+ofputil_format_port(ofp_port_t port, const struct ofputil_port_map *port_map,
+                    struct ds *s)
 {
-    char name[OFP10_MAX_PORT_NAME_LEN];
+    const char *reserved_name = ofputil_port_get_reserved_name(port);
+    if (reserved_name) {
+        ds_put_cstr(s, reserved_name);
+        return;
+    }
 
-    ofputil_port_to_string(port, name, sizeof name);
-    ds_put_cstr(s, name);
+    const char *port_name = ofputil_port_map_get_name(port_map, port);
+    if (port_name) {
+        put_port_name(port_name, s);
+        return;
+    }
+
+    ds_put_format(s, "%"PRIu32, port);
 }
 
 /* Puts in the 'bufsize' byte in 'namebuf' a null-terminated string
@@ -7311,22 +7432,149 @@ ofputil_format_port(ofp_port_t port, struct ds *s)
  * by name, e.g. "LOCAL". */
 void
 ofputil_port_to_string(ofp_port_t port,
-                       char namebuf[OFP10_MAX_PORT_NAME_LEN], size_t bufsize)
+                       const struct ofputil_port_map *port_map,
+                       char *namebuf, size_t bufsize)
 {
-    switch (port) {
-#define OFPUTIL_NAMED_PORT(NAME)                        \
-        case OFPP_##NAME:                               \
-            ovs_strlcpy(namebuf, #NAME, bufsize);       \
-            break;
-        OFPUTIL_NAMED_PORTS
-#undef OFPUTIL_NAMED_PORT
-
-    default:
-        snprintf(namebuf, bufsize, "%"PRIu32, port);
-        break;
+    const char *reserved_name = ofputil_port_get_reserved_name(port);
+    if (reserved_name) {
+        ovs_strlcpy(namebuf, reserved_name, bufsize);
+        return;
     }
+
+    const char *port_name = ofputil_port_map_get_name(port_map, port);
+    if (port_name) {
+        struct ds s = DS_EMPTY_INITIALIZER;
+        put_port_name(port_name, &s);
+        ovs_strlcpy(namebuf, ds_cstr(&s), bufsize);
+        ds_destroy(&s);
+        return;
+    }
+
+    snprintf(namebuf, bufsize, "%"PRIu32, port);
+}
+
+/* ofputil_port_map.  */
+struct ofputil_port_map_node {
+    struct hmap_node name_node;
+    struct hmap_node number_node;
+    ofp_port_t ofp_port;        /* Port number. */
+    char *name;                 /* Port name. */
+
+    /* OpenFlow doesn't require port names to be unique, although that's the
+     * only sensible way.  However, even in Open vSwitch it's possible for two
+     * ports to appear to have the same name if their names are longer than the
+     * maximum length supported by a given version of OpenFlow.  So, we guard
+     * against duplicate names to avoid giving unexpected results in this
+     * corner case.
+     *
+     * OpenFlow does require port numbers to be unique.  We check for duplicate
+     * ports numbers just in case a switch has a bug. */
+    bool duplicate;
+};
+
+void
+ofputil_port_map_init(struct ofputil_port_map *map)
+{
+    hmap_init(&map->by_name);
+    hmap_init(&map->by_number);
 }
 
+static struct ofputil_port_map_node *
+ofputil_port_map_find_by_name(const struct ofputil_port_map *map,
+                              const char *name)
+{
+    struct ofputil_port_map_node *node;
+
+    HMAP_FOR_EACH_WITH_HASH (node, name_node, hash_string(name, 0),
+                             &map->by_name) {
+        if (!strcmp(name, node->name)) {
+            return node;
+        }
+    }
+    return NULL;
+}
+
+static struct ofputil_port_map_node *
+ofputil_port_map_find_by_number(const struct ofputil_port_map *map,
+                                ofp_port_t ofp_port)
+{
+    struct ofputil_port_map_node *node;
+
+    HMAP_FOR_EACH_IN_BUCKET (node, number_node, hash_ofp_port(ofp_port),
+                             &map->by_number) {
+        if (node->ofp_port == ofp_port) {
+            return node;
+        }
+    }
+    return NULL;
+}
+
+void
+ofputil_port_map_put(struct ofputil_port_map *map,
+                     ofp_port_t ofp_port, const char *name)
+{
+    struct ofputil_port_map_node *node;
+
+    /* Look for duplicate name. */
+    node = ofputil_port_map_find_by_name(map, name);
+    if (node) {
+        if (node->ofp_port != ofp_port) {
+            node->duplicate = true;
+        }
+        return;
+    }
+
+    /* Look for duplicate number. */
+    node = ofputil_port_map_find_by_number(map, ofp_port);
+    if (node) {
+        node->duplicate = true;
+        return;
+    }
+
+    /* Add new node. */
+    node = xmalloc(sizeof *node);
+    hmap_insert(&map->by_number, &node->number_node, hash_ofp_port(ofp_port));
+    hmap_insert(&map->by_name, &node->name_node, hash_string(name, 0));
+    node->ofp_port = ofp_port;
+    node->name = xstrdup(name);
+    node->duplicate = false;
+}
+
+const char *
+ofputil_port_map_get_name(const struct ofputil_port_map *map,
+                          ofp_port_t ofp_port)
+{
+    struct ofputil_port_map_node *node
+        = map ? ofputil_port_map_find_by_number(map, ofp_port) : NULL;
+    return node && !node->duplicate ? node->name : NULL;
+}
+
+ofp_port_t
+ofputil_port_map_get_number(const struct ofputil_port_map *map,
+                            const char *name)
+{
+    struct ofputil_port_map_node *node
+        = map ? ofputil_port_map_find_by_name(map, name) : NULL;
+    return node && !node->duplicate ? node->ofp_port : OFPP_NONE;
+}
+
+void
+ofputil_port_map_destroy(struct ofputil_port_map *map)
+{
+    if (map) {
+        struct ofputil_port_map_node *node, *next;
+
+        HMAP_FOR_EACH_SAFE (node, next, name_node, &map->by_name) {
+            hmap_remove(&map->by_name, &node->name_node);
+            hmap_remove(&map->by_number, &node->number_node);
+            free(node->name);
+            free(node);
+        }
+        hmap_destroy(&map->by_name);
+        hmap_destroy(&map->by_number);
+    }
+}
+
 /* Stores the group id represented by 's' into '*group_idp'.  's' may be an
  * integer or, for reserved group IDs, the standard OpenFlow name for the group
  * (either "ANY" or "ALL").
@@ -7502,13 +7750,15 @@ ofputil_normalize_match__(struct match *match, bool may_log)
     /* Log any changes. */
     if (!flow_wildcards_equal(&wc, &match->wc)) {
         bool log = may_log && !VLOG_DROP_INFO(&bad_ofmsg_rl);
-        char *pre = log ? match_to_string(match, OFP_DEFAULT_PRIORITY) : NULL;
+        char *pre = (log
+                     ? match_to_string(match, NULL, OFP_DEFAULT_PRIORITY)
+                     : NULL);
 
         match->wc = wc;
         match_zero_wildcarded_fields(match);
 
         if (log) {
-            char *post = match_to_string(match, OFP_DEFAULT_PRIORITY);
+            char *post = match_to_string(match, NULL, OFP_DEFAULT_PRIORITY);
             VLOG_INFO("normalization changed ofp_match, details:");
             VLOG_INFO(" pre: %s", pre);
             VLOG_INFO("post: %s", post);
@@ -10707,8 +10957,6 @@ struct ofpbuf *
 ofputil_encode_get_async_reply(const struct ofp_header *oh,
                                const struct ofputil_async_cfg *ac)
 {
-    struct ofpbuf *buf;
-
     enum ofpraw raw = (oh->version < OFP14_VERSION
                        ? OFPRAW_OFPT13_GET_ASYNC_REPLY
                        : OFPRAW_OFPT14_GET_ASYNC_REPLY);
@@ -10717,8 +10965,6 @@ ofputil_encode_get_async_reply(const struct ofp_header *oh,
                                raw == OFPRAW_OFPT14_GET_ASYNC_REPLY,
                                oh->version, UINT32_MAX);
     return reply;
-
-    return buf;
 }
 
 /* Encodes and returns a message, in a format appropriate for OpenFlow version

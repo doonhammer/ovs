@@ -139,7 +139,6 @@ struct ofport_dpif {
     struct lldp *lldp;          /* lldp, if any. */
     bool may_enable;            /* May be enabled in bonds. */
     bool is_tunnel;             /* This port is a tunnel. */
-    bool is_layer3;             /* This is a layer 3 port. */
     long long int carrier_seq;  /* Carrier status changes. */
     struct ofport_dpif *peer;   /* Peer if patch port. */
 
@@ -1316,7 +1315,7 @@ check_ct_eventmask(struct dpif_backer *backer)
     return !error;
 }
 
-#define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE)                        \
+#define CHECK_FEATURE__(NAME, SUPPORT, FIELD, VALUE, ETHTYPE)               \
 static bool                                                                 \
 check_##NAME(struct dpif_backer *backer)                                    \
 {                                                                           \
@@ -1333,6 +1332,7 @@ check_##NAME(struct dpif_backer *backer)                                    \
                                                                             \
     memset(&flow, 0, sizeof flow);                                          \
     flow.FIELD = VALUE;                                                     \
+    flow.dl_type = htons(ETHTYPE);                                          \
                                                                             \
     ofpbuf_use_stack(&key, &keybuf, sizeof keybuf);                         \
     odp_flow_key_from_flow(&odp_parms, &key);                               \
@@ -1347,14 +1347,16 @@ check_##NAME(struct dpif_backer *backer)                                    \
                                                                             \
     return enable;                                                          \
 }
-#define CHECK_FEATURE(FIELD) CHECK_FEATURE__(FIELD, FIELD, FIELD, 1)
+#define CHECK_FEATURE(FIELD) CHECK_FEATURE__(FIELD, FIELD, FIELD, 1, \
+                                             ETH_TYPE_IP)
 
 CHECK_FEATURE(ct_state)
 CHECK_FEATURE(ct_zone)
 CHECK_FEATURE(ct_mark)
-CHECK_FEATURE__(ct_label, ct_label, ct_label.u64.lo, 1)
-CHECK_FEATURE__(ct_state_nat, ct_state, ct_state, CS_TRACKED|CS_SRC_NAT)
-CHECK_FEATURE__(ct_orig_tuple, ct_orig_tuple, ct_nw_proto, 1)
+CHECK_FEATURE__(ct_label, ct_label, ct_label.u64.lo, 1, ETH_TYPE_IP)
+CHECK_FEATURE__(ct_state_nat, ct_state, ct_state, \
+                CS_TRACKED|CS_SRC_NAT, ETH_TYPE_IP)
+CHECK_FEATURE__(ct_orig_tuple, ct_orig_tuple, ct_nw_proto, 1, ETH_TYPE_IP)
 
 #undef CHECK_FEATURE
 #undef CHECK_FEATURE__
@@ -1829,7 +1831,6 @@ port_construct(struct ofport *port_)
     port->qdscp = NULL;
     port->n_qdscp = 0;
     port->carrier_seq = netdev_get_carrier_resets(netdev);
-    port->is_layer3 = netdev_vport_is_layer3(netdev);
 
     if (netdev_vport_is_patch(netdev)) {
         /* By bailing out here, we don't submit the port to the sFlow module
@@ -2574,6 +2575,34 @@ update_stp_port_state(struct ofport_dpif *ofport)
     }
 }
 
+static void
+stp_check_and_update_link_state(struct ofproto_dpif *ofproto)
+{
+    struct ofport_dpif *ofport;
+
+    HMAP_FOR_EACH (ofport, up.hmap_node, &ofproto->up.ports) {
+        bool up = netdev_get_carrier(ofport->up.netdev);
+
+        if (ofport->stp_port &&
+            up != (stp_port_get_state(ofport->stp_port) != STP_DISABLED)) {
+
+            VLOG_DBG("bridge %s, port %s is %s, %s it.",
+                     ofproto->up.name, netdev_get_name(ofport->up.netdev),
+                     up ? "up" : "down",
+                     up ? "enabling" : "disabling");
+
+            if (up) {
+                stp_port_enable(ofport->stp_port);
+                stp_port_set_aux(ofport->stp_port, ofport);
+            } else {
+                stp_port_disable(ofport->stp_port);
+            }
+
+            update_stp_port_state(ofport);
+        }
+    }
+}
+
 /* Configures STP on 'ofport_' using the settings defined in 's'.  The
  * caller is responsible for assigning STP port numbers and ensuring
  * there are no duplicates. */
@@ -2604,7 +2633,12 @@ set_stp_port(struct ofport *ofport_,
     /* Set name before enabling the port so that debugging messages can print
      * the name. */
     stp_port_set_name(sp, netdev_get_name(ofport->up.netdev));
-    stp_port_enable(sp);
+
+    if (netdev_get_carrier(ofport_->netdev)) {
+        stp_port_enable(sp);
+    } else {
+        stp_port_disable(sp);
+    }
 
     stp_port_set_aux(sp, ofport);
     stp_port_set_priority(sp, s->priority);
@@ -2666,6 +2700,9 @@ stp_run(struct ofproto_dpif *ofproto)
             stp_tick(ofproto->stp, MIN(INT_MAX, elapsed));
             ofproto->stp_last_tick = now;
         }
+
+        stp_check_and_update_link_state(ofproto);
+
         while (stp_get_changed_port(ofproto->stp, &sp)) {
             struct ofport_dpif *ofport = stp_port_get_aux(sp);
 
@@ -2856,7 +2893,7 @@ bundle_update(struct ofbundle *bundle)
     bundle->floodable = true;
     LIST_FOR_EACH (port, bundle_node, &bundle->ports) {
         if (port->up.pp.config & OFPUTIL_PC_NO_FLOOD
-            || port->is_layer3
+            || netdev_vport_is_layer3(port->up.netdev)
             || (bundle->ofproto->stp && !stp_forward_in_state(port->stp_state))
             || (bundle->ofproto->rstp && !rstp_forward_in_state(port->rstp_state))) {
             bundle->floodable = false;
@@ -2905,7 +2942,7 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port,
         port->bundle = bundle;
         ovs_list_push_back(&bundle->ports, &port->bundle_node);
         if (port->up.pp.config & OFPUTIL_PC_NO_FLOOD
-            || port->is_layer3
+            || netdev_vport_is_layer3(port->up.netdev)
             || (bundle->ofproto->stp && !stp_forward_in_state(port->stp_state))
             || (bundle->ofproto->rstp && !rstp_forward_in_state(port->rstp_state))) {
             bundle->floodable = false;
@@ -4977,7 +5014,7 @@ ofproto_unixctl_fdb_show(struct unixctl_conn *conn, int argc OVS_UNUSED,
         char name[OFP10_MAX_PORT_NAME_LEN];
 
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                               name, sizeof name);
+                               NULL, name, sizeof name);
         ds_put_format(&ds, "%5s  %4d  "ETH_ADDR_FMT"  %3d\n",
                       name, e->vlan, ETH_ADDR_ARGS(e->mac),
                       mac_entry_age(ofproto->ml, e));
@@ -5019,7 +5056,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
 
             bundle = b->port;
             ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                                   name, sizeof name);
+                                   NULL, name, sizeof name);
             ds_put_format(&ds, "%5s  %4d  ", name, grp->vlan);
             ipv6_format_mapped(&grp->addr, &ds);
             ds_put_format(&ds, "         %3d\n",
@@ -5033,7 +5070,7 @@ ofproto_unixctl_mcast_snooping_show(struct unixctl_conn *conn,
 
         bundle = mrouter->port;
         ofputil_port_to_string(ofbundle_get_a_port(bundle)->up.ofp_port,
-                               name, sizeof name);
+                               NULL, name, sizeof name);
         ds_put_format(&ds, "%5s  %4d  querier             %3d\n",
                       name, mrouter->vlan,
                       mcast_mrouter_age(ofproto->ms, mrouter));

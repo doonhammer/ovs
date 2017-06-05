@@ -477,6 +477,13 @@ match_set_ct_ipv6_dst_masked(struct match *match, const struct in6_addr *dst,
 }
 
 void
+match_set_packet_type(struct match *match, ovs_be32 packet_type)
+{
+    match->flow.packet_type = packet_type;
+    match->wc.masks.packet_type = OVS_BE32_MAX;
+}
+
+void
 match_set_dl_type(struct match *match, ovs_be16 dl_type)
 {
     match->wc.masks.dl_type = OVS_BE16_MAX;
@@ -1156,9 +1163,12 @@ format_ct_label_masked(struct ds *s, const ovs_u128 *key, const ovs_u128 *mask)
 }
 
 /* Appends a string representation of 'match' to 's'.  If 'priority' is
- * different from OFP_DEFAULT_PRIORITY, includes it in 's'. */
+ * different from OFP_DEFAULT_PRIORITY, includes it in 's'.  If 'port_map' is
+ * nonnull, uses it to translate port numbers to names in output. */
 void
-match_format(const struct match *match, struct ds *s, int priority)
+match_format(const struct match *match,
+             const struct ofputil_port_map *port_map,
+             struct ds *s, int priority)
 {
     const struct flow_wildcards *wc = &match->wc;
     size_t start_len = s->length;
@@ -1200,7 +1210,7 @@ match_format(const struct match *match, struct ds *s, int priority)
 
     if (wc->masks.actset_output) {
         ds_put_format(s, "%sactset_output=%s", colors.param, colors.end);
-        ofputil_format_port(f->actset_output, s);
+        ofputil_format_port(f->actset_output, port_map, s);
         ds_put_char(s, ',');
     }
 
@@ -1244,6 +1254,22 @@ match_format(const struct match *match, struct ds *s, int priority)
                       colors.param, colors.end, f->ct_nw_proto);
         format_be16_masked(s, "ct_tp_src", f->ct_tp_src, wc->masks.ct_tp_src);
         format_be16_masked(s, "ct_tp_dst", f->ct_tp_dst, wc->masks.ct_tp_dst);
+    }
+
+    if (wc->masks.packet_type) {
+        if (pt_ns_type_be(wc->masks.packet_type) == 0) {
+            ds_put_format(s, "packet_type=(%u,*),",
+                          pt_ns(f->packet_type));
+        } else if (pt_ns_type_be(wc->masks.packet_type) == OVS_BE16_MAX) {
+            ds_put_format(s, "packet_type=(%u,%#"PRIx16"),",
+                          pt_ns(f->packet_type),
+                          pt_ns_type(f->packet_type));
+        } else {
+            ds_put_format(s, "packet_type=(%u,%#"PRIx16"/%#"PRIx16"),",
+                          pt_ns(f->packet_type),
+                          pt_ns_type(f->packet_type),
+                          pt_ns_type(wc->masks.packet_type));
+        }
     }
 
     if (wc->masks.dl_type) {
@@ -1313,7 +1339,7 @@ match_format(const struct match *match, struct ds *s, int priority)
 
     if (wc->masks.in_port.ofp_port) {
         ds_put_format(s, "%sin_port=%s", colors.param, colors.end);
-        ofputil_format_port(f->in_port.ofp_port, s);
+        ofputil_format_port(f->in_port.ofp_port, port_map, s);
         ds_put_char(s, ',');
     }
     for (i = 0; i < FLOW_MAX_VLAN_HEADERS; i++) {
@@ -1358,8 +1384,10 @@ match_format(const struct match *match, struct ds *s, int priority)
                           ntohs(wc->masks.vlans[i].tci));
         }
     }
+
     format_eth_masked(s, "dl_src", f->dl_src, wc->masks.dl_src);
     format_eth_masked(s, "dl_dst", f->dl_dst, wc->masks.dl_dst);
+
     if (!skip_type && wc->masks.dl_type) {
         ds_put_format(s, "%sdl_type=%s0x%04"PRIx16",",
                       colors.param, colors.end, ntohs(f->dl_type));
@@ -1482,20 +1510,23 @@ match_format(const struct match *match, struct ds *s, int priority)
 }
 
 /* Converts 'match' to a string and returns the string.  If 'priority' is
- * different from OFP_DEFAULT_PRIORITY, includes it in the string.  The caller
- * must free the string (with free()). */
+ * different from OFP_DEFAULT_PRIORITY, includes it in the string.  If
+ * 'port_map' is nonnull, uses it to translate port numbers to names in
+ * output.  The caller must free the string (with free()). */
 char *
-match_to_string(const struct match *match, int priority)
+match_to_string(const struct match *match,
+                const struct ofputil_port_map *port_map, int priority)
 {
     struct ds s = DS_EMPTY_INITIALIZER;
-    match_format(match, &s, priority);
+    match_format(match, port_map, &s, priority);
     return ds_steal_cstr(&s);
 }
 
 void
-match_print(const struct match *match)
+match_print(const struct match *match,
+            const struct ofputil_port_map *port_map)
 {
-    char *s = match_to_string(match, OFP_DEFAULT_PRIORITY);
+    char *s = match_to_string(match, port_map, OFP_DEFAULT_PRIORITY);
     puts(s);
     free(s);
 }
@@ -1586,27 +1617,32 @@ minimatch_matches_flow(const struct minimatch *match,
 }
 
 /* Appends a string representation of 'match' to 's'.  If 'priority' is
- * different from OFP_DEFAULT_PRIORITY, includes it in 's'. */
+ * different from OFP_DEFAULT_PRIORITY, includes it in 's'.  If 'port_map' is
+ * nonnull, uses it to translate port numbers to names in output. */
 void
 minimatch_format(const struct minimatch *match,
-                 const struct tun_table *tun_table,struct ds *s, int priority)
+                 const struct tun_table *tun_table,
+                 const struct ofputil_port_map *port_map,
+                 struct ds *s, int priority)
 {
     struct match megamatch;
 
     minimatch_expand(match, &megamatch);
     megamatch.flow.tunnel.metadata.tab = tun_table;
 
-    match_format(&megamatch, s, priority);
+    match_format(&megamatch, port_map, s, priority);
 }
 
 /* Converts 'match' to a string and returns the string.  If 'priority' is
  * different from OFP_DEFAULT_PRIORITY, includes it in the string.  The caller
- * must free the string (with free()). */
+ * must free the string (with free()).  If 'port_map' is nonnull, uses it to
+ * translate port numbers to names in output. */
 char *
-minimatch_to_string(const struct minimatch *match, int priority)
+minimatch_to_string(const struct minimatch *match,
+                    const struct ofputil_port_map *port_map, int priority)
 {
     struct match megamatch;
 
     minimatch_expand(match, &megamatch);
-    return match_to_string(&megamatch, priority);
+    return match_to_string(&megamatch, port_map, priority);
 }

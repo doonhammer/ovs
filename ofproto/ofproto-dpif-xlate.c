@@ -165,6 +165,7 @@ struct xport {
 
     bool may_enable;                 /* May be enabled in bonds. */
     bool is_tunnel;                  /* Is a tunnel port. */
+    bool is_layer3;                  /* Is a layer 3 port. */
 
     struct cfm *cfm;                 /* CFM handle or null. */
     struct bfd *bfd;                 /* BFD handle or null. */
@@ -625,7 +626,7 @@ xlate_report_error(const struct xlate_ctx *ctx, const char *format, ...)
         oftrace_report(ctx->xin->trace, OFT_ERROR, ds_cstr(&s));
     } else {
         ds_put_cstr(&s, " while processing ");
-        flow_format(&s, &ctx->base_flow);
+        flow_format(&s, &ctx->base_flow, NULL);
         ds_put_format(&s, " on bridge %s", ctx->xbridge->name);
         VLOG_WARN("%s", ds_cstr(&s));
     }
@@ -672,7 +673,7 @@ xlate_report_actions(const struct xlate_ctx *ctx, enum oftrace_node_type type,
     if (OVS_UNLIKELY(ctx->xin->trace)) {
         struct ds s = DS_EMPTY_INITIALIZER;
         ds_put_format(&s, "%s: ", title);
-        ofpacts_format(ofpacts, ofpacts_len, &s);
+        ofpacts_format(ofpacts, ofpacts_len, NULL, &s);
         oftrace_report(ctx->xin->trace, type, ds_cstr(&s));
         ds_destroy(&s);
     }
@@ -693,7 +694,7 @@ xlate_report_action_set(const struct xlate_ctx *ctx, const char *verb)
         ofpacts_execute_action_set(&action_list, &ctx->action_set);
         if (action_list.size) {
             struct ds s = DS_EMPTY_INITIALIZER;
-            ofpacts_format(action_list.data, action_list.size, &s);
+            ofpacts_format(action_list.data, action_list.size, NULL, &s);
             xlate_report(ctx, OFT_DETAIL, "action set %s: %s",
                          verb, ds_cstr(&s));
             ds_destroy(&s);
@@ -732,7 +733,7 @@ xlate_report_table(const struct xlate_ctx *ctx, struct rule_dpif *rule,
     } else {
         minimatch_format(&rule->up.cr.match,
                          ofproto_get_tun_tab(&ctx->xin->ofproto->up),
-                         &s, OFP_DEFAULT_PRIORITY);
+                         NULL, &s, OFP_DEFAULT_PRIORITY);
         if (ds_last(&s) != ' ') {
             ds_put_cstr(&s, ", ");
         }
@@ -763,7 +764,7 @@ xlate_report_subfield(const struct xlate_ctx *ctx,
         if (sf->ofs == 0 && sf->n_bits >= sf->field->n_bits) {
             union mf_value value;
             mf_get_value(sf->field, &ctx->xin->flow, &value);
-            mf_format(sf->field, &value, NULL, &s);
+            mf_format(sf->field, &value, NULL, NULL, &s);
         } else {
             union mf_subvalue cst;
             mf_read_subfield(sf, &ctx->xin->flow, &cst);
@@ -904,6 +905,7 @@ xlate_xport_set(struct xport *xport, odp_port_t odp_port,
     xport->state = state;
     xport->stp_port_no = stp_port_no;
     xport->is_tunnel = is_tunnel;
+    xport->is_layer3 = netdev_vport_is_layer3(netdev);
     xport->may_enable = may_enable;
     xport->odp_port = odp_port;
 
@@ -2689,7 +2691,7 @@ xlate_normal(struct xlate_ctx *ctx)
 
     /* Learn source MAC. */
     bool is_grat_arp = is_gratuitous_arp(flow, wc);
-    if (ctx->xin->allow_side_effects) {
+    if (ctx->xin->allow_side_effects && !in_port->is_layer3) {
         update_learning_table(ctx, in_xbundle, flow->dl_src, vlan,
                               is_grat_arp);
     }
@@ -3211,6 +3213,12 @@ build_tunnel_send(struct xlate_ctx *ctx, const struct xport *xport,
     }
     tnl_push_data.tnl_port = odp_to_u32(tunnel_odp_port);
     tnl_push_data.out_port = odp_to_u32(out_dev->odp_port);
+
+    /* After tunnel header has been added, packet_type of flow and base_flow
+     * need to be set to PT_ETH. */
+    ctx->xin->flow.packet_type = htonl(PT_ETH);
+    ctx->base_flow.packet_type = htonl(PT_ETH);
+
     odp_put_tnl_push_action(ctx->odp_actions, &tnl_push_data);
     return 0;
 }
@@ -3341,6 +3349,17 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
     if (!check_output_prerequisites(ctx, xport, flow, check_stp)) {
         return;
+    }
+
+    if (flow->packet_type == htonl(PT_ETH) && xport->is_layer3) {
+        /* Ethernet packet to L3 outport -> pop ethernet header. */
+        flow->packet_type = PACKET_TYPE_BE(OFPHTN_ETHERTYPE,
+                                           ntohs(flow->dl_type));
+    } else if (flow->packet_type != htonl(PT_ETH) && !xport->is_layer3) {
+        /* L2 outport and non-ethernet packet_type -> add dummy eth header. */
+        flow->packet_type = htonl(PT_ETH);
+        flow->dl_dst = eth_addr_zero;
+        flow->dl_src = eth_addr_zero;
     }
 
     if (xport->peer) {
@@ -4232,6 +4251,12 @@ execute_controller_action(struct xlate_ctx *ctx, int len,
         dp_packet_delete(packet);
         return;
     }
+
+    if (packet->packet_type != htonl(PT_ETH)) {
+        dp_packet_delete(packet);
+        return;
+    }
+
     /* A packet sent by an action in a table-miss rule is considered an
      * explicit table miss.  OpenFlow before 1.3 doesn't have that concept so
      * it will get translated back to OFPR_ACTION for those versions. */
@@ -4620,7 +4645,7 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
     case OFPP_ALL:
     case OFPP_CONTROLLER:
     case OFPP_NONE:
-        ofputil_port_to_string(port, name, sizeof name);
+        ofputil_port_to_string(port, NULL, name, sizeof name);
         xlate_report(ctx, OFT_WARN,
                      "output_trunc does not support port: %s", name);
         break;
@@ -4634,7 +4659,7 @@ xlate_output_trunc_action(struct xlate_ctx *ctx,
                 /* Since truncate happens at its following output action, if
                  * the output port is a patch port, the behavior is somehow
                  * unpredictable.  For simplicity, disallow this case. */
-                ofputil_port_to_string(port, name, sizeof name);
+                ofputil_port_to_string(port, NULL, name, sizeof name);
                 xlate_report_error(ctx, "output_trunc does not support "
                                    "patch port %s", name);
                 break;
@@ -4767,7 +4792,7 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
         if (OVS_UNLIKELY(ctx->xin->trace)) {
             struct ds s = DS_EMPTY_INITIALIZER;
             ds_put_format(&s, "table=%"PRIu8" ", fm.table_id);
-            match_format(&fm.match, &s, OFP_DEFAULT_PRIORITY);
+            match_format(&fm.match, NULL, &s, OFP_DEFAULT_PRIORITY);
             ds_chomp(&s, ' ');
             ds_put_format(&s, " priority=%d", fm.priority);
             if (fm.new_cookie) {
@@ -4783,7 +4808,7 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
                 ds_put_cstr(&s, " send_flow_rem");
             }
             ds_put_cstr(&s, " actions=");
-            ofpacts_format(fm.ofpacts, fm.ofpacts_len, &s);
+            ofpacts_format(fm.ofpacts, fm.ofpacts_len, NULL, &s);
             xlate_report(ctx, OFT_DETAIL, "%s", ds_cstr(&s));
             ds_destroy(&s);
         }
@@ -5564,7 +5589,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         if (OVS_UNLIKELY(ctx->xin->trace)) {
             struct ds s = DS_EMPTY_INITIALIZER;
-            ofpacts_format(a, OFPACT_ALIGN(a->len), &s);
+            ofpacts_format(a, OFPACT_ALIGN(a->len), NULL, &s);
             xlate_report(ctx, OFT_ACTION, "%s", ds_cstr(&s));
             ds_destroy(&s);
         }
@@ -6129,6 +6154,13 @@ xlate_wc_finish(struct xlate_ctx *ctx)
      * use non-header fields as part of the cache. */
     flow_wildcards_clear_non_packet_fields(ctx->wc);
 
+    /* Wildcard ethernet addresses if the original packet type was not
+     * Ethernet. */
+    if (ctx->xin->upcall_flow->packet_type != htonl(PT_ETH)) {
+        ctx->wc->masks.dl_dst = eth_addr_zero;
+        ctx->wc->masks.dl_src = eth_addr_zero;
+    }
+
     /* ICMPv4 and ICMPv6 have 8-bit "type" and "code" fields.  struct flow
      * uses the low 8 bits of the 16-bit tp_src and tp_dst members to
      * represent these fields.  The datapath interface, on the other hand,
@@ -6354,6 +6386,21 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     }
     ctx.wc->masks.tunnel.metadata.tab = flow->tunnel.metadata.tab;
 
+    /* Get the proximate input port of the packet.  (If xin->frozen_state,
+     * flow->in_port is the ultimate input port of the packet.) */
+    struct xport *in_port = get_ofp_port(xbridge,
+                                         ctx.base_flow.in_port.ofp_port);
+
+    if (flow->packet_type != htonl(PT_ETH) && in_port && in_port->is_layer3 &&
+        ctx.table_id == 0) {
+        /* Add dummy Ethernet header to non-L2 packet if it's coming from a
+         * L3 port. So all packets will be L2 packets for lookup.
+         * The dl_type has already been set from the packet_type. */
+        flow->packet_type = htonl(PT_ETH);
+        flow->dl_src = eth_addr_zero;
+        flow->dl_dst = eth_addr_zero;
+    }
+
     if (!xin->ofpacts && !ctx.rule) {
         ctx.rule = rule_dpif_lookup_from_table(
             ctx.xbridge->ofproto, ctx.xin->tables_version, flow, ctx.wc,
@@ -6372,11 +6419,6 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         xlate_report_table(&ctx, ctx.rule, ctx.table_id);
     }
-
-    /* Get the proximate input port of the packet.  (If xin->frozen_state,
-     * flow->in_port is the ultimate input port of the packet.) */
-    struct xport *in_port = get_ofp_port(xbridge,
-                                         ctx.base_flow.in_port.ofp_port);
 
     /* Tunnel stats only for not-thawed packets. */
     if (!xin->frozen_state && in_port && in_port->is_tunnel) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Nicira, Inc.
+ * Copyright (c) 2015, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,7 +89,7 @@ ct_thread_main(void *aux_)
     ovs_barrier_block(&barrier);
     for (i = 0; i < n_pkts; i += batch_size) {
         conntrack_execute(&ct, pkt_batch, dl_type, false, true, 0, NULL, NULL,
-                          NULL);
+                          NULL, NULL);
     }
     ovs_barrier_block(&barrier);
     destroy_packets(pkt_batch);
@@ -171,15 +171,16 @@ pcap_batch_execute_conntrack(struct conntrack *ct,
         }
 
         if (flow.dl_type != dl_type) {
-            conntrack_execute(ct, &new_batch, dl_type, false, true, 0, NULL,
-                              NULL, NULL);
+            conntrack_execute(ct, &new_batch, dl_type, false, true, 0,
+                              NULL, NULL, NULL, NULL);
             dp_packet_batch_init(&new_batch);
         }
         new_batch.packets[new_batch.count++] = packet;;
     }
 
     if (!dp_packet_batch_is_empty(&new_batch)) {
-        conntrack_execute(ct, &new_batch, dl_type, false, true, 0, NULL, NULL, NULL);
+        conntrack_execute(ct, &new_batch, dl_type, false, true, 0, NULL, NULL,
+                          NULL, NULL);
     }
 
 }
@@ -237,6 +238,7 @@ test_pcap(struct ovs_cmdl_context *ctx)
         dp_packet_delete_batch(batch, true);
     }
     conntrack_destroy(&ct);
+    fclose(pcap);
 }
 
 static const struct ovs_cmdl_command commands[] = {

@@ -1,5 +1,8 @@
 Post-v2.7.0
 ---------------------
+   - ovs-ofctl can now accept and display port names in place of numbers.  By
+     default it always accepts names and in interactive use it displays them;
+     use --names or --no-names to override.  See ovs-ofctl(8) for details.
    - Tunnels:
      * Added support to set packet mark for tunnel endpoint using
        `egress_pkt_mark` OVSDB option.
@@ -20,6 +23,8 @@ Post-v2.7.0
      "dot1q-tunnel" port VLAN mode.
    - In ovn-vsctl and vtep-ctl, record UUIDs in commands may now be
      abbreviated to 4 hex digits.
+   - Userspace Datapath:
+     * Added NAT support for userspace datapath.
    - OVN:
      * New built-in DNS support.
      * IPAM for IPv4 can now exclude user-defined addresses from assignment.
@@ -42,9 +47,16 @@ Post-v2.7.0
      * Bundles now support hashing by just nw_src or nw_dst.
      * The "learn" action now supports a "limit" option (see ovs-ofctl(8)).
      * The port status bit OFPPS_LIVE now reflects link aliveness.
+     * OpenFlow 1.5 packet-out is now supported.
    - Fedora Packaging:
      * OVN services are no longer restarted automatically after upgrade.
    - Add --cleanup option to command 'ovs-appctl exit' (see ovs-vswitchd(8)).
+   - L3 tunneling:
+     * Add "layer3" options for tunnel ports that support non-Ethernet (L3)
+       payload (GRE, VXLAN-GPE).
+     * New vxlan tunnel extension "gpe" to support VXLAN-GPE tunnels.
+     * Transparently pop and push Ethernet headers at transmit/reception
+       of packets to/from L3 tunnels.
 
 v2.7.0 - 21 Feb 2017
 ---------------------
@@ -94,6 +106,7 @@ v2.7.0 - 21 Feb 2017
      * The "sample" action now supports "ingress" and "egress" options.
      * The "ct" action now supports the TFTP ALG where support is available.
      * New actions "clone" and "ct_clear".
+     * The "meter" action is now supported in the userspace datapath.
    - ovs-ofctl:
      * 'bundle' command now supports packet-out messages.
      * New syntax for 'ovs-ofctl packet-out' command, which uses the

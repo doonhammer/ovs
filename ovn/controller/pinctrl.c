@@ -183,10 +183,10 @@ pinctrl_handle_arp(const struct flow *ip_flow, const struct match *md,
         .packet = dp_packet_data(&packet),
         .packet_len = dp_packet_size(&packet),
         .buffer_id = UINT32_MAX,
-        .in_port = OFPP_CONTROLLER,
         .ofpacts = ofpacts.data,
         .ofpacts_len = ofpacts.size,
     };
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
     queue_msg(ofputil_encode_packet_out(&po, proto));
 
@@ -1000,11 +1000,11 @@ pinctrl_recv(const struct ofp_header *oh, enum ofptype type,
         set_switch_config(swconn, &config);
     } else if (type == OFPTYPE_PACKET_IN) {
         process_packet_in(oh, ctx);
-    } else if (type != OFPTYPE_ECHO_REPLY && type != OFPTYPE_BARRIER_REPLY) {
+    } else {
         if (VLOG_IS_DBG_ENABLED()) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
 
-            char *s = ofp_to_string(oh, ntohs(oh->length), 2);
+            char *s = ofp_to_string(oh, ntohs(oh->length), NULL, 2);
 
             VLOG_DBG_RL(&rl, "OpenFlow packet ignored: %s", s);
             free(s);
@@ -1391,10 +1391,10 @@ send_garp(struct garp_data *garp, long long int current_time)
         .packet = dp_packet_data(&packet),
         .packet_len = dp_packet_size(&packet),
         .buffer_id = UINT32_MAX,
-        .in_port = OFPP_CONTROLLER,
         .ofpacts = ofpacts.data,
         .ofpacts_len = ofpacts.size,
     };
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
     enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
     queue_msg(ofputil_encode_packet_out(&po, proto));
     dp_packet_uninit(&packet);
@@ -1790,10 +1790,10 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
         .packet = dp_packet_data(&packet),
         .packet_len = dp_packet_size(&packet),
         .buffer_id = UINT32_MAX,
-        .in_port = OFPP_CONTROLLER,
         .ofpacts = ofpacts.data,
         .ofpacts_len = ofpacts.size,
     };
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
 
     queue_msg(ofputil_encode_packet_out(&po, proto));
 

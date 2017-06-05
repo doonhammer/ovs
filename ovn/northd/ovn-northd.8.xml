@@ -547,8 +547,8 @@ output;
         </pre>
 
         <p>
-          These flows are omitted for logical ports (other than router ports)
-          that are down.
+          These flows are omitted for logical ports (other than router ports or
+          <code>localport</code> ports) that are down.
         </p>
       </li>
 
@@ -574,8 +574,8 @@ nd_na {
         </pre>
 
         <p>
-          These flows are omitted for logical ports (other than router ports)
-          that are down.
+          These flows are omitted for logical ports (other than router ports or
+          <code>localport</code> ports) that are down.
         </p>
       </li>
 

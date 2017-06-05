@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2009-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include "openvswitch/tun-metadata.h"
 
 struct ds;
+struct ofputil_port_map;
 
 /* A flow classification match.
  *
@@ -115,6 +116,7 @@ void match_set_ct_ipv6_dst(struct match *, const struct in6_addr *);
 void match_set_ct_ipv6_dst_masked(struct match *, const struct in6_addr *,
                                   const struct in6_addr *);
 
+void match_set_packet_type(struct match *, ovs_be32 packet_type);
 void match_set_skb_priority(struct match *, uint32_t skb_priority);
 void match_set_dl_type(struct match *, ovs_be16);
 void match_set_dl_src(struct match *, const struct eth_addr );
@@ -186,9 +188,11 @@ uint32_t match_hash(const struct match *, uint32_t basis);
 void match_init_hidden_fields(struct match *);
 bool match_has_default_hidden_fields(const struct match *);
 
-void match_format(const struct match *, struct ds *, int priority);
-char *match_to_string(const struct match *, int priority);
-void match_print(const struct match *);
+void match_format(const struct match *, const struct ofputil_port_map *,
+                  struct ds *, int priority);
+char *match_to_string(const struct match *, const struct ofputil_port_map *,
+                      int priority);
+void match_print(const struct match *, const struct ofputil_port_map *);
 
 /* Compressed match. */
 
@@ -228,7 +232,9 @@ bool minimatch_equal(const struct minimatch *a, const struct minimatch *b);
 bool minimatch_matches_flow(const struct minimatch *, const struct flow *);
 
 void minimatch_format(const struct minimatch *, const struct tun_table *,
+                      const struct ofputil_port_map *,
                       struct ds *, int priority);
-char *minimatch_to_string(const struct minimatch *, int priority);
+char *minimatch_to_string(const struct minimatch *,
+                          const struct ofputil_port_map *, int priority);
 
 #endif /* match.h */
