@@ -28,6 +28,10 @@
 #include "openvswitch/packets.h"
 #include "openvswitch/util.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct ds;
 struct match;
 struct ofputil_port_map;
@@ -132,6 +136,11 @@ struct ofputil_tlv_table_mod;
  *         "oam" separated by "|".
  *
  *       TCP flags: See the description of tcp_flags in ovs-ofctl(8).
+ *
+ *       packet type: A pair of packet type namespace NS and NS_TYPE within
+ *       that namespace "(NS,NS_TYPE)". NS and NS_TYPE are formatted in
+ *       decimal or hexadecimal as and accept decimal and hexadecimal (with
+ *       0x prefix) at parsing.
  *
  *   Prerequisites:
  *
@@ -247,6 +256,20 @@ enum OVS_PACKED_ENUM mf_field_id {
      * OXM: none.
      */
     MFF_RECIRC_ID,
+
+    /* "packet_type".
+     *
+     * Define the packet type in OpenFlow 1.5+.
+     *
+     * Type: be32.
+     * Maskable: no.
+     * Formatting: packet type.
+     * Prerequisites: none.
+     * Access: read-only.
+     * NXM: none.
+     * OXM: OXM_OF_PACKET_TYPE(44) since OF1.5 and v2.8.
+     */
+    MFF_PACKET_TYPE,
 
     /* "conj_id".
      *
@@ -1716,6 +1739,100 @@ enum OVS_PACKED_ENUM mf_field_id {
      */
     MFF_ND_TLL,
 
+/* ## ---- ## */
+/* ## NSH  ## */
+/* ## ---- ## */
+
+    /* "nsh_flags".
+     *
+     * flags field in NSH base header.
+     *
+     * Type: u8.
+     * Maskable: bitwise.
+     * Formatting: decimal.
+     * Prerequisites: NSH.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_NSH_FLAGS(1) since OF1.3 and v2.8.
+     */
+    MFF_NSH_FLAGS,
+
+    /* "nsh_mdtype".
+     *
+     * mdtype field in NSH base header.
+     *
+     * Type: u8.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: NSH.
+     * Access: read-only.
+     * NXM: none.
+     * OXM: NXOXM_NSH_MDTYPE(2) since OF1.3 and v2.8.
+     */
+    MFF_NSH_MDTYPE,
+
+    /* "nsh_np".
+     *
+     * np (next protocol) field in NSH base header.
+     *
+     * Type: u8.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: NSH.
+     * Access: read-only.
+     * NXM: none.
+     * OXM: NXOXM_NSH_NP(3) since OF1.3 and v2.8.
+     */
+    MFF_NSH_NP,
+
+    /* "nsh_spi" (aka "nsp").
+     *
+     * spi (service path identifier) field in NSH base header.
+     *
+     * Type: be32 (low 24 bits).
+     * Maskable: no.
+     * Formatting: hexadecimal.
+     * Prerequisites: NSH.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_NSH_SPI(4) since OF1.3 and v2.8.
+     */
+    MFF_NSH_SPI,
+
+    /* "nsh_si" (aka "nsi").
+     *
+     * si (service index) field in NSH base header.
+     *
+     * Type: u8.
+     * Maskable: no.
+     * Formatting: decimal.
+     * Prerequisites: NSH.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_NSH_SI(5) since OF1.3 and v2.8.
+     */
+    MFF_NSH_SI,
+
+    /* "nsh_c<N>" (aka "nshc<N>").
+     *
+     * context fields in NSH context header.
+     *
+     * Type: be32.
+     * Maskable: bitwise.
+     * Formatting: hexadecimal.
+     * Prerequisites: NSH.
+     * Access: read/write.
+     * NXM: none.
+     * OXM: NXOXM_NSH_C1(6) since OF1.3 and v2.8.        <1>
+     * OXM: NXOXM_NSH_C2(7) since OF1.3 and v2.8.        <2>
+     * OXM: NXOXM_NSH_C3(8) since OF1.3 and v2.8.        <3>
+     * OXM: NXOXM_NSH_C4(9) since OF1.3 and v2.8.        <4>
+     */
+    MFF_NSH_C1,
+    MFF_NSH_C2,
+    MFF_NSH_C3,
+    MFF_NSH_C4,
+
     MFF_N_IDS
 };
 
@@ -1815,6 +1932,7 @@ enum OVS_PACKED_ENUM mf_prereqs {
     MFP_IPV4,
     MFP_IPV6,
     MFP_IP_ANY,
+    MFP_NSH,
 
     /* L2.5 requirements. */
     MFP_MPLS,
@@ -1860,6 +1978,7 @@ enum OVS_PACKED_ENUM mf_string {
     MFS_FRAG,                   /* no, yes, first, later, not_later */
     MFS_TNL_FLAGS,              /* FLOW_TNL_F_* flags */
     MFS_TCP_FLAGS,              /* TCP_* flags */
+    MFS_PACKET_TYPE,            /* "(NS,NS_TYPE)" */
 };
 
 struct mf_field {
@@ -2116,4 +2235,9 @@ void mf_format_subvalue(const union mf_subvalue *subvalue, struct ds *s);
 /* Field Arrays. */
 void field_array_set(enum mf_field_id id, const union mf_value *,
                      struct field_array *);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* meta-flow.h */

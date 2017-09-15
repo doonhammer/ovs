@@ -139,7 +139,7 @@ netdev_tnl_ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
  *
  * This function sets the IP header's ip_tot_len field (which should be zeroed
  * as part of 'header') and puts its value into '*ip_tot_size' as well.  Also
- * updates IP header checksum.
+ * updates IP header checksum, as well as the l3 and l4 offsets in 'packet'.
  *
  * Return pointer to the L4 header added to 'packet'. */
 void *
@@ -163,12 +163,14 @@ netdev_tnl_push_ip_header(struct dp_packet *packet,
         ip6 = netdev_tnl_ipv6_hdr(eth);
         *ip_tot_size -= IPV6_HEADER_LEN;
         ip6->ip6_plen = htons(*ip_tot_size);
+        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
         return ip6 + 1;
     } else {
         ip = netdev_tnl_ip_hdr(eth);
         ip->ip_tot_len = htons(*ip_tot_size);
         ip->ip_csum = recalc_csum16(ip->ip_csum, 0, ip->ip_tot_len);
         *ip_tot_size -= IP_HEADER_LEN;
+        packet->l4_ofs = dp_packet_size(packet) - *ip_tot_size;
         return ip + 1;
     }
 }
@@ -463,10 +465,13 @@ netdev_gre_build_header(const struct netdev *netdev,
 
     greh = netdev_tnl_ip_build_header(data, params, IPPROTO_GRE);
 
-    if (tnl_cfg->is_layer3) {
-        greh->protocol = params->flow->dl_type;
-    } else {
+    if (params->flow->packet_type == htonl(PT_ETH)) {
         greh->protocol = htons(ETH_TYPE_TEB);
+    } else if (pt_ns(params->flow->packet_type) == OFPHTN_ETHERTYPE) {
+        greh->protocol = pt_ns_type_be(params->flow->packet_type);
+    } else {
+        ovs_mutex_unlock(&dev->mutex);
+        return 1;
     }
     greh->flags = 0;
 
@@ -526,6 +531,9 @@ netdev_vxlan_pop_header(struct dp_packet *packet)
         case VXLAN_GPE_NP_IPV6:
             next_pt = PT_IPV6;
             break;
+        case VXLAN_GPE_NP_NSH:
+            next_pt = PT_NSH;
+            break;
         case VXLAN_GPE_NP_ETHERNET:
             next_pt = PT_ETH;
             break;
@@ -575,20 +583,27 @@ netdev_vxlan_build_header(const struct netdev *netdev,
         put_16aligned_be32(&vxh->vx_flags, htonl(VXLAN_FLAGS | VXLAN_HF_GPE));
         put_16aligned_be32(&vxh->vx_vni,
                            htonl(ntohll(params->flow->tunnel.tun_id) << 8));
-        if (tnl_cfg->is_layer3) {
-            switch (ntohs(params->flow->dl_type)) {
+        if (params->flow->packet_type == htonl(PT_ETH)) {
+            vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_ETHERNET;
+        } else if (pt_ns(params->flow->packet_type) == OFPHTN_ETHERTYPE) {
+            switch (pt_ns_type(params->flow->packet_type)) {
             case ETH_TYPE_IP:
                 vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_IPV4;
                 break;
             case ETH_TYPE_IPV6:
                 vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_IPV6;
                 break;
+            case ETH_TYPE_NSH:
+                vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_NSH;
+                break;
             case ETH_TYPE_TEB:
                 vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_ETHERNET;
                 break;
+            default:
+                goto drop;
             }
         } else {
-            vxh->vx_gpe.next_protocol = VXLAN_GPE_NP_ETHERNET;
+            goto drop;
         }
     } else {
         put_16aligned_be32(&vxh->vx_flags, htonl(VXLAN_FLAGS));
@@ -600,6 +615,10 @@ netdev_vxlan_build_header(const struct netdev *netdev,
     data->header_len += sizeof *vxh;
     data->tnl_type = OVS_VPORT_TYPE_VXLAN;
     return 0;
+
+drop:
+    ovs_mutex_unlock(&dev->mutex);
+    return 1;
 }
 
 struct dp_packet *

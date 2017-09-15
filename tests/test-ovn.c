@@ -202,10 +202,12 @@ create_addr_sets(struct shash *addr_sets)
     static const char *const addrs3[] = {
         "00:00:00:00:00:01", "00:00:00:00:00:02", "00:00:00:00:00:03",
     };
+    static const char *const addrs4[] = { NULL };
 
     expr_addr_sets_add(addr_sets, "set1", addrs1, 3);
     expr_addr_sets_add(addr_sets, "set2", addrs2, 3);
     expr_addr_sets_add(addr_sets, "set3", addrs3, 3);
+    expr_addr_sets_add(addr_sets, "set4", addrs4, 0);
 }
 
 static bool
@@ -373,7 +375,6 @@ test_evaluate_expr(struct ovs_cmdl_context *ctx)
     ds_init(&input);
     while (!ds_get_test_line(&input, stdin)) {
         struct expr *expr;
-        char *error;
 
         expr = expr_parse_string(ds_cstr(&input), &symtab, NULL, &error);
         if (!error) {
@@ -1164,7 +1165,7 @@ test_expr_to_packets(struct ovs_cmdl_context *ctx OVS_UNUSED)
         uint64_t packet_stub[128 / 8];
         struct dp_packet packet;
         dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
-        flow_compose(&packet, &uflow);
+        flow_compose(&packet, &uflow, 0);
 
         struct ds output = DS_EMPTY_INITIALIZER;
         const uint8_t *buf = dp_packet_data(&packet);
@@ -1489,6 +1490,7 @@ test_ovn_main(int argc, char *argv[])
 
         case 'h':
             usage();
+            /* fall through */
 
         case '?':
             exit(1);

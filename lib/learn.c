@@ -139,6 +139,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
         switch (spec->dst_type) {
         case NX_LEARN_DST_MATCH:
             mf_write_subfield(&spec->dst, &value, &fm->match);
+            match_add_ethernet_prereq(&fm->match, spec->dst.field);
             mf_vl_mff_set_tlv_bitmap(
                 spec->dst.field, &fm->match.flow.tunnel.metadata.present.map);
             break;
@@ -341,14 +342,13 @@ learn_parse_spec(const char *orig, char *name, char *value,
                                  name, value);
             }
 
-            char *error = learn_parse_load_immediate(&imm, dst_value + 2, value, spec,
-                                                     ofpacts);
+            error = learn_parse_load_immediate(&imm, dst_value + 2, value, spec,
+                                               ofpacts);
             if (error) {
                 return error;
             }
         } else {
             struct ofpact_reg_move move;
-            char *error;
 
             error = nxm_parse_reg_move(&move, value);
             if (error) {
@@ -362,7 +362,7 @@ learn_parse_spec(const char *orig, char *name, char *value,
             spec->dst = move.dst;
         }
     } else if (!strcmp(name, "output")) {
-        char *error = mf_parse_subfield(&spec->src, value);
+        error = mf_parse_subfield(&spec->src, value);
         if (error) {
             return error;
         }

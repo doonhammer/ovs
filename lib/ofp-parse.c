@@ -251,6 +251,7 @@ parse_field(const struct mf_field *mf, const char *s,
     error = mf_parse(mf, s, port_map, &value, &mask);
     if (!error) {
         *usable_protocols &= mf_set(mf, &value, &mask, match, &error);
+        match_add_ethernet_prereq(match, mf);
     }
     return error;
 }
@@ -297,6 +298,8 @@ parse_subfield(const char *name, const char *str_value, struct match *match,
         bitwise_copy(&val, size, 0, &value, size, sf.ofs, sf.n_bits);
         bitwise_one (               &mask,  size, sf.ofs, sf.n_bits);
         *usable_protocols &= mf_set(field, &value, &mask, match, &error);
+
+        match_add_ethernet_prereq(match, sf.field);
     }
     return error;
 }
@@ -416,6 +419,9 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
             if (p->nw_proto) {
                 match_set_nw_proto(&fm->match, p->nw_proto);
             }
+            match_set_default_packet_type(&fm->match);
+        } else if (!strcmp(name, "eth")) {
+            match_set_packet_type(&fm->match, htonl(PT_ETH));
         } else if (fields & F_FLAGS && !strcmp(name, "send_flow_rem")) {
             fm->flags |= OFPUTIL_FF_SEND_FLOW_REM;
         } else if (fields & F_FLAGS && !strcmp(name, "check_overlap")) {
@@ -516,6 +522,12 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
         if (error) {
             return error;
         }
+    }
+    /* Copy ethertype to flow->dl_type for matches on packet_type
+     * (OFPHTN_ETHERTYPE, ethertype). */
+    if (fm->match.wc.masks.packet_type == OVS_BE32_MAX &&
+            pt_ns(fm->match.flow.packet_type) == OFPHTN_ETHERTYPE) {
+        fm->match.flow.dl_type = pt_ns_type_be(fm->match.flow.packet_type);
     }
     /* Check for usable protocol interdependencies between match fields. */
     if (fm->match.flow.dl_type == htons(ETH_TYPE_IPV6)) {
@@ -655,6 +667,19 @@ parse_ofp_packet_out_str__(struct ofputil_packet_out *po, char *string,
                 goto out;
             }
             match_set_in_port(&po->flow_metadata, in_port);
+        } else if (!strcmp(name, "packet_type")) {
+            char *ns = value;
+            char *ns_type = strstr(value, ",");
+            if (ns_type) {
+                ovs_be32 packet_type;
+                *ns_type = '\0';
+                packet_type = PACKET_TYPE_BE(strtoul(ns, NULL, 0),
+                                             strtoul(++ns_type, NULL, 0));
+                match_set_packet_type(&po->flow_metadata, packet_type);
+            } else {
+                error = xasprintf("%s(%s) can't be interpreted", name, value);
+                goto out;
+            }
         } else if (!strcmp(name, "packet")) {
             const char *error_msg = eth_from_hex(value, &packet);
             if (error_msg) {
@@ -710,7 +735,9 @@ out:
  * switch.  Returns the set of usable protocols in '*usable_protocols'.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
- * error.  The caller is responsible for freeing the returned string. */
+ * error.  The caller is responsible for freeing the returned string.
+ * If successful, both 'po->ofpacts' and 'po->packet' must be free()d by
+ * the caller. */
 char * OVS_WARN_UNUSED_RESULT
 parse_ofp_packet_out_str(struct ofputil_packet_out *po, const char *str_,
                          const struct ofputil_port_map *port_map,
@@ -729,6 +756,8 @@ parse_ofp_packet_out_str(struct ofputil_packet_out *po, const char *str_,
     return error;
 }
 
+/* Parse a string representation of a meter modification message to '*mm'.
+ * If successful, 'mm->meter.bands' must be free()d by the caller. */
 static char * OVS_WARN_UNUSED_RESULT
 parse_ofp_meter_mod_str__(struct ofputil_meter_mod *mm, char *string,
                           struct ofpbuf *bands, int command,
@@ -770,6 +799,9 @@ parse_ofp_meter_mod_str__(struct ofputil_meter_mod *mm, char *string,
     mm->command = command;
     mm->meter.meter_id = 0;
     mm->meter.flags = 0;
+    mm->meter.n_bands = 0;
+    mm->meter.bands = NULL;
+
     if (fields & F_BANDS) {
         band_str = strstr(string, "band");
         if (!band_str) {
@@ -920,9 +952,6 @@ parse_ofp_meter_mod_str__(struct ofputil_meter_mod *mm, char *string,
                 }
             }
         }
-    } else {
-        mm->meter.n_bands = 0;
-        mm->meter.bands = NULL;
     }
 
     return NULL;
@@ -932,7 +961,8 @@ parse_ofp_meter_mod_str__(struct ofputil_meter_mod *mm, char *string,
  * page) into 'mm' for sending the specified meter_mod 'command' to a switch.
  *
  * Returns NULL if successful, otherwise a malloc()'d string describing the
- * error.  The caller is responsible for freeing the returned string. */
+ * error.  The caller is responsible for freeing the returned string.
+ * If successful, 'mm->meter.bands' must be free()d by the caller. */
 char * OVS_WARN_UNUSED_RESULT
 parse_ofp_meter_mod_str(struct ofputil_meter_mod *mm, const char *str_,
                         int command, enum ofputil_protocol *usable_protocols)

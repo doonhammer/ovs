@@ -29,6 +29,7 @@ struct ofp10_match;
 struct ofp_flow_mod;
 struct ofp_header;
 struct ofputil_flow_stats;
+struct ofputil_port_map;
 struct ofputil_table_features;
 struct ofputil_table_stats;
 struct dp_packet;
@@ -61,7 +62,7 @@ void ofp_print_table_features(
     const struct ofputil_table_stats *prev_stats);
 
 void ofp_print_flow_stats(struct ds *, const struct ofputil_flow_stats *,
-                          const struct ofputil_port_map *);
+                          const struct ofputil_port_map *, bool show_stats);
 
 #ifdef  __cplusplus
 }

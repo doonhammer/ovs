@@ -35,13 +35,13 @@
 
 #include <stdint.h>
 
+struct chassis_index;
 struct controller_ctx;
 struct group_table;
 struct hmap;
-struct lport_index;
-struct mcgroup_index;
 struct sbrec_chassis;
 struct simap;
+struct sset;
 struct uuid;
 
 /* OpenFlow table numbers.
@@ -64,12 +64,12 @@ struct uuid;
 void lflow_init(void);
 void lflow_run(struct controller_ctx *,
                const struct sbrec_chassis *chassis,
-               const struct lport_index *,
-               const struct mcgroup_index *,
+               const struct chassis_index *,
                const struct hmap *local_datapaths,
                struct group_table *group_table,
                const struct shash *addr_sets,
-               struct hmap *flow_table);
+               struct hmap *flow_table,
+               struct sset *active_tunnels);
 void lflow_destroy(void);
 
 #endif /* ovn/lflow.h */

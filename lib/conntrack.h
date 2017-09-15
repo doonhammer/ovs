@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,7 +95,8 @@ int conntrack_execute(struct conntrack *, struct dp_packet_batch *,
                       uint16_t zone, const uint32_t *setmark,
                       const struct ovs_key_ct_labels *setlabel,
                       const char *helper,
-                      const struct nat_action_info_t *nat_action_info);
+                      const struct nat_action_info_t *nat_action_info,
+                      long long now);
 
 struct conntrack_dump {
     struct conntrack *ct;
@@ -108,7 +109,7 @@ struct conntrack_dump {
 struct ct_dpif_entry;
 
 int conntrack_dump_start(struct conntrack *, struct conntrack_dump *,
-                         const uint16_t *pzone);
+                         const uint16_t *pzone, int *);
 int conntrack_dump_next(struct conntrack_dump *, struct ct_dpif_entry *);
 int conntrack_dump_done(struct conntrack_dump *);
 
@@ -267,11 +268,19 @@ struct conntrack {
     /* The following resources are referenced during nat connection
      * creation and deletion. */
     struct hmap nat_conn_keys OVS_GUARDED;
+    /* Hash table for alg expectations. Expectations are created
+     * by control connections to help create data connections. */
+    struct hmap alg_expectations OVS_GUARDED;
+    /* Expiry list for alg expectations. */
+    struct ovs_list alg_exp_list OVS_GUARDED;
     /* This lock is used during NAT connection creation and deletion;
      * it is taken after a bucket lock and given back before that
      * bucket unlock.
+     * This lock is similarly used to guard alg_expectations and
+     * alg_exp_list. If a bucket lock is also held during the normal
+     * code flow, then is must be taken first first and released last.
      */
-    struct ct_rwlock nat_resources_lock;
+    struct ct_rwlock resources_lock;
 
 };
 

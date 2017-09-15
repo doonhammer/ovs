@@ -33,6 +33,7 @@ struct ovsdb_idl;
 struct ovsrec_bridge;
 struct simap;
 struct sset;
+struct chassis_index;
 
 /* OVN Geneve option information.
  *
@@ -45,8 +46,10 @@ void physical_register_ovs_idl(struct ovsdb_idl *);
 void physical_run(struct controller_ctx *, enum mf_field_id mff_ovn_geneve,
                   const struct ovsrec_bridge *br_int,
                   const struct sbrec_chassis *chassis,
-                  const struct simap *ct_zones, struct lport_index *,
+                  const struct simap *ct_zones,
                   struct hmap *flow_table, struct hmap *local_datapaths,
-                  const struct sset *local_lports);
+                  const struct sset *local_lports,
+                  struct chassis_index *chassis_index,
+                  struct sset *active_tunnels);
 
 #endif /* ovn/physical.h */

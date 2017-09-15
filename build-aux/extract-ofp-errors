@@ -14,7 +14,7 @@ version_map = {"1.0": 0x01,
                "1.4": 0x05,
                "1.5": 0x06,
                "1.6": 0x07}
-version_reverse_map = dict((v, k) for (k, v) in version_map.iteritems())
+version_reverse_map = dict((v, k) for (k, v) in version_map.items())
 
 token = None
 line = ""
@@ -426,7 +426,7 @@ static const struct ofperr_domain %s = {
                 vendor, type_, code = map[enum]
                 if code == None:
                     code = -1
-                print "        { %#8x, %2d, %3d }, /* %s */" % (vendor, type_, code, enum)
+                print ("        { %#8x, %2d, %3d }, /* %s */" % (vendor, type_, code, enum))
             else:
                 print ("        {       -1, -1,  -1 }, /* %s */" % enum)
         print ("""\

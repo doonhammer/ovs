@@ -16,6 +16,8 @@
 
 #include <config.h>
 
+#include "openvswitch/ofp-print.h"
+
 #include <errno.h>
 #include <inttypes.h>
 #include <sys/types.h>
@@ -43,7 +45,6 @@
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-msgs.h"
-#include "openvswitch/ofp-print.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/type-props.h"
@@ -122,7 +123,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
 {
     char reasonbuf[OFPUTIL_PACKET_IN_REASON_BUFSIZE];
     struct ofputil_packet_in_private pin;
-    const struct ofputil_packet_in *public = &pin.public;
+    const struct ofputil_packet_in *public = &pin.base;
     uint32_t buffer_id;
     size_t total_len;
     enum ofperr error;
@@ -168,7 +169,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
 
     if (public->userdata_len) {
         ds_put_cstr(string, " userdata=");
-        format_hex_arg(string, pin.public.userdata, pin.public.userdata_len);
+        format_hex_arg(string, pin.base.userdata, pin.base.userdata_len);
         ds_put_char(string, '\n');
     }
 
@@ -218,10 +219,9 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
     }
 
     if (verbosity > 0) {
-        /* Packet In can only carry Ethernet packets. */
-        char *packet = ofp_packet_to_string(public->packet,
-                                            public->packet_len,
-                                            htonl(PT_ETH));
+        char *packet = ofp_packet_to_string(
+            public->packet, public->packet_len,
+            public->flow_metadata.flow.packet_type);
         ds_put_cstr(string, packet);
         free(packet);
     }
@@ -257,9 +257,9 @@ ofp_print_packet_out(struct ds *string, const struct ofp_header *oh,
     if (po.buffer_id == UINT32_MAX) {
         ds_put_format(string, " data_len=%"PRIuSIZE, po.packet_len);
         if (verbosity > 0 && po.packet_len > 0) {
-            /* Packet Out can only carry Ethernet packets. */
+            ovs_be32 po_packet_type = po.flow_metadata.flow.packet_type;
             char *packet = ofp_packet_to_string(po.packet, po.packet_len,
-                                                htonl(PT_ETH));
+                                                po_packet_type);
             ds_put_char(string, '\n');
             ds_put_cstr(string, packet);
             free(packet);
@@ -1682,21 +1682,34 @@ ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh,
     match_format(&fsr.match, port_map, string, OFP_DEFAULT_PRIORITY);
 }
 
+/* Appends a textual form of 'fs' to 'string', translating port numbers to
+ * names using 'port_map' (if provided).  If 'show_stats' is true, the output
+ * includes the flow duration, packet and byte counts, and its idle and hard
+ * ages, otherwise they are omitted. */
 void
 ofp_print_flow_stats(struct ds *string, const struct ofputil_flow_stats *fs,
-                     const struct ofputil_port_map *port_map)
+                     const struct ofputil_port_map *port_map, bool show_stats)
 {
-    ds_put_format(string, " %scookie=%s0x%"PRIx64", %sduration=%s",
-                  colors.param, colors.end, ntohll(fs->cookie),
-                  colors.param, colors.end);
+    if (show_stats || fs->cookie) {
+        ds_put_format(string, "%scookie=%s0x%"PRIx64", ",
+                      colors.param, colors.end, ntohll(fs->cookie));
+    }
+    if (show_stats) {
+        ds_put_format(string, "%sduration=%s", colors.param, colors.end);
+        ofp_print_duration(string, fs->duration_sec, fs->duration_nsec);
+        ds_put_cstr(string, ", ");
+    }
 
-    ofp_print_duration(string, fs->duration_sec, fs->duration_nsec);
-    ds_put_format(string, ", %stable=%s%"PRIu8", ",
-                  colors.special, colors.end, fs->table_id);
-    ds_put_format(string, "%sn_packets=%s%"PRIu64", ",
-                  colors.param, colors.end, fs->packet_count);
-    ds_put_format(string, "%sn_bytes=%s%"PRIu64", ",
-                  colors.param, colors.end, fs->byte_count);
+    if (show_stats || fs->table_id) {
+        ds_put_format(string, "%stable=%s%"PRIu8", ",
+                      colors.special, colors.end, fs->table_id);
+    }
+    if (show_stats) {
+        ds_put_format(string, "%sn_packets=%s%"PRIu64", ",
+                      colors.param, colors.end, fs->packet_count);
+        ds_put_format(string, "%sn_bytes=%s%"PRIu64", ",
+                      colors.param, colors.end, fs->byte_count);
+    }
     if (fs->idle_timeout != OFP_FLOW_PERMANENT) {
         ds_put_format(string, "%sidle_timeout=%s%"PRIu16", ",
                       colors.param, colors.end, fs->idle_timeout);
@@ -1712,17 +1725,20 @@ ofp_print_flow_stats(struct ds *string, const struct ofputil_flow_stats *fs,
         ds_put_format(string, "%simportance=%s%"PRIu16", ",
                       colors.param, colors.end, fs->importance);
     }
-    if (fs->idle_age >= 0) {
+    if (show_stats && fs->idle_age >= 0) {
         ds_put_format(string, "%sidle_age=%s%d, ",
                       colors.param, colors.end, fs->idle_age);
     }
-    if (fs->hard_age >= 0 && fs->hard_age != fs->duration_sec) {
+    if (show_stats && fs->hard_age >= 0 && fs->hard_age != fs->duration_sec) {
         ds_put_format(string, "%shard_age=%s%d, ",
                       colors.param, colors.end, fs->hard_age);
     }
 
+    /* Print the match, followed by a space (but omit the space if the match
+     * was an empty string). */
+    size_t length = string->length;
     match_format(&fs->match, port_map, string, fs->priority);
-    if (string->string[string->length - 1] != ' ') {
+    if (string->length != length) {
         ds_put_char(string, ' ');
     }
 
@@ -1749,8 +1765,8 @@ ofp_print_flow_stats_reply(struct ds *string, const struct ofp_header *oh,
             }
             break;
         }
-        ds_put_char(string, '\n');
-        ofp_print_flow_stats(string, &fs, port_map);
+        ds_put_cstr(string, "\n ");
+        ofp_print_flow_stats(string, &fs, port_map, true);
      }
     ofpbuf_uninit(&ofpacts);
 }
@@ -2165,7 +2181,8 @@ ofp_print_role_status_message(struct ds *string, const struct ofp_header *oh)
         break;
     case OFPCRR_N_REASONS:
     default:
-        OVS_NOT_REACHED();
+        ds_put_cstr(string, "(unknown)");
+        break;
     }
 }
 
@@ -2328,12 +2345,12 @@ ofp_async_config_reason_to_string(uint32_t reason,
 #define OFP_ASYNC_CONFIG_REASON_BUFSIZE (INT_STRLEN(int) + 1)
 static void
 ofp_print_set_async_config(struct ds *string, const struct ofp_header *oh,
-                           enum ofptype type)
+                           enum ofptype ofptype)
 {
     struct ofputil_async_cfg basis = OFPUTIL_ASYNC_CFG_INIT;
     struct ofputil_async_cfg ac;
 
-    bool is_reply = type == OFPTYPE_GET_ASYNC_REPLY;
+    bool is_reply = ofptype == OFPTYPE_GET_ASYNC_REPLY;
     enum ofperr error = ofputil_decode_set_async_config(oh, is_reply,
                                                         &basis, &ac);
     if (error) {

@@ -207,6 +207,7 @@ ipv6,actions=ct(commit,nat(src=fe80::20c:29ff:fe88:a18b,random))
 ipv6,actions=ct(commit,nat(src=fe80::20c:29ff:fe88:1-fe80::20c:29ff:fe88:a18b,random))
 ipv6,actions=ct(commit,nat(src=[fe80::20c:29ff:fe88:1]-[fe80::20c:29ff:fe88:a18b]:255-4096,random))
 tcp,actions=ct(commit,nat(src=10.1.1.240-10.1.1.255),alg=ftp)
+actions=in_port,output:in_port
 ]])
 
 AT_CHECK([ovs-ofctl parse-flows flows.txt
@@ -240,6 +241,7 @@ OFPT_FLOW_MOD: ADD ipv6 actions=ct(commit,nat(src=fe80::20c:29ff:fe88:a18b,rando
 OFPT_FLOW_MOD: ADD ipv6 actions=ct(commit,nat(src=fe80::20c:29ff:fe88:1-fe80::20c:29ff:fe88:a18b,random))
 OFPT_FLOW_MOD: ADD ipv6 actions=ct(commit,nat(src=[fe80::20c:29ff:fe88:1]-[fe80::20c:29ff:fe88:a18b]:255-4096,random))
 OFPT_FLOW_MOD: ADD tcp actions=ct(commit,nat(src=10.1.1.240-10.1.1.255),alg=ftp)
+OFPT_FLOW_MOD: ADD actions=IN_PORT,IN_PORT
 ]])
 AT_CLEANUP
 
@@ -2105,7 +2107,7 @@ OXM_OF_VLAN_VID_W(0123/1123)
 nx_pull_match() returned error OFPBMC_BAD_PREREQ
 OXM_OF_VLAN_VID(1123)
 OXM_OF_VLAN_VID(1123)
-<any>
+OXM_OF_PACKET_TYPE(00000000)
 OXM_OF_VLAN_VID_W(1103/1f0f)
 OXM_OF_VLAN_VID_W(1103/1f0f), OXM_OF_VLAN_PCP(01)
 OXM_OF_VLAN_VID_W(1000/1000)

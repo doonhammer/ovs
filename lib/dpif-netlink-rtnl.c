@@ -33,12 +33,13 @@ VLOG_DEFINE_THIS_MODULE(dpif_netlink_rtnl);
 #ifndef IFLA_VXLAN_MAX
 #define IFLA_VXLAN_MAX 0
 #endif
-#if IFLA_VXLAN_MAX < 25
+#if IFLA_VXLAN_MAX < 27
 #define IFLA_VXLAN_LEARNING 7
 #define IFLA_VXLAN_PORT 15
 #define IFLA_VXLAN_UDP_ZERO_CSUM6_RX 20
 #define IFLA_VXLAN_GBP 23
 #define IFLA_VXLAN_COLLECT_METADATA 25
+#define IFLA_VXLAN_GPE 27
 #endif
 
 #ifndef IFLA_GRE_MAX
@@ -69,6 +70,8 @@ static const struct nl_policy vxlan_policy[] = {
     [IFLA_VXLAN_LEARNING] = { .type = NL_A_U8 },
     [IFLA_VXLAN_UDP_ZERO_CSUM6_RX] = { .type = NL_A_U8 },
     [IFLA_VXLAN_PORT] = { .type = NL_A_U16 },
+    [IFLA_VXLAN_GBP] = { .type = NL_A_FLAG, .optional = true },
+    [IFLA_VXLAN_GPE] = { .type = NL_A_FLAG, .optional = true },
 };
 static const struct nl_policy gre_policy[] = {
     [IFLA_GRE_COLLECT_METADATA] = { .type = NL_A_FLAG },
@@ -80,13 +83,20 @@ static const struct nl_policy geneve_policy[] = {
 };
 
 static const char *
-vport_type_to_kind(enum ovs_vport_type type)
+vport_type_to_kind(enum ovs_vport_type type,
+                   const struct netdev_tunnel_config *tnl_cfg)
 {
     switch (type) {
     case OVS_VPORT_TYPE_VXLAN:
         return "vxlan";
     case OVS_VPORT_TYPE_GRE:
-        return "gretap";
+        if (tnl_cfg->pt_mode == NETDEV_PT_LEGACY_L3) {
+            return "gre";
+        } else if (tnl_cfg->pt_mode == NETDEV_PT_LEGACY_L2) {
+            return "gretap";
+        } else {
+            return NULL;
+        }
     case OVS_VPORT_TYPE_GENEVE:
         return "geneve";
     case OVS_VPORT_TYPE_NETDEV:
@@ -140,11 +150,9 @@ rtnl_policy_parse(const char *kind, struct ofpbuf *reply,
 {
     struct nlattr *linkinfo[ARRAY_SIZE(linkinfo_policy)];
     struct nlattr *rtlink[ARRAY_SIZE(rtlink_policy)];
-    struct ifinfomsg *ifmsg;
     int error = 0;
 
-    ifmsg = ofpbuf_at(reply, NLMSG_HDRLEN, sizeof *ifmsg);
-    if (!nl_policy_parse(reply, NLMSG_HDRLEN + sizeof *ifmsg,
+    if (!nl_policy_parse(reply, NLMSG_HDRLEN + sizeof(struct ifinfomsg),
                          rtlink_policy, rtlink, ARRAY_SIZE(rtlink_policy))
         || !nl_parse_nested(rtlink[IFLA_LINKINFO], linkinfo_policy,
                             linkinfo, ARRAY_SIZE(linkinfo_policy))
@@ -173,7 +181,9 @@ dpif_netlink_rtnl_vxlan_verify(const struct netdev_tunnel_config *tnl_cfg,
             || (tnl_cfg->dst_port
                 != nl_attr_get_be16(vxlan[IFLA_VXLAN_PORT]))
             || (tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GBP)
-                && !nl_attr_get_flag(vxlan[IFLA_VXLAN_GBP]))) {
+                && !nl_attr_get_flag(vxlan[IFLA_VXLAN_GBP]))
+            || (tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE)
+                && !nl_attr_get_flag(vxlan[IFLA_VXLAN_GPE]))) {
             err = EINVAL;
         }
     }
@@ -228,7 +238,7 @@ dpif_netlink_rtnl_verify(const struct netdev_tunnel_config *tnl_cfg,
     const char *kind;
     int err;
 
-    kind = vport_type_to_kind(type);
+    kind = vport_type_to_kind(type, tnl_cfg);
     if (!kind) {
         return EOPNOTSUPP;
     }
@@ -291,6 +301,9 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
         if (tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GBP)) {
             nl_msg_put_flag(&request, IFLA_VXLAN_GBP);
         }
+        if (tnl_cfg->exts & (1 << OVS_VXLAN_EXT_GPE)) {
+            nl_msg_put_flag(&request, IFLA_VXLAN_GPE);
+        }
         nl_msg_put_be16(&request, IFLA_VXLAN_PORT, tnl_cfg->dst_port);
         break;
     case OVS_VPORT_TYPE_GRE:
@@ -335,14 +348,14 @@ dpif_netlink_rtnl_port_create(struct netdev *netdev)
     int err;
 
     type = netdev_to_ovs_vport_type(netdev_get_type(netdev));
-    kind = vport_type_to_kind(type);
-    if (!kind) {
+    tnl_cfg = netdev_get_tunnel_config(netdev);
+    if (!tnl_cfg) {
         return EOPNOTSUPP;
     }
 
-    tnl_cfg = netdev_get_tunnel_config(netdev);
-    if (!tnl_cfg) {
-        return EINVAL;
+    kind = vport_type_to_kind(type, tnl_cfg);
+    if (!kind) {
+        return EOPNOTSUPP;
     }
 
     name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
