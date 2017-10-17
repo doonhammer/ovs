@@ -1,4 +1,4 @@
-/* Copyright (c) 2013, 2014, 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -146,6 +146,7 @@ BUILD_ASSERT_DECL(BFD_PACKET_LEN == sizeof(struct msg));
 #define VERS_SHIFT 5
 #define STATE_MASK 0xC0
 #define FLAGS_MASK 0x3f
+#define DEFAULT_MULT 3
 
 struct bfd {
     struct hmap_node node;        /* In 'all_bfds'. */
@@ -155,6 +156,7 @@ struct bfd {
 
     bool cpath_down;              /* Concatenated Path Down. */
     uint8_t mult;                 /* bfd.DetectMult. */
+    uint8_t rmt_mult;             /* Remote bfd.DetectMult. */
 
     struct netdev *netdev;
     uint64_t rx_packets;          /* Packets received by 'netdev'. */
@@ -370,7 +372,8 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
 
         bfd->diag = DIAG_NONE;
         bfd->min_tx = 1000;
-        bfd->mult = 3;
+        bfd->rmt_mult = 0;
+        bfd->mult = DEFAULT_MULT;
         ovs_refcount_init(&bfd->ref_cnt);
         bfd->netdev = netdev_ref(netdev);
         bfd->rx_packets = bfd_rx_packets(bfd);
@@ -388,6 +391,13 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
 
         bfd_status_changed(bfd);
     }
+
+    int old_mult = bfd->mult;
+    int new_mult = smap_get_int(cfg, "mult", DEFAULT_MULT);
+    if (new_mult < 1 || new_mult > 255) {
+        new_mult = DEFAULT_MULT;
+    }
+    bfd->mult = new_mult;
 
     bfd->oam = smap_get_bool(cfg, "oam", false);
 
@@ -458,6 +468,9 @@ bfd_configure(struct bfd *bfd, const char *name, const struct smap *cfg,
         } else {
             bfd->forwarding_if_rx_detect_time = 0;
         }
+    } else if (bfd->state == STATE_UP && bfd->forwarding_if_rx
+               && old_mult != new_mult) {
+        bfd_forwarding_if_rx_update(bfd);
     }
 
     if (need_poll) {
@@ -805,6 +818,12 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
         bfd->flags |= FLAG_FINAL;
     }
 
+    if (bfd->rmt_mult != msg->mult) {
+        VLOG_INFO("Interface %s remote mult value %d changed to %d",
+                   bfd->name, bfd->rmt_mult, msg->mult);
+        bfd->rmt_mult = msg->mult;
+    }
+
     rmt_min_rx = MAX(ntohl(msg->min_rx) / 1000, 1);
     if (bfd->rmt_min_rx != rmt_min_rx) {
         bfd->rmt_min_rx = rmt_min_rx;
@@ -815,7 +834,7 @@ bfd_process_packet(struct bfd *bfd, const struct flow *flow,
     }
 
     bfd->rmt_min_tx = MAX(ntohl(msg->min_tx) / 1000, 1);
-    bfd->detect_time = bfd_rx_interval(bfd) * bfd->mult + time_msec();
+    bfd->detect_time = bfd_rx_interval(bfd) * bfd->rmt_mult + time_msec();
 
     if (bfd->state == STATE_ADMIN_DOWN) {
         VLOG_DBG_RL(&rl, "Administratively down, dropping control message.");
@@ -976,7 +995,11 @@ static void
 bfd_set_next_tx(struct bfd *bfd) OVS_REQUIRES(mutex)
 {
     long long int interval = bfd_tx_interval(bfd);
-    interval -= interval * random_range(26) / 100;
+    if (bfd->mult == 1) {
+        interval -= interval * (10 + random_range(16)) / 100;
+    } else {
+        interval -= interval * random_range(26) / 100;
+    }
     bfd->next_tx = bfd->last_tx + interval;
 }
 
@@ -1061,7 +1084,7 @@ log_msg(enum vlog_level level, const struct msg *p, const char *message,
 
     ds_put_format(&ds,
                   "%s: %s."
-                  "\n\tvers:%"PRIu8" diag:\"%s\" state:%s mult:%"PRIu8
+                  "\n\tvers:%d diag:\"%s\" state:%s mult:%"PRIu8
                   " length:%"PRIu8
                   "\n\tflags: %s"
                   "\n\tmy_disc:0x%"PRIx32" your_disc:0x%"PRIx32
@@ -1239,11 +1262,11 @@ bfd_put_details(struct ds *ds, const struct bfd *bfd) OVS_REQUIRES(mutex)
     ds_put_format(ds, "\tTX Interval: Approx %lldms\n", bfd_tx_interval(bfd));
     ds_put_format(ds, "\tRX Interval: Approx %lldms\n", bfd_rx_interval(bfd));
     ds_put_format(ds, "\tDetect Time: now %+lldms\n",
-                  time_msec() - bfd->detect_time);
+                  bfd->detect_time - time_msec());
     ds_put_format(ds, "\tNext TX Time: now %+lldms\n",
-                  time_msec() - bfd->next_tx);
+                  bfd->next_tx -time_msec());
     ds_put_format(ds, "\tLast TX Time: now %+lldms\n",
-                  time_msec() - bfd->last_tx);
+                  bfd->last_tx - time_msec());
 
     ds_put_cstr(ds, "\n");
 
@@ -1268,6 +1291,7 @@ bfd_put_details(struct ds *ds, const struct bfd *bfd) OVS_REQUIRES(mutex)
                   bfd->rmt_min_tx);
     ds_put_format(ds, "\tRemote Minimum RX Interval: %lldms\n",
                   bfd->rmt_min_rx);
+    ds_put_format(ds, "\tRemote Detect Multiplier: %d\n", bfd->rmt_mult);
 }
 
 static void

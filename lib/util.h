@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,6 +50,12 @@ extern char *program_name;
  * Being wrong hurts performance but not correctness. */
 #define CACHE_LINE_SIZE 64
 BUILD_ASSERT_DECL(IS_POW2(CACHE_LINE_SIZE));
+
+/* Cacheline marking is typically done using zero-sized array.
+ * However MSVC doesn't like zero-sized array in struct/union.
+ * C4200: https://msdn.microsoft.com/en-us/library/79wf64bc.aspx
+ */
+typedef uint8_t OVS_CACHE_LINE_MARKER[1];
 
 static inline void
 ovs_prefetch_range(const void *start, size_t size)
@@ -112,6 +118,9 @@ extern "C" {
 const char *get_subprogram_name(void);
     void set_subprogram_name(const char *);
 
+unsigned int get_page_size(void);
+long long int get_boot_time(void);
+
 void ovs_print_version(uint8_t min_ofp, uint8_t max_ofp);
 
 OVS_NO_RETURN void out_of_memory(void);
@@ -134,6 +143,34 @@ void free_cacheline(void *);
 
 void ovs_strlcpy(char *dst, const char *src, size_t size);
 void ovs_strzcpy(char *dst, const char *src, size_t size);
+
+/* The C standards say that neither the 'dst' nor 'src' argument to
+ * memcpy() may be null, even if 'n' is zero.  This wrapper tolerates
+ * the null case. */
+static inline void
+nullable_memcpy(void *dst, const void *src, size_t n)
+{
+    if (n) {
+        memcpy(dst, src, n);
+    }
+}
+
+/* The C standards say that the 'dst' argument to memset may not be
+ * null, even if 'n' is zero.  This wrapper tolerates the null case. */
+static inline void
+nullable_memset(void *dst, int c, size_t n)
+{
+    if (n) {
+        memset(dst, c, n);
+    }
+}
+
+/* Copy string SRC to DST, but no more bytes than the shorter of DST or SRC.
+ * DST and SRC must both be char arrays, not pointers, and with GNU C, this
+ * raises a compiler error if either DST or SRC is a pointer instead of an
+ * array. */
+#define ovs_strlcpy_arrays(DST, SRC) \
+    ovs_strlcpy(DST, SRC, MIN(ARRAY_SIZE(DST), ARRAY_SIZE(SRC)))
 
 OVS_NO_RETURN void ovs_abort(int err_no, const char *format, ...)
     OVS_PRINTF_FORMAT(2, 3);
@@ -380,6 +417,7 @@ static inline ovs_be32 be32_prefix_mask(int plen)
 
 bool is_all_zeros(const void *, size_t);
 bool is_all_ones(const void *, size_t);
+bool is_all_byte(const void *, size_t, uint8_t byte);
 void bitwise_copy(const void *src, unsigned int src_len, unsigned int src_ofs,
                   void *dst, unsigned int dst_len, unsigned int dst_ofs,
                   unsigned int n_bits);

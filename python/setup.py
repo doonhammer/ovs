@@ -11,6 +11,7 @@
 # limitations under the License.
 
 from __future__ import print_function
+
 import sys
 
 from distutils.command.build_ext import build_ext
@@ -75,6 +76,7 @@ setup_args = dict(
         'Programming Language :: Python :: 2.7',
         'Programming Language :: Python :: 3',
         'Programming Language :: Python :: 3.4',
+        'Programming Language :: Python :: 3.5',
     ],
     ext_modules=[setuptools.Extension("ovs._json", sources=["ovs/_json.c"],
                                       libraries=['openvswitch'])],

@@ -58,9 +58,12 @@ vSwitch? Start here.
   :doc:`intro/install/netbsd` |
   :doc:`intro/install/windows` |
   :doc:`intro/install/xenserver` |
-  :doc:`intro/install/dpdk`
+  :doc:`intro/install/dpdk` |
+  :doc:`Installation FAQs <faq/releases>`
 
 - **Tutorials:** :doc:`tutorials/ovs-advanced` |
+  :doc:`tutorials/ovn-sandbox` |
+  :doc:`tutorials/ovn-openstack`
 
 Deeper Dive
 -----------
@@ -98,6 +101,7 @@ Learn more about the Open vSwitch project and about how you can contribute:
   :doc:`internals/security`
 
 - **Contributing:** :doc:`internals/contributing/submitting-patches` |
+  :doc:`internals/contributing/backporting-patches` |
   :doc:`internals/contributing/coding-style` |
   :doc:`internals/contributing/coding-style-windows`
 
@@ -106,7 +110,8 @@ Learn more about the Open vSwitch project and about how you can contribute:
   :doc:`internals/committer-grant-revocation`
 
 - **Documentation:** :doc:`internals/contributing/documentation-style` |
-  :doc:`Building Open vSwitch Documentation <intro/install/documentation>`
+  :doc:`Building Open vSwitch Documentation <intro/install/documentation>` |
+  :doc:`internals/documentation`
 
 Getting Help
 -------------

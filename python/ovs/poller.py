@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import errno
-import ovs.timeval
-import ovs.vlog
+import os
+
 import select
 import socket
-import os
 import sys
+
+import ovs.timeval
+import ovs.vlog
 
 if sys.platform == "win32":
     import ovs.winutils as winutils
@@ -110,7 +112,14 @@ class _SelectSelect(object):
             if retval == winutils.winerror.WAIT_TIMEOUT:
                 return []
 
-            return [(events[retval], 0)]
+            if events[retval] in self.rlist:
+                revent = POLLIN
+            elif events[retval] in self.wlist:
+                revent = POLLOUT
+            else:
+                revent = POLLERR
+
+            return [(events[retval], revent)]
         else:
             if timeout == -1:
                 # epoll uses -1 for infinite timeout, select uses None.

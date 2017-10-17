@@ -1,9 +1,17 @@
-openvswitch (2.7.90-1) unstable; urgency=low
-   [ Open vSwitch team ]
-   * New upstream version
+openvswitch (2.8.90-1) unstable; urgency=medium
+
    - Nothing yet!  Try NEWS...
 
- -- Open vSwitch team <dev@openvswitch.org>  Tue, 31 Jan 2017 17:51:32 -0700
+ -- Open vSwitch team <dev@openvswitch.org>  Fri, 04 Aug 2017 15:00:00 -0700
+
+openvswitch (2.8.0-1) unstable; urgency=medium
+
+   [ Open vSwitch team ]
+   * Use debhelper for DEB_VERSION_UPSTREAM.  Thanks to Clint Byrum
+     <spamaps@debian.org> for this improvement.
+   * New upstream version
+
+ -- Open vSwitch team <dev@openvswitch.org>  Thu, 31 Aug 2017 09:32:16 -0700
 
 openvswitch (2.7.0-1) unstable; urgency=low
    [ Open vSwitch team ]
@@ -28,6 +36,16 @@ openvswitch (2.7.0-1) unstable; urgency=low
        information regarding remote connection configuration.
      * New appctl "inject-pkt" command in ovn-controller that allows
        packets to be injected into the connected OVS instance.
+     * Distributed logical routers may now be connected directly to
+       logical switches with localnet ports, by specifying a
+       "redirect-chassis" on the distributed gateway port of the
+       logical router.  NAT rules may be specified directly on the
+       distributed logical router, and are handled either centrally on
+       the "redirect-chassis", or in many cases are handled locally on
+       the hypervisor where the corresponding logical port resides.
+       Gratuitous ARP for NAT addresses on a distributed logical
+       router is not yet supported, but will be added in a future
+       version.
    - Fixed regression in table stats maintenance introduced in OVS
      2.3.0, wherein the number of OpenFlow table hits and misses was
      not accurate.
@@ -71,6 +89,7 @@ openvswitch (2.7.0-1) unstable; urgency=low
        device will not be available for use until a valid dpdk-devargs is
        specified.
      * Virtual DPDK Poll Mode Driver (vdev PMD) support.
+     * Removed experimental tag.
    - Fedora packaging:
      * A package upgrade does not automatically restart OVS service.
    - ovs-vswitchd/ovs-vsctl:
@@ -81,7 +100,7 @@ openvswitch (2.7.0-1) unstable; urgency=low
      * Database commands now accept integer ranges, e.g. "set port
        eth0 trunks=1-10" to enable trunking VLANs 1 to 10.
 
- -- Open vSwitch team <dev@openvswitch.org>  Tue, 31 Jan 2017 17:46:12 -0700
+ -- Open vSwitch team <dev@openvswitch.org>  Tue, 21 Feb 2017 13:57:33 -0700
 
 openvswitch (2.6.0-1) unstable; urgency=low
    [ Open vSwitch team ]

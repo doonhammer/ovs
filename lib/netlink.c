@@ -235,13 +235,15 @@ nl_msg_put_unspec_zero(struct ofpbuf *msg, uint16_t type, size_t size)
 
 /* Appends a Netlink attribute of the given 'type' and the 'size' bytes of
  * 'data' as its payload, to the tail end of 'msg', reallocating and copying
- * its data if necessary.  Returns a pointer to the first byte of data in the
- * attribute, which is left uninitialized. */
+ * its data if necessary. */
 void
 nl_msg_put_unspec(struct ofpbuf *msg, uint16_t type,
                   const void *data, size_t size)
 {
-    memcpy(nl_msg_put_unspec_uninit(msg, type, size), data, size);
+    void *ptr;
+
+    ptr = nl_msg_put_unspec_uninit(msg, type, size);
+    nullable_memcpy(ptr, data, size);
 }
 
 /* Appends a Netlink attribute of the given 'type' and no payload to 'msg'.
@@ -285,6 +287,14 @@ nl_msg_put_u64(struct ofpbuf *msg, uint16_t type, uint64_t value)
     nl_msg_put_unspec(msg, type, &value, sizeof value);
 }
 
+/* Appends a Netlink attribute of the given 'type' and the given 128-bit host
+ * byte order 'value' to 'msg'. */
+void
+nl_msg_put_u128(struct ofpbuf *msg, uint16_t type, ovs_u128 value)
+{
+    nl_msg_put_unspec(msg, type, &value, sizeof value);
+}
+
 /* Appends a Netlink attribute of the given 'type' and the given 16-bit network
  * byte order 'value' to 'msg'. */
 void
@@ -305,6 +315,14 @@ nl_msg_put_be32(struct ofpbuf *msg, uint16_t type, ovs_be32 value)
  * byte order 'value' to 'msg'. */
 void
 nl_msg_put_be64(struct ofpbuf *msg, uint16_t type, ovs_be64 value)
+{
+    nl_msg_put_unspec(msg, type, &value, sizeof value);
+}
+
+/* Appends a Netlink attribute of the given 'type' and the given 128-bit
+ * network byte order 'value' to 'msg'. */
+void
+nl_msg_put_be128(struct ofpbuf *msg, uint16_t type, ovs_be128 value)
 {
     nl_msg_put_unspec(msg, type, &value, sizeof value);
 }
@@ -413,6 +431,14 @@ nl_msg_push_u64(struct ofpbuf *msg, uint16_t type, uint64_t value)
     nl_msg_push_unspec(msg, type, &value, sizeof value);
 }
 
+/* Prepends a Netlink attribute of the given 'type' and the given 128-bit host
+ * byte order 'value' to 'msg'. */
+void
+nl_msg_push_u128(struct ofpbuf *msg, uint16_t type, ovs_u128 value)
+{
+    nl_msg_push_unspec(msg, type, &value, sizeof value);
+}
+
 /* Prepends a Netlink attribute of the given 'type' and the given 16-bit
  * network byte order 'value' to 'msg'. */
 void
@@ -437,6 +463,14 @@ nl_msg_push_be64(struct ofpbuf *msg, uint16_t type, ovs_be64 value)
     nl_msg_push_unspec(msg, type, &value, sizeof value);
 }
 
+/* Prepends a Netlink attribute of the given 'type' and the given 128-bit
+ * network byte order 'value' to 'msg'. */
+void
+nl_msg_push_be128(struct ofpbuf *msg, uint16_t type, ovs_be128 value)
+{
+    nl_msg_push_unspec(msg, type, &value, sizeof value);
+}
+
 /* Prepends a Netlink attribute of the given 'type' and the given
  * null-terminated string 'value' to 'msg'. */
 void
@@ -454,7 +488,7 @@ size_t
 nl_msg_start_nested(struct ofpbuf *msg, uint16_t type)
 {
     size_t offset = msg->size;
-    nl_msg_put_unspec(msg, type, NULL, 0);
+    nl_msg_put_unspec_uninit(msg, type, 0);
     return offset;
 }
 
@@ -467,16 +501,29 @@ nl_msg_end_nested(struct ofpbuf *msg, size_t offset)
     attr->nla_len = msg->size - offset;
 }
 
-/* Same as nls_msg_end_nested() when the nested Netlink contains non empty
- * message. Otherwise, drop the nested message header from 'msg'.    */
+/* Cancel a nested Netlink attribute in 'msg'.  'offset' should be the value
+ * returned by nl_msg_start_nested(). */
 void
+nl_msg_cancel_nested(struct ofpbuf *msg, size_t offset)
+{
+    msg->size = offset;
+}
+
+/* Same as nls_msg_end_nested() when the nested Netlink contains non empty
+ * message. Otherwise, drop the nested message header from 'msg'.
+ *
+ * Return true if the nested message has been dropped.  */
+bool
 nl_msg_end_non_empty_nested(struct ofpbuf *msg, size_t offset)
 {
     nl_msg_end_nested(msg, offset);
 
     struct nlattr *attr = ofpbuf_at_assert(msg, offset, sizeof *attr);
     if (!nl_attr_get_size(attr)) {
-        msg->size = offset;
+        nl_msg_cancel_nested(msg, offset);
+        return true;
+    } else {
+        return false;
     }
 }
 
@@ -609,6 +656,16 @@ nl_attr_get_u64(const struct nlattr *nla)
     return get_32aligned_u64(x);
 }
 
+/* Returns the 128-bit host byte order value in 'nla''s payload.
+ *
+ * Asserts that 'nla''s payload is at least 16 bytes long. */
+ovs_u128
+nl_attr_get_u128(const struct nlattr *nla)
+{
+    const ovs_32aligned_u128 *x = nl_attr_get_unspec(nla, sizeof *x);
+    return get_32aligned_u128(x);
+}
+
 /* Returns the 16-bit network byte order value in 'nla''s payload.
  *
  * Asserts that 'nla''s payload is at least 2 bytes long. */
@@ -635,6 +692,16 @@ nl_attr_get_be64(const struct nlattr *nla)
 {
     const ovs_32aligned_be64 *x = nl_attr_get_unspec(nla, sizeof *x);
     return get_32aligned_be64(x);
+}
+
+/* Returns the 128-bit network byte order value in 'nla''s payload.
+ *
+ * Asserts that 'nla''s payload is at least 16 bytes long. */
+ovs_be128
+nl_attr_get_be128(const struct nlattr *nla)
+{
+    const ovs_32aligned_be128 *x = nl_attr_get_unspec(nla, sizeof *x);
+    return get_32aligned_be128(x);
 }
 
 /* Returns the IPv6 address value in 'nla''s payload.
@@ -684,6 +751,7 @@ min_attr_len(enum nl_attr_type type)
     case NL_A_U16: return 2;
     case NL_A_U32: return 4;
     case NL_A_U64: return 8;
+    case NL_A_U128: return 16;
     case NL_A_STRING: return 1;
     case NL_A_FLAG: return 0;
     case NL_A_IPV6: return 16;
@@ -703,6 +771,7 @@ max_attr_len(enum nl_attr_type type)
     case NL_A_U16: return 2;
     case NL_A_U32: return 4;
     case NL_A_U64: return 8;
+    case NL_A_U128: return 16;
     case NL_A_STRING: return SIZE_MAX;
     case NL_A_FLAG: return SIZE_MAX;
     case NL_A_IPV6: return 16;

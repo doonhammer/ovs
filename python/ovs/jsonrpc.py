@@ -16,8 +16,6 @@ import errno
 import os
 import sys
 
-import six
-
 import ovs.json
 import ovs.poller
 import ovs.reconnect
@@ -25,6 +23,8 @@ import ovs.stream
 import ovs.timeval
 import ovs.util
 import ovs.vlog
+
+import six
 
 EOF = ovs.util.EOF
 vlog = ovs.vlog.Vlog("jsonrpc")
@@ -268,8 +268,7 @@ class Connection(object):
                 # Python 3 has separate types for strings and bytes.  We
                 # received bytes from a socket.  We expect it to be string
                 # data, so we convert it here as soon as possible.
-                if (data and not error
-                        and not isinstance(data, six.string_types)):
+                if data and not error:
                     try:
                         data = data.decode('utf-8')
                     except UnicodeError:
@@ -376,7 +375,7 @@ class Session(object):
         self.seqno = 0
 
     @staticmethod
-    def open(name):
+    def open(name, probe_interval=None):
         """Creates and returns a Session that maintains a JSON-RPC session to
         'name', which should be a string acceptable to ovs.stream.Stream or
         ovs.stream.PassiveStream's initializer.
@@ -387,7 +386,12 @@ class Session(object):
         If 'name' is a passive connection method, e.g. "ptcp:", the new session
         listens for connections to 'name'.  It maintains at most one connection
         at any given time.  Any new connection causes the previous one (if any)
-        to be dropped."""
+        to be dropped.
+
+        If "probe_interval" is zero it disables the connection keepalive
+        feature. If non-zero the value will be forced to at least 1000
+        milliseconds. If None it will just use the default value in OVS.
+        """
         reconnect = ovs.reconnect.Reconnect(ovs.timeval.msec())
         reconnect.set_name(name)
         reconnect.enable(ovs.timeval.msec())
@@ -397,6 +401,8 @@ class Session(object):
 
         if not ovs.stream.stream_or_pstream_needs_probes(name):
             reconnect.set_probe_interval(0)
+        elif probe_interval is not None:
+            reconnect.set_probe_interval(probe_interval)
 
         return Session(reconnect, None)
 

@@ -7,6 +7,8 @@ EXTRA_DIST += \
 	debian/copyright.in \
 	debian/dkms.conf.in \
 	debian/dirs \
+	debian/libopenvswitch.install \
+	debian/libopenvswitch-dev.install \
 	debian/openvswitch-common.dirs \
 	debian/openvswitch-common.docs \
 	debian/openvswitch-common.install \
@@ -18,7 +20,6 @@ EXTRA_DIST += \
 	debian/openvswitch-datapath-source.copyright \
 	debian/openvswitch-datapath-source.dirs \
 	debian/openvswitch-datapath-source.install \
-	debian/openvswitch-dev.install \
 	debian/openvswitch-pki.dirs \
 	debian/openvswitch-pki.postinst \
 	debian/openvswitch-pki.postrm \
@@ -97,4 +98,4 @@ $(srcdir)/debian/copyright: AUTHORS.rst debian/copyright.in
 	  sed -e '34,/%AUTHORS%/d' $(srcdir)/debian/copyright.in;	   \
 	} > $@
 
-DISTCLEANFILES += debian/copyright
+CLEANFILES += debian/copyright

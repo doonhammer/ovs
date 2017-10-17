@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,6 +37,7 @@ struct ds;
 struct flow_wildcards;
 struct minimask;
 struct dp_packet;
+struct ofputil_port_map;
 struct pkt_metadata;
 struct match;
 
@@ -52,6 +53,9 @@ struct match;
                              )
 
 extern const uint8_t flow_segment_u64s[];
+
+/* Configured maximum VLAN headers. */
+extern int flow_vlan_limit;
 
 #define FLOW_U64_OFFSET(FIELD)                          \
     (offsetof(struct flow, FIELD) / sizeof(uint64_t))
@@ -70,25 +74,41 @@ void flow_unwildcard_tp_ports(const struct flow *, struct flow_wildcards *);
 void flow_get_metadata(const struct flow *, struct match *flow_metadata);
 
 const char *ct_state_to_string(uint32_t state);
-char *flow_to_string(const struct flow *);
+uint32_t ct_state_from_string(const char *);
+bool parse_ct_state(const char *state_str, uint32_t default_state,
+                    uint32_t *ct_state, struct ds *);
+bool validate_ct_state(uint32_t state, struct ds *);
+void flow_clear_conntrack(struct flow *);
+
+char *flow_to_string(const struct flow *, const struct ofputil_port_map *);
 void format_flags(struct ds *ds, const char *(*bit_to_string)(uint32_t),
                   uint32_t flags, char del);
 void format_flags_masked(struct ds *ds, const char *name,
                          const char *(*bit_to_string)(uint32_t),
                          uint32_t flags, uint32_t mask, uint32_t max_mask);
+void format_packet_type_masked(struct ds *, ovs_be32 value, ovs_be32 mask);
 int parse_flags(const char *s, const char *(*bit_to_string)(uint32_t),
                 char end, const char *field_name, char **res_string,
                 uint32_t *res_flags, uint32_t allowed, uint32_t *res_mask);
 
-void flow_format(struct ds *, const struct flow *);
-void flow_print(FILE *, const struct flow *);
+void flow_format(struct ds *, const struct flow *,
+                 const struct ofputil_port_map *);
+void flow_print(FILE *, const struct flow *, const struct ofputil_port_map *);
 static inline int flow_compare_3way(const struct flow *, const struct flow *);
 static inline bool flow_equal(const struct flow *, const struct flow *);
 static inline size_t flow_hash(const struct flow *, uint32_t basis);
 
 void flow_set_dl_vlan(struct flow *, ovs_be16 vid);
+void flow_fix_vlan_tpid(struct flow *);
 void flow_set_vlan_vid(struct flow *, ovs_be16 vid);
 void flow_set_vlan_pcp(struct flow *, uint8_t pcp);
+
+void flow_limit_vlans(int vlan_limit);
+int flow_count_vlan_headers(const struct flow *);
+void flow_skip_common_vlan_headers(const struct flow *a, int *p_an,
+                                   const struct flow *b, int *p_bn);
+void flow_pop_vlan(struct flow*, struct flow_wildcards*);
+void flow_push_vlan_uninit(struct flow*, struct flow_wildcards*);
 
 int flow_count_mpls_labels(const struct flow *, struct flow_wildcards *);
 int flow_count_common_mpls_labels(const struct flow *a, int an,
@@ -104,11 +124,12 @@ void flow_set_mpls_tc(struct flow *, int idx, uint8_t tc);
 void flow_set_mpls_bos(struct flow *, int idx, uint8_t stack);
 void flow_set_mpls_lse(struct flow *, int idx, ovs_be32 lse);
 
-void flow_compose(struct dp_packet *, const struct flow *);
+bool flow_compose(struct dp_packet *, const struct flow *, size_t);
 
 bool parse_ipv6_ext_hdrs(const void **datap, size_t *sizep, uint8_t *nw_proto,
                          uint8_t *nw_frag);
 ovs_be16 parse_dl_type(const struct eth_header *data_, size_t size);
+bool parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key);
 
 static inline uint64_t
 flow_get_xreg(const struct flow *flow, int idx)
@@ -694,7 +715,7 @@ static inline uint32_t miniflow_get_u32(const struct miniflow *,
                                         unsigned int u32_ofs);
 static inline ovs_be32 miniflow_get_be32(const struct miniflow *,
                                          unsigned int be32_ofs);
-static inline uint16_t miniflow_get_vid(const struct miniflow *);
+static inline uint16_t miniflow_get_vid(const struct miniflow *, size_t);
 static inline uint16_t miniflow_get_tcp_flags(const struct miniflow *);
 static inline ovs_be64 miniflow_get_metadata(const struct miniflow *);
 
@@ -732,7 +753,7 @@ static inline uint32_t minimask_get_u32(const struct minimask *,
                                         unsigned int u32_ofs);
 static inline ovs_be32 minimask_get_be32(const struct minimask *,
                                          unsigned int be32_ofs);
-static inline uint16_t minimask_get_vid_mask(const struct minimask *);
+static inline uint16_t minimask_get_vid_mask(const struct minimask *, size_t);
 static inline ovs_be64 minimask_get_metadata_mask(const struct minimask *);
 
 bool minimask_equal(const struct minimask *a, const struct minimask *b);
@@ -779,10 +800,15 @@ static inline ovs_be32 miniflow_get_be32(const struct miniflow *flow,
 /* Returns the VID within the vlan_tci member of the "struct flow" represented
  * by 'flow'. */
 static inline uint16_t
-miniflow_get_vid(const struct miniflow *flow)
+miniflow_get_vid(const struct miniflow *flow, size_t n)
 {
-    ovs_be16 tci = MINIFLOW_GET_BE16(flow, vlan_tci);
-    return vlan_tci_to_vid(tci);
+    if (n < FLOW_MAX_VLAN_HEADERS) {
+        union flow_vlan_hdr hdr = {
+            .qtag = MINIFLOW_GET_BE32(flow, vlans[n])
+        };
+        return vlan_tci_to_vid(hdr.tci);
+    }
+    return 0;
 }
 
 /* Returns the uint32_t that would be at byte offset '4 * u32_ofs' if 'mask'
@@ -802,9 +828,9 @@ minimask_get_be32(const struct minimask *mask, unsigned int be32_ofs)
 /* Returns the VID mask within the vlan_tci member of the "struct
  * flow_wildcards" represented by 'mask'. */
 static inline uint16_t
-minimask_get_vid_mask(const struct minimask *mask)
+minimask_get_vid_mask(const struct minimask *mask, size_t n)
 {
-    return miniflow_get_vid(&mask->masks);
+    return miniflow_get_vid(&mask->masks, n);
 }
 
 /* Returns the value of the "tcp_flags" field in 'flow'. */
@@ -862,9 +888,35 @@ flow_union_with_miniflow(struct flow *dst, const struct miniflow *src)
     flow_union_with_miniflow_subset(dst, src, src->map);
 }
 
+static inline bool is_ct_valid(const struct flow *flow,
+                               const struct flow_wildcards *mask,
+                               struct flow_wildcards *wc)
+{
+    /* Matches are checked with 'mask' and without 'wc'. */
+    if (mask && !wc) {
+        /* Must match at least one of the bits that implies a valid
+         * conntrack entry, or an explicit not-invalid. */
+        return flow->ct_state & (CS_NEW | CS_ESTABLISHED | CS_RELATED
+                                 | CS_REPLY_DIR | CS_SRC_NAT | CS_DST_NAT)
+            || (flow->ct_state & CS_TRACKED
+                && mask->masks.ct_state & CS_INVALID
+                && !(flow->ct_state & CS_INVALID));
+    }
+    /* Else we are checking a fully extracted flow, where valid CT state always
+     * has either 'new', 'established', or 'reply_dir' bit set. */
+#define CS_VALID_MASK (CS_NEW | CS_ESTABLISHED | CS_REPLY_DIR)
+    if (wc) {
+        wc->masks.ct_state |= CS_VALID_MASK;
+    }
+    return flow->ct_state & CS_VALID_MASK;
+}
+
 static inline void
 pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
 {
+    /* Update this function whenever struct flow changes. */
+    BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
+
     md->recirc_id = flow->recirc_id;
     md->dp_hash = flow->dp_hash;
     flow_tnl_copy__(&md->tunnel, &flow->tunnel);
@@ -875,6 +927,30 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
     md->ct_zone = flow->ct_zone;
     md->ct_mark = flow->ct_mark;
     md->ct_label = flow->ct_label;
+
+    md->ct_orig_tuple_ipv6 = false;
+    if (is_ct_valid(flow, NULL, NULL)) {
+        if (flow->dl_type == htons(ETH_TYPE_IP)) {
+            md->ct_orig_tuple.ipv4 = (struct ovs_key_ct_tuple_ipv4) {
+                flow->ct_nw_src,
+                flow->ct_nw_dst,
+                flow->ct_tp_src,
+                flow->ct_tp_dst,
+                flow->ct_nw_proto,
+            };
+        } else if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+            md->ct_orig_tuple_ipv6 = true;
+            md->ct_orig_tuple.ipv6 = (struct ovs_key_ct_tuple_ipv6) {
+                flow->ct_ipv6_src,
+                flow->ct_ipv6_dst,
+                flow->ct_tp_src,
+                flow->ct_tp_dst,
+                flow->ct_nw_proto,
+            };
+        }
+    } else {
+        memset(&md->ct_orig_tuple, 0, sizeof md->ct_orig_tuple);
+    }
 }
 
 /* Often, during translation we need to read a value from a flow('FLOW') and
@@ -884,18 +960,41 @@ pkt_metadata_from_flow(struct pkt_metadata *md, const struct flow *flow)
 #define FLOW_WC_GET_AND_MASK_WC(FLOW, WC, FIELD) \
     (((WC) ? WC_MASK_FIELD(WC, FIELD) : NULL), ((FLOW)->FIELD))
 
+static inline bool is_ethernet(const struct flow *flow,
+                               struct flow_wildcards *wc)
+{
+    if (wc) {
+        WC_MASK_FIELD(wc, packet_type);
+    }
+    return flow->packet_type == htonl(PT_ETH);
+}
+
+static inline ovs_be16 get_dl_type(const struct flow *flow)
+{
+    if (flow->packet_type == htonl(PT_ETH)) {
+        return flow->dl_type;
+    } else if (pt_ns(flow->packet_type) == OFPHTN_ETHERTYPE) {
+        return pt_ns_type_be(flow->packet_type);
+    } else {
+        return htons(FLOW_DL_TYPE_NONE);
+    }
+}
+
 static inline bool is_vlan(const struct flow *flow,
                            struct flow_wildcards *wc)
 {
-    if (wc) {
-        WC_MASK_FIELD_MASK(wc, vlan_tci, htons(VLAN_CFI));
+    if (!is_ethernet(flow, wc)) {
+        return false;
     }
-    return (flow->vlan_tci & htons(VLAN_CFI)) != 0;
+    if (wc) {
+        WC_MASK_FIELD_MASK(wc, vlans[0].tci, htons(VLAN_CFI));
+    }
+    return (flow->vlans[0].tci & htons(VLAN_CFI)) != 0;
 }
 
 static inline bool is_ip_any(const struct flow *flow)
 {
-    return dl_type_is_ip_any(flow->dl_type);
+    return dl_type_is_ip_any(get_dl_type(flow));
 }
 
 static inline bool is_ip_proto(const struct flow *flow, uint8_t ip_proto,
@@ -931,7 +1030,7 @@ static inline bool is_sctp(const struct flow *flow,
 static inline bool is_icmpv4(const struct flow *flow,
                              struct flow_wildcards *wc)
 {
-    if (flow->dl_type == htons(ETH_TYPE_IP)) {
+    if (get_dl_type(flow) == htons(ETH_TYPE_IP)) {
         if (wc) {
             memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
         }
@@ -943,7 +1042,7 @@ static inline bool is_icmpv4(const struct flow *flow,
 static inline bool is_icmpv6(const struct flow *flow,
                              struct flow_wildcards *wc)
 {
-    if (flow->dl_type == htons(ETH_TYPE_IPV6)) {
+    if (get_dl_type(flow) == htons(ETH_TYPE_IPV6)) {
         if (wc) {
             memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
         }
@@ -974,7 +1073,7 @@ static inline bool is_nd(const struct flow *flow,
 
 static inline bool is_igmp(const struct flow *flow, struct flow_wildcards *wc)
 {
-    if (flow->dl_type == htons(ETH_TYPE_IP)) {
+    if (get_dl_type(flow) == htons(ETH_TYPE_IP)) {
         if (wc) {
             memset(&wc->masks.nw_proto, 0xff, sizeof wc->masks.nw_proto);
         }
@@ -1018,8 +1117,8 @@ static inline bool is_mld_report(const struct flow *flow,
 
 static inline bool is_stp(const struct flow *flow)
 {
-    return (eth_addr_equals(flow->dl_dst, eth_addr_stp)
-            && flow->dl_type == htons(FLOW_DL_TYPE_NONE));
+    return (flow->dl_type == htons(FLOW_DL_TYPE_NONE)
+            && eth_addr_equals(flow->dl_dst, eth_addr_stp));
 }
 
 #endif /* flow.h */

@@ -51,7 +51,7 @@ static void
 odp_eth_set_addrs(struct dp_packet *packet, const struct ovs_key_ethernet *key,
                   const struct ovs_key_ethernet *mask)
 {
-    struct eth_header *eh = dp_packet_l2(packet);
+    struct eth_header *eh = dp_packet_eth(packet);
 
     if (eh) {
         if (!mask) {
@@ -233,33 +233,33 @@ odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
            const struct ovs_key_nd *mask)
 {
     const struct ovs_nd_msg *ns = dp_packet_l4(packet);
-    const struct ovs_nd_opt *nd_opt = dp_packet_get_nd_payload(packet);
+    const struct ovs_nd_lla_opt *lla_opt = dp_packet_get_nd_payload(packet);
 
-    if (OVS_LIKELY(ns && nd_opt)) {
+    if (OVS_LIKELY(ns && lla_opt)) {
         int bytes_remain = dp_packet_l4_size(packet) - sizeof(*ns);
         struct in6_addr tgt_buf;
         struct eth_addr sll_buf = eth_addr_zero;
         struct eth_addr tll_buf = eth_addr_zero;
 
-        while (bytes_remain >= ND_OPT_LEN && nd_opt->nd_opt_len != 0) {
-            if (nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR
-                && nd_opt->nd_opt_len == 1) {
-                sll_buf = nd_opt->nd_opt_mac;
+        while (bytes_remain >= ND_LLA_OPT_LEN && lla_opt->len != 0) {
+            if (lla_opt->type == ND_OPT_SOURCE_LINKADDR
+                && lla_opt->len == 1) {
+                sll_buf = lla_opt->mac;
                 ether_addr_copy_masked(&sll_buf, key->nd_sll, mask->nd_sll);
 
                 /* A packet can only contain one SLL or TLL option */
                 break;
-            } else if (nd_opt->nd_opt_type == ND_OPT_TARGET_LINKADDR
-                       && nd_opt->nd_opt_len == 1) {
-                tll_buf = nd_opt->nd_opt_mac;
+            } else if (lla_opt->type == ND_OPT_TARGET_LINKADDR
+                       && lla_opt->len == 1) {
+                tll_buf = lla_opt->mac;
                 ether_addr_copy_masked(&tll_buf, key->nd_tll, mask->nd_tll);
 
                 /* A packet can only contain one SLL or TLL option */
                 break;
             }
 
-            nd_opt += nd_opt->nd_opt_len;
-            bytes_remain -= nd_opt->nd_opt_len * ND_OPT_LEN;
+            lla_opt += lla_opt->len;
+            bytes_remain -= lla_opt->len * ND_LLA_OPT_LEN;
         }
 
         packet_set_nd(packet,
@@ -267,6 +267,56 @@ odp_set_nd(struct dp_packet *packet, const struct ovs_key_nd *key,
                                      &mask->nd_target, &tgt_buf),
                       sll_buf,
                       tll_buf);
+    }
+}
+
+/* Set the NSH header. Assumes the NSH header is present and matches the
+ * MD format of the key. The slow path must take case of that. */
+static void
+odp_set_nsh(struct dp_packet *packet, const struct ovs_key_nsh *key,
+            const struct ovs_key_nsh *mask)
+{
+    struct nsh_hdr *nsh = dp_packet_l3(packet);
+
+    if (!mask) {
+        nsh->ver_flags_len = htons(key->flags << NSH_FLAGS_SHIFT) |
+                             (nsh->ver_flags_len & ~htons(NSH_FLAGS_MASK));
+        put_16aligned_be32(&nsh->path_hdr, key->path_hdr);
+        switch (nsh->md_type) {
+            case NSH_M_TYPE1:
+                for (int i = 0; i < 4; i++) {
+                    put_16aligned_be32(&nsh->md1.c[i], key->c[i]);
+                }
+                break;
+            case NSH_M_TYPE2:
+            default:
+                /* No support for setting any other metadata format yet. */
+                break;
+        }
+    } else {
+        uint8_t flags = (ntohs(nsh->ver_flags_len) & NSH_FLAGS_MASK) >>
+                            NSH_FLAGS_SHIFT;
+        flags = key->flags | (flags & ~mask->flags);
+        nsh->ver_flags_len = htons(flags << NSH_FLAGS_SHIFT) |
+                             (nsh->ver_flags_len & ~htons(NSH_FLAGS_MASK));
+
+        ovs_be32 path_hdr = get_16aligned_be32(&nsh->path_hdr);
+        path_hdr = key->path_hdr | (path_hdr & ~mask->path_hdr);
+        put_16aligned_be32(&nsh->path_hdr, path_hdr);
+        switch (nsh->md_type) {
+            case NSH_M_TYPE1:
+                for (int i = 0; i < 4; i++) {
+                    ovs_be32 p = get_16aligned_be32(&nsh->md1.c[i]);
+                    ovs_be32 k = key->c[i];
+                    ovs_be32 m = mask->c[i];
+                    put_16aligned_be32(&nsh->md1.c[i], k | (p & ~m));
+                }
+                break;
+            case NSH_M_TYPE2:
+            default:
+                /* No support for setting any other metadata format yet. */
+                break;
+        }
     }
 }
 
@@ -293,6 +343,10 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
 
     case OVS_KEY_ATTR_ETHERNET:
         odp_eth_set_addrs(packet, nl_attr_get(a), NULL);
+        break;
+
+    case OVS_KEY_ATTR_NSH:
+        odp_set_nsh(packet, nl_attr_get(a), NULL);
         break;
 
     case OVS_KEY_ATTR_IPV4:
@@ -375,12 +429,15 @@ odp_execute_set_action(struct dp_packet *packet, const struct nlattr *a)
         break;
 
     case OVS_KEY_ATTR_UNSPEC:
+    case OVS_KEY_ATTR_PACKET_TYPE:
     case OVS_KEY_ATTR_ENCAP:
     case OVS_KEY_ATTR_ETHERTYPE:
     case OVS_KEY_ATTR_IN_PORT:
     case OVS_KEY_ATTR_VLAN:
     case OVS_KEY_ATTR_TCP_FLAGS:
     case OVS_KEY_ATTR_CT_STATE:
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4:
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6:
     case OVS_KEY_ATTR_CT_ZONE:
     case OVS_KEY_ATTR_CT_MARK:
     case OVS_KEY_ATTR_CT_LABELS:
@@ -414,6 +471,11 @@ odp_execute_masked_set_action(struct dp_packet *packet,
     case OVS_KEY_ATTR_ETHERNET:
         odp_eth_set_addrs(packet, nl_attr_get(a),
                           get_mask(a, struct ovs_key_ethernet));
+        break;
+
+    case OVS_KEY_ATTR_NSH:
+        odp_set_nsh(packet, nl_attr_get(a),
+                    get_mask(a, struct ovs_key_nsh));
         break;
 
     case OVS_KEY_ATTR_IPV4:
@@ -471,11 +533,14 @@ odp_execute_masked_set_action(struct dp_packet *packet,
         break;
 
     case OVS_KEY_ATTR_TUNNEL:    /* Masked data not supported for tunnel. */
+    case OVS_KEY_ATTR_PACKET_TYPE:
     case OVS_KEY_ATTR_UNSPEC:
     case OVS_KEY_ATTR_CT_STATE:
     case OVS_KEY_ATTR_CT_ZONE:
     case OVS_KEY_ATTR_CT_MARK:
     case OVS_KEY_ATTR_CT_LABELS:
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV4:
+    case OVS_KEY_ATTR_CT_ORIG_TUPLE_IPV6:
     case OVS_KEY_ATTR_ENCAP:
     case OVS_KEY_ATTR_ETHERTYPE:
     case OVS_KEY_ATTR_IN_PORT:
@@ -537,23 +602,26 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
 }
 
 static void
-odp_execute_clone(void *dp, struct dp_packet *packet, bool steal,
+odp_execute_clone(void *dp, struct dp_packet_batch *batch, bool steal,
                    const struct nlattr *actions,
                    odp_execute_cb dp_execute_action)
 {
-    struct dp_packet_batch pb;
-
     if (!steal) {
         /* The 'actions' may modify the packet, but the modification
          * should not propagate beyond this clone action. Make a copy
          * the packet in case we don't own the packet, so that the
          * 'actions' are only applied to the clone.  'odp_execute_actions'
          * will free the clone.  */
-        packet = dp_packet_clone(packet);
-    }
-    dp_packet_batch_init_packet(&pb, packet);
-    odp_execute_actions(dp, &pb, true, nl_attr_get(actions),
+        struct dp_packet_batch clone_pkt_batch;
+        dp_packet_batch_clone(&clone_pkt_batch, batch);
+        dp_packet_batch_reset_cutlen(batch);
+        odp_execute_actions(dp, &clone_pkt_batch, true, nl_attr_get(actions),
                         nl_attr_get_size(actions), dp_execute_action);
+    }
+    else {
+        odp_execute_actions(dp, batch, true, nl_attr_get(actions),
+                            nl_attr_get_size(actions), dp_execute_action);
+    }
 }
 
 static bool
@@ -569,6 +637,7 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_USERSPACE:
     case OVS_ACTION_ATTR_RECIRC:
     case OVS_ACTION_ATTR_CT:
+    case OVS_ACTION_ATTR_METER:
         return true;
 
     case OVS_ACTION_ATTR_SET:
@@ -580,7 +649,11 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_PUSH_MPLS:
     case OVS_ACTION_ATTR_POP_MPLS:
     case OVS_ACTION_ATTR_TRUNC:
+    case OVS_ACTION_ATTR_PUSH_ETH:
+    case OVS_ACTION_ATTR_POP_ETH:
     case OVS_ACTION_ATTR_CLONE:
+    case OVS_ACTION_ATTR_ENCAP_NSH:
+    case OVS_ACTION_ATTR_DECAP_NSH:
         return false;
 
     case OVS_ACTION_ATTR_UNSPEC:
@@ -634,8 +707,15 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                 uint32_t hash;
 
                 DP_PACKET_BATCH_FOR_EACH (packet, batch) {
-                    flow_extract(packet, &flow);
-                    hash = flow_hash_5tuple(&flow, hash_act->hash_basis);
+                    /* RSS hash can be used here instead of 5tuple for
+                     * performance reasons. */
+                    if (dp_packet_rss_valid(packet)) {
+                        hash = dp_packet_get_rss_hash(packet);
+                        hash = hash_int(hash, hash_act->hash_basis);
+                    } else {
+                        flow_extract(packet, &flow);
+                        hash = flow_hash_5tuple(&flow, hash_act->hash_basis);
+                    }
                     packet->md.dp_hash = hash;
                 }
             } else {
@@ -712,17 +792,51 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         }
 
         case OVS_ACTION_ATTR_CLONE:
-            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
-                odp_execute_clone(dp, packet, steal && last_action, a,
-                                  dp_execute_action);
-            }
-
+            odp_execute_clone(dp, batch, steal && last_action, a,
+                                                dp_execute_action);
             if (last_action) {
                 /* We do not need to free the packets. odp_execute_clone() has
                  * stolen them.  */
                 return;
             }
+        case OVS_ACTION_ATTR_METER:
+            /* Not implemented yet. */
             break;
+        case OVS_ACTION_ATTR_PUSH_ETH: {
+            const struct ovs_action_push_eth *eth = nl_attr_get(a);
+
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                push_eth(packet, &eth->addresses.eth_dst,
+                         &eth->addresses.eth_src);
+            }
+            break;
+        }
+
+        case OVS_ACTION_ATTR_POP_ETH:
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                pop_eth(packet);
+            }
+            break;
+
+        case OVS_ACTION_ATTR_ENCAP_NSH: {
+            const struct ovs_action_encap_nsh *enc_nsh = nl_attr_get(a);
+            DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+                encap_nsh(packet, enc_nsh);
+            }
+            break;
+        }
+        case OVS_ACTION_ATTR_DECAP_NSH: {
+            size_t i, num = batch->count;
+
+            DP_PACKET_BATCH_REFILL_FOR_EACH (i, num, packet, batch) {
+                if (decap_nsh(packet)) {
+                    dp_packet_batch_refill(batch, packet, i);
+                } else {
+                    dp_packet_delete(packet);
+                }
+            }
+            break;
+        }
 
         case OVS_ACTION_ATTR_OUTPUT:
         case OVS_ACTION_ATTR_TUNNEL_PUSH:

@@ -220,8 +220,9 @@ want_to_poll_events(int want)
     }
 }
 
+/* Takes ownership of 'name'. */
 static int
-new_ssl_stream(const char *name, int fd, enum session_type type,
+new_ssl_stream(char *name, int fd, enum session_type type,
                enum ssl_state state, struct stream **streamp)
 {
     struct ssl_stream *sslv;
@@ -299,6 +300,7 @@ error:
         SSL_free(ssl);
     }
     closesocket(fd);
+    free(name);
     return retval;
 }
 
@@ -323,7 +325,7 @@ ssl_open(const char *name, char *suffix, struct stream **streamp, uint8_t dscp)
                              dscp);
     if (fd >= 0) {
         int state = error ? STATE_TCP_CONNECTING : STATE_SSL_CONNECTING;
-        return new_ssl_stream(name, fd, CLIENT, state, streamp);
+        return new_ssl_stream(xstrdup(name), fd, CLIENT, state, streamp);
     } else {
         VLOG_ERR("%s: connect: %s", name, ovs_strerror(error));
         return error;
@@ -420,6 +422,41 @@ do_ca_cert_bootstrap(struct stream *stream)
     return EPROTO;
 }
 
+static char *
+get_peer_common_name(const struct ssl_stream *sslv)
+{
+    X509 *peer_cert = SSL_get_peer_certificate(sslv->ssl);
+    if (!peer_cert) {
+        return NULL;
+    }
+
+    int cn_index = X509_NAME_get_index_by_NID(X509_get_subject_name(peer_cert),
+                                              NID_commonName, -1);
+    if (cn_index < 0) {
+        return NULL;
+    }
+
+    X509_NAME_ENTRY *cn_entry = X509_NAME_get_entry(
+        X509_get_subject_name(peer_cert), cn_index);
+    if (!cn_entry) {
+        return NULL;
+    }
+
+    ASN1_STRING *cn_data = X509_NAME_ENTRY_get_data(cn_entry);
+    if (!cn_data) {
+        return NULL;
+    }
+
+    const char *cn;
+#if OPENSSL_VERSION_NUMBER < 0x10100000L || defined (LIBRESSL_VERSION_NUMBER)
+    /* ASN1_STRING_data() is deprecated as of OpenSSL version 1.1 */
+    cn = (const char *)ASN1_STRING_data(cn_data);
+#else
+    cn = (const char *)ASN1_STRING_get0_data(cn_data);
+ #endif
+    return xstrdup(cn);
+}
+
 static int
 ssl_connect(struct stream *stream)
 {
@@ -477,6 +514,12 @@ ssl_connect(struct stream *stream)
             VLOG_INFO("rejecting SSL connection during bootstrap race window");
             return EPROTO;
         } else {
+            char *cn = get_peer_common_name(sslv);
+
+            if (cn) {
+                stream_set_peer_id(stream, cn);
+                free(cn);
+            }
             return 0;
         }
     }
@@ -783,8 +826,6 @@ static int
 pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
           uint8_t dscp)
 {
-    char bound_name[SS_NTOP_BUFSIZE + 16];
-    char addrbuf[SS_NTOP_BUFSIZE];
     struct sockaddr_storage ss;
     struct pssl_pstream *pssl;
     uint16_t port;
@@ -802,14 +843,18 @@ pssl_open(const char *name OVS_UNUSED, char *suffix, struct pstream **pstreamp,
     }
 
     port = ss_get_port(&ss);
-    snprintf(bound_name, sizeof bound_name, "pssl:%"PRIu16":%s",
-             port, ss_format_address(&ss, addrbuf, sizeof addrbuf));
+
+    struct ds bound_name = DS_EMPTY_INITIALIZER;
+    ds_put_format(&bound_name, "pssl:%"PRIu16":", port);
+    ss_format_address(&ss, &bound_name);
 
     pssl = xmalloc(sizeof *pssl);
-    pstream_init(&pssl->pstream, &pssl_pstream_class, bound_name);
+    pstream_init(&pssl->pstream, &pssl_pstream_class,
+                 ds_steal_cstr(&bound_name));
     pstream_set_bound_port(&pssl->pstream, htons(port));
     pssl->fd = fd;
     *pstreamp = &pssl->pstream;
+
     return 0;
 }
 
@@ -825,8 +870,6 @@ static int
 pssl_accept(struct pstream *pstream, struct stream **new_streamp)
 {
     struct pssl_pstream *pssl = pssl_pstream_cast(pstream);
-    char name[SS_NTOP_BUFSIZE + 16];
-    char addrbuf[SS_NTOP_BUFSIZE];
     struct sockaddr_storage ss;
     socklen_t ss_len = sizeof ss;
     int new_fd;
@@ -852,11 +895,12 @@ pssl_accept(struct pstream *pstream, struct stream **new_streamp)
         return error;
     }
 
-    snprintf(name, sizeof name, "ssl:%s:%"PRIu16,
-             ss_format_address(&ss, addrbuf, sizeof addrbuf),
-             ss_get_port(&ss));
-    return new_ssl_stream(name, new_fd, SERVER, STATE_SSL_CONNECTING,
-                          new_streamp);
+    struct ds name = DS_EMPTY_INITIALIZER;
+    ds_put_cstr(&name, "ssl:");
+    ss_format_address(&ss, &name);
+    ds_put_format(&name, ":%"PRIu16, ss_get_port(&ss));
+    return new_ssl_stream(ds_steal_cstr(&name), new_fd, SERVER,
+                          STATE_SSL_CONNECTING, new_streamp);
 }
 
 static void

@@ -20,10 +20,14 @@
 #include "openvswitch/packets.h"
 #include "openvswitch/util.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* This sequence number should be incremented whenever anything involving flows
  * or the wildcarding of flows changes.  This will cause build assertion
  * failures in places which likely need to be updated. */
-#define FLOW_WC_SEQ 36
+#define FLOW_WC_SEQ 40
 
 /* Number of Open vSwitch extension 32-bit registers. */
 #define FLOW_N_REGS 16
@@ -61,6 +65,19 @@ const char *flow_tun_flag_to_string(uint32_t flags);
 /* Maximum number of supported MPLS labels. */
 #define FLOW_MAX_MPLS_LABELS 3
 
+/* Maximum number of supported SAMPLE action nesting. */
+#define FLOW_MAX_SAMPLE_NESTING 10
+
+/* Maximum number of supported VLAN headers.
+ *
+ * We require this to be a multiple of 2 so that vlans[] in struct flow is a
+ * multiple of 64 bits. */
+#define FLOW_MAX_VLAN_HEADERS 2
+BUILD_ASSERT_DECL(FLOW_MAX_VLAN_HEADERS % 2 == 0);
+
+/* Legacy maximum VLAN headers */
+#define LEGACY_MAX_VLAN_HEADERS 1
+
 /*
  * A flow in the network.
  *
@@ -91,10 +108,11 @@ struct flow {
                                  * computation is opaque to the user space. */
     union flow_in_port in_port; /* Input port.*/
     uint32_t recirc_id;         /* Must be exact match. */
-    uint16_t ct_state;          /* Connection tracking state. */
+    uint8_t ct_state;           /* Connection tracking state. */
+    uint8_t ct_nw_proto;        /* CT orig tuple IP protocol. */
     uint16_t ct_zone;           /* Connection tracking zone. */
     uint32_t ct_mark;           /* Connection mark.*/
-    uint8_t pad1[4];            /* Pad to 64 bits. */
+    ovs_be32 packet_type;       /* OpenFlow packet type. */
     ovs_u128 ct_label;          /* Connection label. */
     uint32_t conj_id;           /* Conjunction ID. */
     ofp_port_t actset_output;   /* Output port in action set. */
@@ -102,15 +120,22 @@ struct flow {
     /* L2, Order the same as in the Ethernet header! (64-bit aligned) */
     struct eth_addr dl_dst;     /* Ethernet destination address. */
     struct eth_addr dl_src;     /* Ethernet source address. */
-    ovs_be16 dl_type;           /* Ethernet frame type. */
-    ovs_be16 vlan_tci;          /* If 802.1Q, TCI | VLAN_CFI; otherwise 0. */
+    ovs_be16 dl_type;           /* Ethernet frame type.
+                                   Note: This also holds the Ethertype for L3
+                                   packets of type PACKET_TYPE(1, Ethertype) */
+    uint8_t pad1[2];            /* Pad to 64 bits. */
+    union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS]; /* VLANs */
     ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
                                                              (with padding). */
     /* L3 (64-bit aligned) */
     ovs_be32 nw_src;            /* IPv4 source address or ARP SPA. */
     ovs_be32 nw_dst;            /* IPv4 destination address or ARP TPA. */
+    ovs_be32 ct_nw_src;         /* CT orig tuple IPv4 source address. */
+    ovs_be32 ct_nw_dst;         /* CT orig tuple IPv4 destination address. */
     struct in6_addr ipv6_src;   /* IPv6 source address. */
     struct in6_addr ipv6_dst;   /* IPv6 destination address. */
+    struct in6_addr ct_ipv6_src; /* CT orig tuple IPv6 source address. */
+    struct in6_addr ct_ipv6_dst; /* CT orig tuple IPv6 destination address. */
     ovs_be32 ipv6_label;        /* IPv6 flow label. */
     uint8_t nw_frag;            /* FLOW_FRAG_* flags. */
     uint8_t nw_tos;             /* IP ToS (including DSCP and ECN). */
@@ -120,23 +145,28 @@ struct flow {
     struct eth_addr arp_sha;    /* ARP/ND source hardware address. */
     struct eth_addr arp_tha;    /* ARP/ND target hardware address. */
     ovs_be16 tcp_flags;         /* TCP flags. With L3 to avoid matching L4. */
-    ovs_be16 pad3;              /* Pad to 64 bits. */
+    ovs_be16 pad2;              /* Pad to 64 bits. */
+    struct flow_nsh nsh;        /* Network Service Header keys */
 
     /* L4 (64-bit aligned) */
     ovs_be16 tp_src;            /* TCP/UDP/SCTP source port/ICMP type. */
     ovs_be16 tp_dst;            /* TCP/UDP/SCTP destination port/ICMP code. */
+    ovs_be16 ct_tp_src;         /* CT original tuple source port/ICMP type. */
+    ovs_be16 ct_tp_dst;         /* CT original tuple dst port/ICMP code. */
     ovs_be32 igmp_group_ip4;    /* IGMP group IPv4 address.
                                  * Keep last for BUILD_ASSERT_DECL below. */
+    ovs_be32 pad3;              /* Pad to 64 bits. */
 };
 BUILD_ASSERT_DECL(sizeof(struct flow) % sizeof(uint64_t) == 0);
 BUILD_ASSERT_DECL(sizeof(struct flow_tnl) % sizeof(uint64_t) == 0);
+BUILD_ASSERT_DECL(sizeof(struct flow_nsh) % sizeof(uint64_t) == 0);
 
 #define FLOW_U64S (sizeof(struct flow) / sizeof(uint64_t))
 
 /* Remember to update FLOW_WC_SEQ when changing 'struct flow'. */
 BUILD_ASSERT_DECL(offsetof(struct flow, igmp_group_ip4) + sizeof(uint32_t)
-                  == sizeof(struct flow_tnl) + 248
-                  && FLOW_WC_SEQ == 36);
+                  == sizeof(struct flow_tnl) + sizeof(struct flow_nsh) + 300
+                  && FLOW_WC_SEQ == 40);
 
 /* Incremental points at which flow classification may be performed in
  * segments.
@@ -200,5 +230,9 @@ bool flow_wildcards_has_extra(const struct flow_wildcards *,
 uint32_t flow_wildcards_hash(const struct flow_wildcards *, uint32_t basis);
 bool flow_wildcards_equal(const struct flow_wildcards *,
                           const struct flow_wildcards *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* flow.h */

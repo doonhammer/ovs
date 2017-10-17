@@ -65,12 +65,12 @@ static const struct flags ct_dpif_status_flags[] = {
  * that represents the error.  Otherwise it returns zero. */
 int
 ct_dpif_dump_start(struct dpif *dpif, struct ct_dpif_dump_state **dump,
-                   const uint16_t *zone)
+                   const uint16_t *zone, int *ptot_bkts)
 {
     int err;
 
     err = (dpif->dpif_class->ct_dump_start
-           ? dpif->dpif_class->ct_dump_start(dpif, dump, zone)
+           ? dpif->dpif_class->ct_dump_start(dpif, dump, zone, ptot_bkts)
            : EOPNOTSUPP);
 
     if (!err) {
@@ -202,6 +202,9 @@ ct_dpif_format_ipproto(struct ds *ds, uint16_t ipproto)
         : (ipproto == IPPROTO_TCP) ? "tcp"
         : (ipproto == IPPROTO_UDP) ? "udp"
         : (ipproto == IPPROTO_SCTP) ? "sctp"
+        : (ipproto == IPPROTO_UDPLITE) ? "udplite"
+        : (ipproto == IPPROTO_DCCP) ? "dccp"
+        : (ipproto == IPPROTO_IGMP) ? "igmp"
         : NULL;
 
     if (name) {
@@ -405,4 +408,18 @@ ct_dpif_format_helper(struct ds *ds, const char *title,
         }
         ds_put_cstr(ds, helper->name);
     }
+}
+
+uint8_t
+ct_dpif_coalesce_tcp_state(uint8_t state)
+{
+    return coalesce_tcp_state(state);
+}
+
+void
+ct_dpif_format_tcp_stat(struct ds * ds, int tcp_state, int conn_per_state)
+{
+    ct_dpif_format_enum(ds, "\t  [", tcp_state, ct_dpif_tcp_state_string);
+    ds_put_cstr(ds, "]");
+    ds_put_format(ds, "=%u", conn_per_state);
 }

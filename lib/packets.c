@@ -35,6 +35,7 @@
 
 const struct in6_addr in6addr_exact = IN6ADDR_EXACT_INIT;
 const struct in6_addr in6addr_all_hosts = IN6ADDR_ALL_HOSTS_INIT;
+const struct in6_addr in6addr_all_routers = IN6ADDR_ALL_ROUTERS_INIT;
 
 struct in6_addr
 flow_tnl_dst(const struct flow_tnl *tnl)
@@ -190,6 +191,7 @@ compose_rarp(struct dp_packet *b, const struct eth_addr eth_src)
 
     dp_packet_reset_offsets(b);
     dp_packet_set_l3(b, arp);
+    b->packet_type = htonl(PT_ETH);
 }
 
 /* Insert VLAN header according to given TCI. Packet passed must be Ethernet
@@ -215,7 +217,7 @@ eth_push_vlan(struct dp_packet *packet, ovs_be16 tpid, ovs_be16 tci)
 void
 eth_pop_vlan(struct dp_packet *packet)
 {
-    struct vlan_eth_header *veh = dp_packet_l2(packet);
+    struct vlan_eth_header *veh = dp_packet_eth(packet);
 
     if (veh && dp_packet_size(packet) >= sizeof *veh
         && eth_type_vlan(veh->veth_type)) {
@@ -225,11 +227,52 @@ eth_pop_vlan(struct dp_packet *packet)
     }
 }
 
+/* Push Ethernet header onto 'packet' assuming it is layer 3 */
+void
+push_eth(struct dp_packet *packet, const struct eth_addr *dst,
+         const struct eth_addr *src)
+{
+    struct eth_header *eh;
+
+    ovs_assert(packet->packet_type != htonl(PT_ETH));
+    eh = dp_packet_resize_l2(packet, ETH_HEADER_LEN);
+    eh->eth_dst = *dst;
+    eh->eth_src = *src;
+    eh->eth_type = pt_ns_type_be(packet->packet_type);
+    packet->packet_type = htonl(PT_ETH);
+}
+
+/* Removes Ethernet header, including VLAN header, from 'packet'.
+ *
+ * Previous to calling this function, 'ofpbuf_l3(packet)' must not be NULL */
+void
+pop_eth(struct dp_packet *packet)
+{
+    char *l2_5 = dp_packet_l2_5(packet);
+    char *l3 = dp_packet_l3(packet);
+    ovs_be16 ethertype;
+    int increment;
+
+    ovs_assert(packet->packet_type == htonl(PT_ETH));
+    ovs_assert(l3 != NULL);
+
+    if (l2_5) {
+        increment = packet->l2_5_ofs;
+        ethertype = *(ALIGNED_CAST(ovs_be16 *, (l2_5 - 2)));
+    } else {
+        increment = packet->l3_ofs;
+        ethertype = *(ALIGNED_CAST(ovs_be16 *, (l3 - 2)));
+    }
+
+    dp_packet_resize_l2(packet, -increment);
+    packet->packet_type = PACKET_TYPE_BE(OFPHTN_ETHERTYPE, ntohs(ethertype));
+}
+
 /* Set ethertype of the packet. */
 static void
 set_ethertype(struct dp_packet *packet, ovs_be16 eth_type)
 {
-    struct eth_header *eh = dp_packet_l2(packet);
+    struct eth_header *eh = dp_packet_eth(packet);
 
     if (!eh) {
         return;
@@ -357,6 +400,88 @@ pop_mpls(struct dp_packet *packet, ovs_be16 ethtype)
         memmove((char*)dp_packet_data(packet) + MPLS_HLEN, dp_packet_data(packet), len);
         dp_packet_resize_l2_5(packet, -MPLS_HLEN);
     }
+}
+
+void
+encap_nsh(struct dp_packet *packet, const struct ovs_action_encap_nsh *encap)
+{
+    struct nsh_hdr *nsh;
+    size_t length = NSH_BASE_HDR_LEN + encap->mdlen;
+    uint8_t next_proto;
+
+    switch (ntohl(packet->packet_type)) {
+        case PT_ETH:
+            next_proto = NSH_P_ETHERNET;
+            break;
+        case PT_IPV4:
+            next_proto = NSH_P_IPV4;
+            break;
+        case PT_IPV6:
+            next_proto = NSH_P_IPV6;
+            break;
+        case PT_NSH:
+            next_proto = NSH_P_NSH;
+            break;
+        default:
+            OVS_NOT_REACHED();
+    }
+
+    nsh = (struct nsh_hdr *) dp_packet_push_uninit(packet, length);
+    nsh->ver_flags_len = htons(encap->flags << NSH_FLAGS_SHIFT | length >> 2);
+    nsh->next_proto = next_proto;
+    put_16aligned_be32(&nsh->path_hdr, encap->path_hdr);
+    nsh->md_type = encap->mdtype;
+    switch (nsh->md_type) {
+        case NSH_M_TYPE1:
+            nsh->md1 = *ALIGNED_CAST(struct nsh_md1_ctx *, encap->metadata);
+            break;
+        case NSH_M_TYPE2: {
+            /* The MD2 metadata in encap is already padded to 4 bytes. */
+            size_t len = ROUND_UP(encap->mdlen, 4);
+            memcpy(&nsh->md2, encap->metadata, len);
+            break;
+        }
+        default:
+            OVS_NOT_REACHED();
+    }
+
+    packet->packet_type = htonl(PT_NSH);
+    dp_packet_reset_offsets(packet);
+    packet->l3_ofs = 0;
+}
+
+bool
+decap_nsh(struct dp_packet *packet)
+{
+    struct nsh_hdr *nsh = (struct nsh_hdr *) dp_packet_l3(packet);
+    size_t length;
+    uint32_t next_pt;
+
+    if (packet->packet_type == htonl(PT_NSH) && nsh) {
+        switch (nsh->next_proto) {
+            case NSH_P_ETHERNET:
+                next_pt = PT_ETH;
+                break;
+            case NSH_P_IPV4:
+                next_pt = PT_IPV4;
+                break;
+            case NSH_P_IPV6:
+                next_pt = PT_IPV6;
+                break;
+            case NSH_P_NSH:
+                next_pt = PT_NSH;
+                break;
+            default:
+                /* Unknown inner packet type. Drop packet. */
+                return false;
+        }
+
+        length = nsh_hdr_len(nsh);
+        dp_packet_reset_packet(packet, length);
+        packet->packet_type = htonl(next_pt);
+        /* Packet must be recirculated for further processing. */
+    }
+    return true;
 }
 
 /* Converts hex digits in 'hex' to an Ethernet packet in '*packetp'.  The
@@ -843,6 +968,7 @@ eth_compose(struct dp_packet *b, const struct eth_addr eth_dst,
     eth->eth_src = eth_src;
     eth->eth_type = htons(eth_type);
 
+    b->packet_type = htonl(PT_ETH);
     dp_packet_reset_offsets(b);
     dp_packet_set_l3(b, data);
 
@@ -986,7 +1112,7 @@ packet_update_csum128(struct dp_packet *packet, uint8_t proto,
     }
 }
 
-static void
+void
 packet_set_ipv6_addr(struct dp_packet *packet, uint8_t proto,
                      ovs_16aligned_be32 addr[4],
                      const struct in6_addr *new_addr,
@@ -1164,7 +1290,7 @@ packet_set_nd(struct dp_packet *packet, const struct in6_addr *target,
               const struct eth_addr sll, const struct eth_addr tll)
 {
     struct ovs_nd_msg *ns;
-    struct ovs_nd_opt *nd_opt;
+    struct ovs_nd_lla_opt *opt;
     int bytes_remain = dp_packet_l4_size(packet);
 
     if (OVS_UNLIKELY(bytes_remain < sizeof(*ns))) {
@@ -1172,7 +1298,7 @@ packet_set_nd(struct dp_packet *packet, const struct in6_addr *target,
     }
 
     ns = dp_packet_l4(packet);
-    nd_opt = &ns->options[0];
+    opt = &ns->options[0];
     bytes_remain -= sizeof(*ns);
 
     if (memcmp(&ns->target, target, sizeof(ovs_be32[4]))) {
@@ -1180,33 +1306,31 @@ packet_set_nd(struct dp_packet *packet, const struct in6_addr *target,
                              true);
     }
 
-    while (bytes_remain >= ND_OPT_LEN && nd_opt->nd_opt_len != 0) {
-        if (nd_opt->nd_opt_type == ND_OPT_SOURCE_LINKADDR
-            && nd_opt->nd_opt_len == 1) {
-            if (!eth_addr_equals(nd_opt->nd_opt_mac, sll)) {
+    while (bytes_remain >= ND_LLA_OPT_LEN && opt->len != 0) {
+        if (opt->type == ND_OPT_SOURCE_LINKADDR && opt->len == 1) {
+            if (!eth_addr_equals(opt->mac, sll)) {
                 ovs_be16 *csum = &(ns->icmph.icmp6_cksum);
 
-                *csum = recalc_csum48(*csum, nd_opt->nd_opt_mac, sll);
-                nd_opt->nd_opt_mac = sll;
+                *csum = recalc_csum48(*csum, opt->mac, sll);
+                opt->mac = sll;
             }
 
             /* A packet can only contain one SLL or TLL option */
             break;
-        } else if (nd_opt->nd_opt_type == ND_OPT_TARGET_LINKADDR
-                   && nd_opt->nd_opt_len == 1) {
-            if (!eth_addr_equals(nd_opt->nd_opt_mac, tll)) {
+        } else if (opt->type == ND_OPT_TARGET_LINKADDR && opt->len == 1) {
+            if (!eth_addr_equals(opt->mac, tll)) {
                 ovs_be16 *csum = &(ns->icmph.icmp6_cksum);
 
-                *csum = recalc_csum48(*csum, nd_opt->nd_opt_mac, tll);
-                nd_opt->nd_opt_mac = tll;
+                *csum = recalc_csum48(*csum, opt->mac, tll);
+                opt->mac = tll;
             }
 
             /* A packet can only contain one SLL or TLL option */
             break;
         }
 
-        nd_opt += nd_opt->nd_opt_len;
-        bytes_remain -= nd_opt->nd_opt_len * ND_OPT_LEN;
+        opt += opt->len;
+        bytes_remain -= opt->len * ND_LLA_OPT_LEN;
     }
 }
 
@@ -1307,7 +1431,7 @@ compose_arp(struct dp_packet *b, uint16_t arp_op,
 {
     compose_arp__(b);
 
-    struct eth_header *eth = dp_packet_l2(b);
+    struct eth_header *eth = dp_packet_eth(b);
     eth->eth_dst = broadcast ? eth_addr_broadcast : arp_tha;
     eth->eth_src = arp_sha;
 
@@ -1341,6 +1465,8 @@ compose_arp__(struct dp_packet *b)
 
     dp_packet_reset_offsets(b);
     dp_packet_set_l3(b, arp);
+
+    b->packet_type = htonl(PT_ETH);
 }
 
 /* This function expects packet with ethernet header with correct
@@ -1371,7 +1497,7 @@ compose_nd_ns(struct dp_packet *b, const struct eth_addr eth_src,
     struct in6_addr sn_addr;
     struct eth_addr eth_dst;
     struct ovs_nd_msg *ns;
-    struct ovs_nd_opt *nd_opt;
+    struct ovs_nd_lla_opt *lla_opt;
     uint32_t icmp_csum;
 
     in6_addr_solicited_node(&sn_addr, ipv6_dst);
@@ -1379,22 +1505,22 @@ compose_nd_ns(struct dp_packet *b, const struct eth_addr eth_src,
 
     eth_compose(b, eth_dst, eth_src, ETH_TYPE_IPV6, IPV6_HEADER_LEN);
     ns = compose_ipv6(b, IPPROTO_ICMPV6, ipv6_src, &sn_addr,
-                      0, 0, 255, ND_MSG_LEN + ND_OPT_LEN);
+                      0, 0, 255, ND_MSG_LEN + ND_LLA_OPT_LEN);
 
     ns->icmph.icmp6_type = ND_NEIGHBOR_SOLICIT;
     ns->icmph.icmp6_code = 0;
     put_16aligned_be32(&ns->rso_flags, htonl(0));
 
-    nd_opt = &ns->options[0];
-    nd_opt->nd_opt_type = ND_OPT_SOURCE_LINKADDR;
-    nd_opt->nd_opt_len = 1;
+    lla_opt = &ns->options[0];
+    lla_opt->type = ND_OPT_SOURCE_LINKADDR;
+    lla_opt->len = 1;
 
     packet_set_nd(b, ipv6_dst, eth_src, eth_addr_zero);
 
     ns->icmph.icmp6_cksum = 0;
     icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
-    ns->icmph.icmp6_cksum = csum_finish(csum_continue(icmp_csum, ns,
-                                                      ND_MSG_LEN + ND_OPT_LEN));
+    ns->icmph.icmp6_cksum = csum_finish(
+        csum_continue(icmp_csum, ns, ND_MSG_LEN + ND_LLA_OPT_LEN));
 }
 
 /* Compose an IPv6 Neighbor Discovery Neighbor Advertisement message. */
@@ -1405,27 +1531,108 @@ compose_nd_na(struct dp_packet *b,
               ovs_be32 rso_flags)
 {
     struct ovs_nd_msg *na;
-    struct ovs_nd_opt *nd_opt;
+    struct ovs_nd_lla_opt *lla_opt;
     uint32_t icmp_csum;
 
     eth_compose(b, eth_dst, eth_src, ETH_TYPE_IPV6, IPV6_HEADER_LEN);
     na = compose_ipv6(b, IPPROTO_ICMPV6, ipv6_src, ipv6_dst,
-                      0, 0, 255, ND_MSG_LEN + ND_OPT_LEN);
+                      0, 0, 255, ND_MSG_LEN + ND_LLA_OPT_LEN);
 
     na->icmph.icmp6_type = ND_NEIGHBOR_ADVERT;
     na->icmph.icmp6_code = 0;
     put_16aligned_be32(&na->rso_flags, rso_flags);
 
-    nd_opt = &na->options[0];
-    nd_opt->nd_opt_type = ND_OPT_TARGET_LINKADDR;
-    nd_opt->nd_opt_len = 1;
+    lla_opt = &na->options[0];
+    lla_opt->type = ND_OPT_TARGET_LINKADDR;
+    lla_opt->len = 1;
 
     packet_set_nd(b, ipv6_src, eth_addr_zero, eth_src);
 
     na->icmph.icmp6_cksum = 0;
     icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
-    na->icmph.icmp6_cksum = csum_finish(csum_continue(icmp_csum, na,
-                                                      ND_MSG_LEN + ND_OPT_LEN));
+    na->icmph.icmp6_cksum = csum_finish(csum_continue(
+        icmp_csum, na, ND_MSG_LEN + ND_LLA_OPT_LEN));
+}
+
+/* Compose an IPv6 Neighbor Discovery Router Advertisement message with
+ * Source Link-layer Address Option and MTU Option.
+ * Caller can call packet_put_ra_prefix_opt to append Prefix Information
+ * Options to composed messags in 'b'. */
+void
+compose_nd_ra(struct dp_packet *b,
+              const struct eth_addr eth_src, const struct eth_addr eth_dst,
+              const struct in6_addr *ipv6_src, const struct in6_addr *ipv6_dst,
+              uint8_t cur_hop_limit, uint8_t mo_flags,
+              ovs_be16 router_lt, ovs_be32 reachable_time,
+              ovs_be32 retrans_timer, ovs_be32 mtu)
+{
+    /* Don't compose Router Advertisement packet with MTU Option if mtu
+     * value is 0. */
+    bool with_mtu = mtu != 0;
+    size_t mtu_opt_len = with_mtu ? ND_MTU_OPT_LEN : 0;
+
+    eth_compose(b, eth_dst, eth_src, ETH_TYPE_IPV6, IPV6_HEADER_LEN);
+
+    struct ovs_ra_msg *ra = compose_ipv6(
+        b, IPPROTO_ICMPV6, ipv6_src, ipv6_dst, 0, 0, 255,
+        RA_MSG_LEN + ND_LLA_OPT_LEN + mtu_opt_len);
+    ra->icmph.icmp6_type = ND_ROUTER_ADVERT;
+    ra->icmph.icmp6_code = 0;
+    ra->cur_hop_limit = cur_hop_limit;
+    ra->mo_flags = mo_flags;
+    ra->router_lifetime = router_lt;
+    ra->reachable_time = reachable_time;
+    ra->retrans_timer = retrans_timer;
+
+    struct ovs_nd_lla_opt *lla_opt = ra->options;
+    lla_opt->type = ND_OPT_SOURCE_LINKADDR;
+    lla_opt->len = 1;
+    lla_opt->mac = eth_src;
+
+    if (with_mtu) {
+        /* ovs_nd_mtu_opt has the same size with ovs_nd_lla_opt. */
+        struct ovs_nd_mtu_opt *mtu_opt
+            = (struct ovs_nd_mtu_opt *)(lla_opt + 1);
+        mtu_opt->type = ND_OPT_MTU;
+        mtu_opt->len = 1;
+        mtu_opt->reserved = 0;
+        put_16aligned_be32(&mtu_opt->mtu, mtu);
+    }
+
+    ra->icmph.icmp6_cksum = 0;
+    uint32_t icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
+    ra->icmph.icmp6_cksum = csum_finish(csum_continue(
+        icmp_csum, ra, RA_MSG_LEN + ND_LLA_OPT_LEN + mtu_opt_len));
+}
+
+/* Append an IPv6 Neighbor Discovery Prefix Information option to a
+ * Router Advertisement message. */
+void
+packet_put_ra_prefix_opt(struct dp_packet *b,
+                         uint8_t plen, uint8_t la_flags,
+                         ovs_be32 valid_lifetime, ovs_be32 preferred_lifetime,
+                         const ovs_be128 prefix)
+{
+    size_t prev_l4_size = dp_packet_l4_size(b);
+    struct ip6_hdr *nh = dp_packet_l3(b);
+    nh->ip6_plen = htons(prev_l4_size + ND_PREFIX_OPT_LEN);
+
+    struct ovs_ra_msg *ra = dp_packet_l4(b);
+    struct ovs_nd_prefix_opt *prefix_opt =
+        dp_packet_put_uninit(b, sizeof *prefix_opt);
+    prefix_opt->type = ND_OPT_PREFIX_INFORMATION;
+    prefix_opt->len = 4;
+    prefix_opt->prefix_len = plen;
+    prefix_opt->la_flags = la_flags;
+    put_16aligned_be32(&prefix_opt->valid_lifetime, valid_lifetime);
+    put_16aligned_be32(&prefix_opt->preferred_lifetime, preferred_lifetime);
+    put_16aligned_be32(&prefix_opt->reserved, 0);
+    memcpy(prefix_opt->prefix.be32, prefix.be32, sizeof(ovs_be32[4]));
+
+    ra->icmph.icmp6_cksum = 0;
+    uint32_t icmp_csum = packet_csum_pseudoheader6(dp_packet_l3(b));
+    ra->icmph.icmp6_cksum = csum_finish(csum_continue(
+        icmp_csum, ra, prev_l4_size + ND_PREFIX_OPT_LEN));
 }
 
 uint32_t

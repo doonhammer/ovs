@@ -46,22 +46,24 @@ make use of example Open vSwitch bridges that we'll describe in this guide.
 
 Create the following two files and store them in known locations. For example::
 
-    echo << EOF > /etc/ovs-ifup
+    $ cat << 'EOF' > /etc/ovs-ifup
     #!/bin/sh
 
     switch='br0'
-    /sbin/ifconfig $1 0.0.0.0 up
+    ip link set $1 up
     ovs-vsctl add-port ${switch} $1
     EOF
 
 ::
 
-    echo << EOF > /etc/ovs-ifdown
+    $ cat << 'EOF' > /etc/ovs-ifdown
     #!/bin/sh
 
     switch='br0'
-    /sbin/ifconfig $1 0.0.0.0 down
+    ip addr flush dev $1
+    ip link set $1 down
     ovs-vsctl del-port ${switch} $1
+    EOF
 
 The basic usage of Open vSwitch is described at the end of
 :doc:`/intro/install/general`. If you haven't already, create a bridge named

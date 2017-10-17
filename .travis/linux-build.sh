@@ -52,15 +52,16 @@ function install_kernel()
 function install_dpdk()
 {
     if [ -n "$DPDK_GIT" ]; then
-        git clone $DPDK_GIT dpdk-$1
-        cd dpdk-$1
-        git checkout v$1
+        git clone $DPDK_GIT dpdk-stable-$1
+        cd dpdk-stable-$1
+        git checkout tags/v$1
     else
         wget http://fast.dpdk.org/rel/dpdk-$1.tar.gz
         tar xzvf dpdk-$1.tar.gz > /dev/null
-        cd dpdk-$1
+        cd dpdk-stable-$1
     fi
     find ./ -type f | xargs sed -i 's/max-inline-insns-single=100/max-inline-insns-single=400/'
+    find ./ -type f | xargs sed -i 's/-Werror/-Werror -Wno-error=inline/'
     echo 'CONFIG_RTE_BUILD_FPIC=y' >>config/common_linuxapp
     sed -ri '/EXECENV_CFLAGS  = -pthread -fPIC/{s/$/\nelse ifeq ($(CONFIG_RTE_BUILD_FPIC),y)/;s/$/\nEXECENV_CFLAGS  = -pthread -fPIC/}' mk/exec-env/linuxapp/rte.vars.mk
     make config CC=gcc T=x86_64-native-linuxapp-gcc
@@ -80,14 +81,14 @@ fi
 
 if [ "$DPDK" ]; then
     if [ -z "$DPDK_VER" ]; then
-        DPDK_VER="16.11"
+        DPDK_VER="17.05.2"
     fi
     install_dpdk $DPDK_VER
     if [ "$CC" = "clang" ]; then
         # Disregard cast alignment errors until DPDK is fixed
         CFLAGS="$CFLAGS -Wno-cast-align"
     fi
-    EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=./dpdk-$DPDK_VER/build"
+    EXTRA_OPTS="$EXTRA_OPTS --with-dpdk=./dpdk-stable-$DPDK_VER/build"
 elif [ "$CC" != "clang" ]; then
     # DPDK headers currently trigger sparse errors
     SPARSE_FLAGS="$SPARSE_FLAGS -Wsparse-error"
@@ -101,16 +102,16 @@ if [ "$KERNEL" ] && [ ! "$TESTSUITE" ] && [ ! "$DPDK" ]; then
 fi
 
 if [ "$CC" = "clang" ]; then
-    make CFLAGS="$CFLAGS -Wno-error=unused-command-line-argument"
+    make -j2 CFLAGS="$CFLAGS -Wno-error=unused-command-line-argument"
 elif [[ $BUILD_ENV =~ "-m32" ]]; then
     # Disable sparse for 32bit builds on 64bit machine
-    make CFLAGS="$CFLAGS $BUILD_ENV"
+    make -j2 CFLAGS="$CFLAGS $BUILD_ENV"
 else
-    make CFLAGS="$CFLAGS $BUILD_ENV $SPARSE_FLAGS" C=1
+    make -j2 CFLAGS="$CFLAGS $BUILD_ENV $SPARSE_FLAGS" C=1
 fi
 
 if [ "$TESTSUITE" ] && [ "$CC" != "clang" ]; then
-    if ! make distcheck RECHECK=yes; then
+    if ! make distcheck TESTSUITEFLAGS=-j4 RECHECK=yes; then
         # testsuite.log is necessary for debugging.
         cat */_build/tests/testsuite.log
         exit 1

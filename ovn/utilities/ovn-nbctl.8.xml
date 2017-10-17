@@ -76,17 +76,29 @@
 
     <h1>Logical Switch ACL Commands</h1>
     <dl>
-      <dt>[<code>--log</code>] [<code>--may-exist</code>] <code>acl-add</code> <var>switch</var> <var>direction</var> <var>priority</var> <var>match</var> <var>action</var></dt>
+      <dt>[<code>--log</code>] [<code>--severity=</code><var>severity</var>] [<code>--name=</code><var>name</var>] [<code>--may-exist</code>] <code>acl-add</code> <var>switch</var> <var>direction</var> <var>priority</var> <var>match</var> <var>verdict</var></dt>
       <dd>
-        Adds the specified ACL to <var>switch</var>.
-        <var>direction</var> must be either <code>from-lport</code> or
-        <code>to-lport</code>.  <var>priority</var> must be between
-        <code>0</code> and <code>32767</code>, inclusive.  If
-        <code>--log</code> is specified, packet logging is enabled for the
-        ACL.  A full description of the fields are in <code>ovn-nb</code>(5).
-        If <code>--may-exist</code> is specified, adding a duplicated ACL
-        succeeds but the ACL is not really created. Without <code>--may-exist</code>,
-        adding a duplicated ACL results in error.
+        <p>
+          Adds the specified ACL to <var>switch</var>.
+          <var>direction</var> must be either <code>from-lport</code> or
+          <code>to-lport</code>.  <var>priority</var> must be between
+          <code>0</code> and <code>32767</code>, inclusive.  A full
+          description of the fields are in <code>ovn-nb</code>(5).  If
+          <code>--may-exist</code> is specified, adding a duplicated ACL
+          succeeds but the ACL is not really created. Without
+          <code>--may-exist</code>, adding a duplicated ACL results in
+          error.
+        </p>
+
+        <p>
+          The <code>--log</code> option enables packet logging for the ACL.
+          The options <code>--severity</code> and <code>--name</code> specify a
+          severity and name, respectively, for log entries (and also enable
+          logging).  The severity must be one of <code>alert</code>,
+          <code>warning</code>, <code>notice</code>, <code>info</code>, or
+          <code>debug</code>.  If a severity is not specified, the default is
+          <code>info</code>.
+        </p>
       </dd>
 
       <dt><code>acl-del</code> <var>switch</var> [<var>direction</var> [<var>priority</var> <var>match</var>]]</dt>
@@ -284,6 +296,32 @@
       <dt><code>lsp-get-options</code> <var>port</var></dt>
       <dd>
         Get the type-specific options for the logical port.
+      </dd>
+
+      <dt><code>lsp-set-dhcpv4-options</code> <var>port</var>
+          <var>dhcp_options</var></dt>
+      <dd>
+        Set the DHCPv4 options for the logical port.  The
+        <var>dhcp_options</var> is a UUID referring to a set of DHCP options in
+        the <ref table="DHCP_Options" /> table.
+      </dd>
+
+      <dt><code>lsp-get-dhcpv4-optoins</code> <var>port</var></dt>
+      <dd>
+        Get the configured DHCPv4 options for the logical port.
+      </dd>
+
+      <dt><code>lsp-set-dhcpv6-options</code> <var>port</var>
+          <var>dhcp_options</var></dt>
+      <dd>
+          Set the DHCPv6 options for the logical port.  The
+          <var>dhcp_options</var> is a UUID referring to a set of DHCP options
+          in the <ref table="DHCP_Options" /> table.
+      </dd>
+
+      <dt><code>lsp-get-dhcpv6-optoins</code> <var>port</var></dt>
+      <dd>
+        Get the configured DHCPv6 options for the logical port.
       </dd>
 
     </dl>
@@ -544,6 +582,29 @@
       <dd>
         Prints the administrative state of <var>port</var>, either
         <code>enabled</code> or <code>disabled</code>.
+      </dd>
+
+      <dt><code>lrp-set-gateway-chassis</code> <var>port</var>
+          <var>chassis</var> [<var>priority</var>]</dt>
+      <dd>
+        Set gateway chassis for <var>port</var>. <var>chassis</var>
+        is the name of the chassis. This creates a gateway chassis entry
+        in Gateway_Chassis table. It won't check if chassis really exists
+        in OVN_Southbound database. Priority will be set to 0
+        if <var>priority</var> is not provided by user. <var>priority</var>
+        must be between <code>0</code> and <code>32767</code>, inclusive.
+      </dd>
+      <dt><code>lrp-del-gateway-chassis</code> <var>port</var>
+          <var>chassis</var></dt>
+      <dd>
+        Deletes gateway chassis from <var>port</var>.  It is an error if
+        gateway chassis with <var>chassis</var> for <var>port</var> does
+        not exist.
+      </dd>
+      <dt><code>lrp-get-gateway-chassis</code> <var>port</var></dt>
+      <dd>
+        Lists all the gateway chassis with priority within <var>port</var> on
+        standard output, one per line, ordered based on priority.
       </dd>
     </dl>
 
@@ -825,12 +886,13 @@
     <h1>Database Commands</h1>
     <p>These commands query and modify the contents of <code>ovsdb</code> tables.
     They are a slight abstraction of the <code>ovsdb</code> interface and
-    as suchthey operate at a lower level than other <code>ovn-nbctl</code> commands.</p>
+    as such they operate at a lower level than other <code>ovn-nbctl</code> commands.</p>
     <p><var>Identifying Tables, Records, and Columns</var></p>
     <p>Each of these commands has a <var>table</var> parameter to identify a table
     within the database.  Many of them also take a <var>record</var> parameter
     that identifies a particular record within a table.  The <var>record</var>
-    parameter may be the UUID for a record, and many tables offer
+    parameter may be the UUID for a record, which may be abbreviated to its
+    first 4 (or more) hex digits, as long as that is unique.  Many tables offer
     additional ways to identify records.  Some commands also take
     <var>column</var> parameters that identify a particular field within the
     records in a table.</p>
@@ -893,6 +955,16 @@
 
     </dl>
 
+    <p>
+      Record names must be specified in full and with correct capitalization,
+      except that UUIDs may be abbreviated to their first 4 (or more) hex
+      digits, as long as that is unique within the table.  Names of tables and
+      columns are not case-sensitive, and <code>-</code> and <code>_</code> are
+      treated interchangeably.  Unique abbreviations of table and column names
+      are acceptable, e.g. <code>d</code> or <code>dhcp</code> is sufficient
+      to identify the <code>DHCP_Options</code> table.
+    </p>
+
     <xi:include href="lib/db-ctl-base.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
 
     <h1>Synchronization Commands</h1>
@@ -941,7 +1013,9 @@
       Deletes the current SSL configuration.
       </dd>
 
-      <dt>[<code>--bootstrap</code>] <code>set-ssl</code> <var>private-key</var> <var>certificate</var> <var>ca-cert</var></dt>
+      <dt>[<code>--bootstrap</code>] <code>set-ssl</code>
+         <var>private-key</var> <var>certificate</var> <var>ca-cert</var>
+         [<var>ssl-protocol-list</var> [<var>ssl-cipher-list</var>]]</dt>
       <dd>
       Sets the SSL configuration.
       </dd>
@@ -995,7 +1069,7 @@
     <dd>
       The OVSDB database remote to contact.  If the <env>OVN_NB_DB</env>
       environment variable is set, its value is used as the default.
-      Otherwise, the default is <code>unix:@RUNDIR@/db.sock</code>, but this
+      Otherwise, the default is <code>unix:@RUNDIR@/ovnnb_db.sock</code>, but this
       default is unlikely to be useful outside of single-machine OVN test
       environments.
     </dd>
@@ -1003,6 +1077,12 @@
 
     <h1>Logging options</h1>
     <xi:include href="lib/vlog.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
+    <h1>Table Formatting Options</h1>
+    These options control the format of output from the <code>list</code> and
+    <code>find</code> commands.
+    <xi:include href="lib/table.xml" xmlns:xi="http://www.w3.org/2003/XInclude"/>
+
     <h2>PKI Options</h2>
     <p>
       PKI configuration is required to use SSL for the connection to the

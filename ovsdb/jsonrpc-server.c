@@ -128,6 +128,7 @@ struct ovsdb_jsonrpc_remote {
     struct ovs_list sessions;   /* List of "struct ovsdb_jsonrpc_session"s. */
     uint8_t dscp;
     bool read_only;
+    char *role;
 };
 
 static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
@@ -270,6 +271,7 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
     ovs_list_init(&remote->sessions);
     remote->dscp = options->dscp;
     remote->read_only = options->read_only;
+    remote->role = nullable_xstrdup(options->role);
     shash_add(&svr->remotes, name, remote);
 
     if (!listener) {
@@ -287,6 +289,7 @@ ovsdb_jsonrpc_server_del_remote(struct shash_node *node)
     ovsdb_jsonrpc_session_close_all(remote);
     pstream_close(remote->listener);
     shash_delete(&remote->server->remotes, node);
+    free(remote->role);
     free(remote);
 }
 
@@ -944,6 +947,13 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         }
         reply = jsonrpc_create_reply(json_array_create(dbs, n_dbs),
                                      request->id);
+    } else if (!strcmp(request->method, "get_server_id")) {
+        const struct uuid *uuid = &s->up.server->uuid;
+        struct json *result;
+
+        result = json_string_create_nocopy(xasprintf(UUID_FMT,
+                                                    UUID_ARGS(uuid)));
+        reply = jsonrpc_create_reply(result, request->id);
     } else if (!strcmp(request->method, "lock")) {
         reply = ovsdb_jsonrpc_session_lock(s, request, OVSDB_LOCK_WAIT);
     } else if (!strcmp(request->method, "steal")) {
@@ -1031,7 +1041,8 @@ ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     /* Insert into trigger table. */
     t = xmalloc(sizeof *t);
     ovsdb_trigger_init(&s->up, db, &t->trigger, params, time_msec(),
-                       s->read_only);
+                       s->read_only, s->remote->role,
+                       jsonrpc_session_get_id(s->js));
     t->id = id;
     hmap_insert(&s->triggers, &t->hmap_node, hash);
 
@@ -1469,10 +1480,10 @@ ovsdb_jsonrpc_monitor_cond_change(struct ovsdb_jsonrpc_session *s,
                                     &m->unflushed, m->condition, m->version);
     if (update_json) {
         struct jsonrpc_msg *msg;
-        struct json *params;
+        struct json *p;
 
-        params = json_array_create_2(json_clone(m->monitor_id), update_json);
-        msg = ovsdb_jsonrpc_create_notify(m, params);
+        p = json_array_create_2(json_clone(m->monitor_id), update_json);
+        msg = ovsdb_jsonrpc_create_notify(m, p);
         jsonrpc_session_send(s->js, msg);
     }
 
@@ -1573,6 +1584,12 @@ ovsdb_jsonrpc_create_notify(const struct ovsdb_jsonrpc_monitor *m,
     }
 
     return jsonrpc_create_notify(method, params);
+}
+
+const struct uuid *
+ovsdb_jsonrpc_server_get_uuid(const struct ovsdb_jsonrpc_server *s)
+{
+    return &s->up.uuid;
 }
 
 static void

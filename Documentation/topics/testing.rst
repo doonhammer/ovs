@@ -38,8 +38,6 @@ described in :doc:`/intro/install/general`. You do not need to install Open
 vSwitch or to build or load the kernel module to run these test suites. You do
 not need supervisor privilege to run these test suites.
 
-.. _testing-unit-tests:
-
 Unit Tests
 ~~~~~~~~~~
 
@@ -62,7 +60,7 @@ To run all the unit tests in Open vSwitch in parallel, run::
 You can run up to eight threads. This takes under a minute on a modern 4-core
 desktop system.
 
-To see a list of all the available tests, run:
+To see a list of all the available tests, run::
 
     $ make check TESTSUITEFLAGS=--list
 
@@ -99,13 +97,13 @@ Coverage
 
 If the build was configured with ``--enable-coverage`` and the ``lcov`` utility
 is installed, you can run the testsuite and generate a code coverage report by
-using the ``check-lcoc`` target::
+using the ``check-lcov`` target::
 
     $ make check-lcov
 
 All the same options are avaiable via TESTSUITEFLAGS. For example::
 
-    $ make check-lcov TESTSUITEFLAGS=-j8 -k ovn
+    $ make check-lcov TESTSUITEFLAGS='-j8 -k ovn'
 
 .. _testing-valgrind:
 
@@ -125,8 +123,6 @@ All the same options are available via TESTSUITEFLAGS.
 .. hint::
   You may find that the valgrind results are easier to interpret if you put
   ``-q`` in ``~/.valgrindrc``, since that reduces the amount of output.
-
-.. _testing-oftest:
 
 OFTest
 ~~~~~~
@@ -181,14 +177,12 @@ standard and other standards.
   of Open vSwitch and OFTest in your bug report, plus any other information
   needed to reproduce the problem.
 
-.. _ryu:
-
 Ryu
 ~~~
 
 Ryu is an OpenFlow controller written in Python that includes an extensive
 OpenFlow testsuite. Open vSwitch includes a Makefile target to run Ryu in
-"dummy mode". See :ref:`testing-oftest` above for an explanation of dummy mode.
+"dummy mode". See `OFTest`_ above for an explanation of dummy mode.
 
 To run Ryu tests with Open vSwitch, first read and follow the instructions
 under **Testing** above. Second, obtain a copy of Ryu, install its
@@ -198,7 +192,7 @@ do not get installed, so it does not help).
 To run Ryu tests, run the following command from your Open vSwitch build
 directory::
 
-    $ make check-ryu RYUDIR=<ryu-source-dir>``
+    $ make check-ryu RYUDIR=<ryu-source-dir>
 
 where ``<ryu-source-dir>`` is the absolute path to the root of the Ryu source
 distribution. The default ``<ryu-source-dir>`` is ``$srcdir/../ryu``
@@ -210,6 +204,8 @@ omit ``RYUDIR``
   you believe to represent bugs in Open vSwitch. Include the precise versions
   of Open vSwitch and Ryu in your bug report, plus any other information
   needed to reproduce the problem.
+
+.. _datapath-testing:
 
 Datapath testing
 ~~~~~~~~~~~~~~~~
@@ -235,8 +231,9 @@ Vagrant
   Requires Vagrant (version 1.7.0 or later) and a compatible hypervisor
 
 .. note::
-  You must **Bootstrap** and **Configure** the sources before you run the steps
-  described here.
+  You must bootstrap and configure the sources (see
+  doc:`/intro/install/general`) before you run the steps described
+  here.
 
 A Vagrantfile is provided allowing to compile and provision the source tree as
 found locally in a virtual machine using the following command::
@@ -339,8 +336,6 @@ You should invoke scan-view to view analysis results. The last line of output
 from ``clang-analyze`` will list the command (containing results directory)
 that you should invoke to view the results on a browser.
 
-.. _testing-ci:
-
 Continuous Integration with Travis CI
 -------------------------------------
 
@@ -380,8 +375,6 @@ Instructions to setup travis-ci for your GitHub repository:
 
 4. Pushing a commit to the repository which breaks the build or the
    testsuite will now trigger a email sent to mylist@mydomain.org
-
-.. _testing-vsperf:
 
 vsperf
 ------

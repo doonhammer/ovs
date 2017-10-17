@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2016 Nicira, Inc.
+ * Copyright (c) 2008-2014, 2016-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,12 +45,11 @@ static struct vlog_rate_limit stp_rl = VLOG_RATE_LIMIT_INIT(60, 60);
 #define STP_TYPE_CONFIG 0x00
 #define STP_TYPE_TCN 0x80
 
-OVS_PACKED(
 struct stp_bpdu_header {
     ovs_be16 protocol_id;       /* STP_PROTOCOL_ID. */
     uint8_t protocol_version;   /* STP_PROTOCOL_VERSION. */
     uint8_t bpdu_type;          /* One of STP_TYPE_*. */
-});
+};
 BUILD_ASSERT_DECL(sizeof(struct stp_bpdu_header) == 4);
 
 enum stp_config_bpdu_flags {
@@ -73,10 +72,9 @@ struct stp_config_bpdu {
 });
 BUILD_ASSERT_DECL(sizeof(struct stp_config_bpdu) == 35);
 
-OVS_PACKED(
 struct stp_tcn_bpdu {
     struct stp_bpdu_header header; /* Type STP_TYPE_TCN. */
-});
+};
 BUILD_ASSERT_DECL(sizeof(struct stp_tcn_bpdu) == 4);
 
 struct stp_timer {
@@ -236,6 +234,8 @@ static void stp_send_bpdu(struct stp_port *, const void *, size_t)
     OVS_REQUIRES(mutex);
 static void stp_unixctl_tcn(struct unixctl_conn *, int argc,
                             const char *argv[], void *aux);
+static void stp_unixctl_show(struct unixctl_conn *, int argc,
+                             const char *argv[], void *aux);
 
 void
 stp_init(void)
@@ -251,6 +251,8 @@ stp_init(void)
 
         unixctl_command_register("stp/tcn", "[bridge]", 0, 1, stp_unixctl_tcn,
                                  NULL);
+        unixctl_command_register("stp/show", "[bridge]", 0, 1,
+                                 stp_unixctl_show, NULL);
         ovsthread_once_done(&once);
     }
 }
@@ -302,7 +304,7 @@ stp_create(const char *name, stp_identifier bridge_id,
 
     stp_stop_timer(&stp->tcn_timer);
     stp_stop_timer(&stp->topology_change_timer);
-    stp_start_timer(&stp->hello_timer, 0);
+    stp_start_timer(&stp->hello_timer, stp->hello_time);
 
     stp->send_bpdu = send_bpdu;
     stp->aux = aux;
@@ -857,18 +859,6 @@ stp_port_no(const struct stp_port *p)
     return index;
 }
 
-/* Returns the port ID for 'p'. */
-int
-stp_port_get_id(const struct stp_port *p)
-{
-    int port_id;
-
-    ovs_mutex_lock(&mutex);
-    port_id = p->port_id;
-    ovs_mutex_unlock(&mutex);
-    return port_id;
-}
-
 /* Returns the state of port 'p'. */
 enum stp_state
 stp_port_get_state(const struct stp_port *p)
@@ -882,13 +872,12 @@ stp_port_get_state(const struct stp_port *p)
 }
 
 /* Returns the role of port 'p'. */
-enum stp_role
-stp_port_get_role(const struct stp_port *p)
+static enum stp_role
+stp_port_get_role(const struct stp_port *p) OVS_REQUIRES(mutex)
 {
     struct stp_port *root_port;
     enum stp_role role;
 
-    ovs_mutex_lock(&mutex);
     root_port = p->stp->root_port;
     if (root_port && root_port->port_id == p->port_id) {
         role = STP_ROLE_ROOT;
@@ -899,7 +888,6 @@ stp_port_get_role(const struct stp_port *p)
     } else {
         role = STP_ROLE_ALTERNATE;
     }
-    ovs_mutex_unlock(&mutex);
     return role;
 }
 
@@ -912,6 +900,17 @@ stp_port_get_counts(const struct stp_port *p,
     *tx_count = p->tx_count;
     *rx_count = p->rx_count;
     *error_count = p->error_count;
+    ovs_mutex_unlock(&mutex);
+}
+
+void
+stp_port_get_status(const struct stp_port *p,
+                    int *port_id, enum stp_state *state, enum stp_role *role)
+{
+    ovs_mutex_lock(&mutex);
+    *port_id = p->port_id;
+    *state = p->state;
+    *role = stp_port_get_role(p);
     ovs_mutex_unlock(&mutex);
 }
 
@@ -1633,6 +1632,100 @@ stp_unixctl_tcn(struct unixctl_conn *conn, int argc,
     }
 
     unixctl_command_reply(conn, "OK");
+
+out:
+    ovs_mutex_unlock(&mutex);
+}
+
+static void
+stp_bridge_id_details(struct ds *ds, const stp_identifier bridge_id,
+                      const int hello_time, const int max_age,
+                      const int forward_delay)
+    OVS_REQUIRES(mutex)
+{
+    uint16_t priority = bridge_id >> 48;
+    ds_put_format(ds, "\tstp-priority\t%"PRIu16"\n", priority);
+
+    struct eth_addr mac;
+    const uint64_t mac_bits = (UINT64_C(1) << 48) - 1;
+    eth_addr_from_uint64(bridge_id & mac_bits, &mac);
+    ds_put_format(ds, "\tstp-system-id\t"ETH_ADDR_FMT"\n", ETH_ADDR_ARGS(mac));
+    ds_put_format(ds, "\tstp-hello-time\t%ds\n",
+                  timer_to_ms(hello_time) / 1000);
+    ds_put_format(ds, "\tstp-max-age\t%ds\n", timer_to_ms(max_age) / 1000);
+    ds_put_format(ds, "\tstp-fwd-delay\t%ds\n",
+                  timer_to_ms(forward_delay) / 1000);
+}
+
+static void
+stp_print_details(struct ds *ds, const struct stp *stp)
+    OVS_REQUIRES(mutex)
+{
+    const uint16_t port_no_bits = (UINT16_C(1) << 8) - 1;
+
+    ds_put_format(ds, "---- %s ----\n", stp->name);
+    ds_put_cstr(ds, "Root ID:\n");
+
+    stp_bridge_id_details(ds, stp->designated_root, stp->bridge_hello_time,
+                          stp->bridge_max_age, stp->bridge_forward_delay);
+
+    if (stp_is_root_bridge(stp)) {
+        ds_put_cstr(ds, "\tThis bridge is the root\n");
+    } else {
+        ds_put_format(ds, "\troot-port\t%s\n", stp->root_port->port_name);
+        ds_put_format(ds, "\troot-path-cost\t%u\n", stp->root_path_cost);
+    }
+
+    ds_put_cstr(ds, "\n");
+
+    ds_put_cstr(ds, "Bridge ID:\n");
+    stp_bridge_id_details(ds, stp->bridge_id, stp->hello_time,
+                          stp->max_age, stp->forward_delay);
+
+    ds_put_cstr(ds, "\n");
+
+    const struct stp_port *p;
+    ds_put_format(ds, "\t%-11.10s%-11.10s%-11.10s%-6.5s%-8.7s\n",
+                  "Interface", "Role", "State", "Cost", "Pri.Nbr");
+    ds_put_cstr(ds, "\t---------- ---------- ---------- ----- -------\n");
+    FOR_EACH_ENABLED_PORT (p, stp) {
+        ds_put_format(ds, "\t%-11.10s", p->port_name);
+        ds_put_format(ds, "%-11.10s", stp_role_name(stp_port_get_role(p)));
+        ds_put_format(ds, "%-11.10s", stp_state_name(p->state));
+        ds_put_format(ds, "%-6d", p->path_cost);
+        ds_put_format(ds, "%d.%d\n", p->port_id >> 8,
+                      p->port_id & port_no_bits);
+    }
+
+    ds_put_cstr(ds, "\n");
+}
+
+static void
+stp_unixctl_show(struct unixctl_conn *conn, int argc,
+                 const char *argv[], void *aux OVS_UNUSED)
+{
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    ovs_mutex_lock(&mutex);
+    if (argc > 1) {
+        struct stp *stp = stp_find(argv[1]);
+
+        if (!stp) {
+            unixctl_command_reply_error(conn, "no such stp object");
+            goto out;
+        }
+
+        stp_print_details(&ds, stp);
+    } else {
+        struct stp *stp;
+
+        LIST_FOR_EACH (stp, node, all_stps) {
+            stp_print_details(&ds, stp);
+        }
+    }
+
+    unixctl_command_reply(conn, ds_cstr(&ds));
+    ds_destroy(&ds);
 
 out:
     ovs_mutex_unlock(&mutex);

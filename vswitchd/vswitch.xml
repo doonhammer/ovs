@@ -77,6 +77,14 @@
         qualified domain name since version 2.6.2.
       </column>
 
+      <column name="external_ids" key="rundir">
+        In Open vSwitch 2.8 and later, the run directory of the running Open
+        vSwitch daemon.  This directory is used for runtime state such as
+        control and management sockets.  The value of <ref
+        column="other_config" key="vhost-sock-dir"/> is relative to this
+        directory.
+      </column>
+
       <column name="other_config" key="stats-update-interval"
               type='{"type": "integer", "minInteger": 5000}'>
         <p>
@@ -170,6 +178,43 @@
         <p>
           The default is 10000.
         </p>
+    </column>
+
+      <column name="other_config" key="hw-offload"
+              type='{"type": "boolean"}'>
+        <p>
+          Set this value to <code>true</code> to enable netdev flow offload.
+        </p>
+        <p>
+          The default value is <code>false</code>. Changing this value requires
+          restarting the daemon
+        </p>
+        <p>
+          Currently Open vSwitch supports hardware offloading on
+          Linux systems.  On other systems, this value is ignored.
+          This functionality is considered 'experimental'. Depending
+          on which OpenFlow matches and actions are configured,
+          which kernel version is used, and what hardware is
+          available, Open vSwitch may not be able to offload
+          functionality to hardware.
+        </p>
+      </column>
+
+      <column name="other_config" key="tc-policy"
+              type='{"type": "string"}'>
+        <p>
+            Specified the policy used with HW offloading.
+            Options:
+                <code>none</code>    - Add software rule and offload rule to HW.
+                <code>skip_sw</code> - Offload rule to HW only.
+                <code>skip_hw</code> - Add software rule without offloading rule to HW.
+        </p>
+        <p>
+            This is only relevant if HW offloading is enabled (hw-offload).
+        </p>
+        <p>
+          The default value is <code>none</code>.
+        </p>
       </column>
 
       <column name="other_config" key="dpdk-init"
@@ -241,10 +286,6 @@
           regardless of socket. It is recommended that dpdk-socket-mem is used
           instead.
         </p>
-        <p>
-          If not specified, the value is 0. Changing this value requires
-          restarting the daemon.
-        </p>
       </column>
 
       <column name="other_config" key="dpdk-socket-mem"
@@ -255,12 +296,15 @@
         </p>
         <p>
           The specifier is a comma-separated string, in ascending order of CPU
-          socket (ex: 1024,2048,4096,8192 would set socket 0 to preallocate
-          1024MB, socket 1 to preallocate 2048MB, etc.)
+          socket. E.g. On a four socket system 1024,0,2048 would set socket 0
+          to preallocate 1024MB, socket 1 to preallocate 0MB, socket 2 to
+          preallocate 2048MB and socket 3 (no value given) to preallocate 0MB.
         </p>
         <p>
-          If not specified, the default value is 1024,0. Changing this value
-          requires restarting the daemon.
+          If dpdk-socket-mem and dpdk-alloc-mem are not specified, dpdk-socket-mem
+          will be used and the default value is 1024,0. If dpdk-socket-mem and
+          dpdk-alloc-mem are specified at same time, dpdk-socket-mem will be
+          used as default. Changing this value requires restarting the daemon.
         </p>
       </column>
 
@@ -290,13 +334,13 @@
       <column name="other_config" key="vhost-sock-dir"
               type='{"type": "string"}'>
         <p>
-          Specifies the path to the vhost-user unix domain socket files. This
-          path must exist and be a subdirectory tree of the Open vSwitch
-          run directory.
+          Specifies a relative path from <ref column="external_ids"
+          key="rundir"/> to the vhost-user unix domain socket files.  If this
+          value is unset, the sockets are put directly in <ref
+          column="external_ids" key="rundir"/>.
         </p>
         <p>
-          Defaults to the working directory of the application. Changing this
-          value requires restarting the daemon.
+          Changing this value requires restarting the daemon.
         </p>
       </column>
 
@@ -333,6 +377,46 @@
           <code>netdev</code> bridges), then the total number of threads is
           <code>n-handler-threads</code> times the number of software
           datapaths.
+        </p>
+      </column>
+
+      <column name="other_config" key="emc-insert-inv-prob"
+              type='{"type": "integer", "minInteger": 0, "maxInteger": 4294967295}'>
+        <p>
+          Specifies the inverse probability (1/emc-insert-inv-prob) of a flow
+          being inserted into the Exact Match Cache (EMC). On average one in
+          every <code>emc-insert-inv-prob</code> packets that generate a unique
+          flow will cause an insertion into the EMC.
+
+          A value of 1 will result in an insertion for every flow (1/1 = 100%)
+          whereas a value of zero will result in no insertions and essentially
+          disable the EMC.
+        </p>
+        <p>
+          Defaults to 100 ie. there is (1/100 =) 1% chance of EMC insertion.
+        </p>
+      </column>
+
+      <column name="other_config" key="vlan-limit"
+              type='{"type": "integer", "minInteger": 0}'>
+        <p>
+          Limits the number of VLAN headers that can be matched to the
+          specified number.  Further VLAN headers will be treated as payload,
+          e.g. a packet with more 802.1q headers will match Ethernet type
+          0x8100.
+        </p>
+        <p>
+          Value <code>0</code> means unlimited.  The actual number of supported
+          VLAN headers is the smallest of <code>vlan-limit</code>, the number
+          of VLANs supported by Open vSwitch userspace (currently 2), and the
+          number supported by the datapath.
+        </p>
+
+        <p>
+          If this value is absent, the default is currently 1.  This maintains
+          backward compatibility with controllers that were designed for use
+          with Open vSwitch versions earlier than 2.8, which only supported one
+          VLAN.
         </p>
       </column>
     </group>
@@ -811,12 +895,12 @@
       <column name="protocols">
         <p>
           List of OpenFlow protocols that may be used when negotiating
-          a connection with a controller.  OpenFlow 1.0, 1.1, 1.2, and
-          1.3 are enabled by default if this column is empty.
+          a connection with a controller.  OpenFlow 1.0, 1.1, 1.2, 1.3, and
+          1.4 are enabled by default if this column is empty.
         </p>
 
         <p>
-          OpenFlow 1.4, 1.5, and 1.6 are not enabled by default because their
+          OpenFlow 1.5 and 1.6 are not enabled by default because their
           implementations are missing features.  In addition, the OpenFlow 1.6
           specification is still under development and thus subject to change.
         </p>
@@ -1243,7 +1327,39 @@
     </column>
 
     <group title="VLAN Configuration">
-      <p>Bridge ports support the following types of VLAN configuration:</p>
+      <p>
+        In short, a VLAN (short for ``virtual LAN'') is a way to partition a
+        single switch into multiple switches.  VLANs can be confusing, so for
+        an introduction, please refer to the question ``What's a VLAN?'' in the
+        Open vSwitch FAQ.
+      </p>
+
+      <p>
+        A VLAN is sometimes encoded into a packet using a 802.1Q or 802.1ad
+        VLAN header, but every packet is part of some VLAN whether or not it is
+        encoded in the packet.  (A packet that appears to have no VLAN is part
+        of VLAN 0, by default.)  As a result, it's useful to think of a VLAN as
+        a metadata property of a packet, separate from how the VLAN is encoded.
+        For a given port, this column determines how the encoding of a packet
+        that ingresses or egresses the port maps to the packet's VLAN.  When a
+        packet enters the switch, its VLAN is determined based on its setting
+        in this column and its VLAN headers, if any, and then, conceptually,
+        the VLAN headers are then stripped off.  Conversely, when a packet
+        exits the switch, its VLAN and the settings in this column determine
+        what VLAN headers, if any, are pushed onto the packet before it
+        egresses the port.
+      </p>
+
+      <p>
+        The VLAN configuration in this column affects Open vSwitch only when it
+        is doing ``normal switching.''  It does not affect flows set up by an
+        OpenFlow controller, outside of the OpenFlow ``normal action.''
+      </p>
+
+      <p>
+        Bridge ports support the following types of VLAN configuration:
+      </p>
+
       <dl>
         <dt>trunk</dt>
         <dd>
@@ -1291,6 +1407,29 @@
           exception that a packet that egresses on a native-untagged port in
           the native VLAN will not have an 802.1Q header.
         </dd>
+
+        <dt>dot1q-tunnel</dt>
+        <dd>
+          <p>
+            A dot1q-tunnel port is somewhat like an access port.  Like an
+            access port, it carries packets on the single VLAN specified in the
+            <ref column="tag"/> column and this VLAN, called the service VLAN,
+            does not appear in an 802.1Q header for packets that ingress or
+            egress on the port.  The main difference lies in the behavior when
+            packets that include a 802.1Q header ingress on the port.  Whereas
+            an access port drops such packets, a dot1q-tunnel port treats these
+            as double-tagged with the outer service VLAN <ref column="tag"/>
+            and the inner customer VLAN taken from the 802.1Q header.
+            Correspondingly, to egress on the port, a packet outer VLAN (or
+            only VLAN) must be <ref column="tag"/>, which is removed before
+            egress, which exposes the inner (customer) VLAN if one is present.
+          </p>
+            
+          <p>
+            If <ref column="cvlans"/> is set, only allows packets in the
+            specified customer VLANs.
+          </p>
+        </dd>
       </dl>
       <p>
         A packet will only egress through bridge ports that carry the VLAN of
@@ -1332,6 +1471,37 @@
           A native-tagged or native-untagged port always trunks its native
           VLAN, regardless of whether <ref column="trunks"/> includes that
           VLAN.
+        </p>
+      </column>
+
+      <column name="cvlans">
+        <p>
+          For a dot1q-tunnel port, the customer VLANs that this port includes.
+          If this is empty, the port includes all customer VLANs.
+        </p>
+        <p>
+          For other kinds of ports, this setting is ignored.
+        </p>
+      </column>
+
+      <column name="other_config" key="qinq-ethtype"
+              type='{"type": "string", "enum": ["set", ["802.1ad", "802.1q"]]}'>
+        <p>
+          For a dot1q-tunnel port, this is the TPID for the service tag, that
+          is, for the 802.1Q header that contains the service VLAN ID.  Because
+          packets that actually ingress and egress a dot1q-tunnel port do not
+          include an 802.1Q header for the service VLAN, this does not affect
+          packets on the dot1q-tunnel port itself.  Rather, it determines the
+          service VLAN for a packet that ingresses on a dot1q-tunnel port and
+          egresses on a trunk port.
+        </p>
+        <p>
+          The value <code>802.1ad</code> specifies TPID 0x88a8, which is also
+          the default if the setting is omitted.  The value <code>802.1q</code>
+          specifies TPID 0x8100.
+        </p>
+        <p>
+          For other kinds of ports, this setting is ignored.
         </p>
       </column>
 
@@ -1399,9 +1569,8 @@
       <dl>
         <dt><code>balance-tcp</code></dt>
         <dd>
-          Balances flows among slaves based on L2, L3, and L4 protocol
-          information such as destination MAC address, IP address, and TCP
-          port.
+          Balances flows among slaves based on L3 and L4 protocol information
+          such as IP addresses and TCP/UDP ports.
         </dd>
       </dl>
 
@@ -2002,8 +2171,8 @@
 
           <dt><code>gre</code></dt>
           <dd>
-            An Ethernet over RFC 2890 Generic Routing Encapsulation over IPv4/IPv6
-            tunnel.
+            Generic Routing Encapsulation (GRE) over IPv4/IPv6 tunnel,
+            configurable to encapsulate layer 2 or layer 3 traffic.
           </dd>
 
           <dt><code>vxlan</code></dt>
@@ -2232,6 +2401,31 @@
         including tunnel monitoring.
       </column>
 
+      <group title="Tunnel Options: lisp only">
+        <column name="options" key="packet_type"
+                type='{"type": "string", "enum": ["set",
+                      ["legacy_l3", "ptap"]]}'>
+          <p>
+            A LISP tunnel sends and receives only IPv4 and IPv6 packets.  This
+            option controls what how the tunnel represents the packets that it
+            sends and receives:
+          </p>
+
+          <ul>
+            <li>
+              By default, or if this option is <code>legacy_l3</code>, the
+              tunnel represents packets as Ethernet frames for compatibility
+              with legacy OpenFlow controllers that expect this behavior.
+            </li>
+            <li>
+              If this option is <code>ptap</code>, the tunnel represents
+              packets using the <code>packet_type</code> mechanism introduced
+              in OpenFlow 1.5.
+            </li>
+          </ul>
+        </column>
+      </group>
+
       <group title="Tunnel Options: vxlan only">
 
         <column name="options" key="exts">
@@ -2247,9 +2441,81 @@
               additional information.
               (<code>https://tools.ietf.org/html/draft-smith-vxlan-group-policy</code>)
             </li>
+            <li>
+              <code>gpe</code>: Support for Generic Protocol Encapsulation in
+              accordance with IETF draft
+              <code>https://tools.ietf.org/html/draft-ietf-nvo3-vxlan-gpe</code>.
+              Without this option, a VXLAN packet always encapsulates an
+              Ethernet frame.  With this option, an VXLAN packet may also
+              encapsulate an IPv4, IPv6, NSH, or MPLS packet.
+            </li>
           </ul>
         </column>
 
+        <column name="options" key="packet_type"
+                type='{"type": "string", "enum": ["set",
+                      ["legacy_l2", "legacy_l3", "ptap"]]}'>
+          <p>
+            This option controls what types of packets the tunnel sends and
+            receives and how it represents them:
+          </p>
+
+          <ul>
+            <li>
+              By default, or if this option is <code>legacy_l2</code>, the
+              tunnel sends and receives only Ethernet frames.
+            </li>
+            <li>
+              If this option is <code>legacy_l3</code>, the tunnel sends and
+              receives only non-Ethernet (L3) packet, but the packets are
+              represented as Ethernet frames for compatibility with legacy
+              OpenFlow controllers that expect this behavior.  This requires
+              enabling <code>gpe</code> in <ref column="options" key="exts"/>.
+            </li>
+            <li>
+              If this option is <code>ptap</code>, Open vSwitch represents
+              packets in the tunnel using the <code>packet_type</code>
+              mechanism introduced in OpenFlow 1.5.  This mechanism supports
+              any kind of packet, but actually sending and receiving
+              non-Ethernet packets requires additionally enabling
+              <code>gpe</code> in <ref column="options" key="exts"/>.
+            </li>
+          </ul>
+        </column>
+      </group>
+
+      <group title="Tunnel Options: gre only">
+        <p>
+          <code>gre</code> interfaces support these options.
+        </p>
+
+        <column name="options" key="packet_type"
+                type='{"type": "string", "enum": ["set",
+                      ["legacy_l2", "legacy_l3", "ptap"]]}'>
+          <p>
+            This option controls what types of packets the tunnel sends and
+            receives and how it represents them:
+          </p>
+
+          <ul>
+            <li>
+              By default, or if this option is <code>legacy_l2</code>, the
+              tunnel sends and receives only Ethernet frames.
+            </li>
+            <li>
+              If this option is <code>legacy_l3</code>, the tunnel sends and
+              receives only non-Ethernet (L3) packet, but the packets are
+              represented as Ethernet frames for compatibility with legacy
+              OpenFlow controllers that expect this behavior.
+            </li>
+            <li>
+              If this option is <code>ptap</code>, the tunnel sends and
+              receives any kind of packet.  Open vSwitch represents packets in
+              the tunnel using the <code>packet_type</code> mechanism
+              introduced in OpenFlow 1.5.
+            </li>
+          </ul>
+        </column>
       </group>
 
       <group title="Tunnel Options: gre, geneve, and vxlan">
@@ -2282,8 +2548,36 @@
 
     <group title="Patch Options">
       <p>
-        Only <code>patch</code> interfaces support these options.
+        These options apply only to <dfn>patch ports</dfn>, that is, interfaces
+        whose <ref column="type"/> column is <code>patch</code>.  Patch ports
+        are mainly a way to connect otherwise independent bridges to one
+        another, similar to how one might plug an Ethernet cable (a ``patch
+        cable'') into two physical switches to connect those switches.  The
+        effect of plugging a patch port into two switches is conceptually
+        similar to that of plugging the two ends of a Linux <code>veth</code>
+        device into those switches, but the implementation of patch ports makes
+        them much more efficient.
       </p>
+
+      <p>
+        Patch ports may connect two different bridges (the usual case) or the
+        same bridge.  In the latter case, take special care to avoid loops,
+        e.g. by programming appropriate flows with OpenFlow.  Patch ports do
+        not work if its ends are attached to bridges on different datapaths,
+        e.g. to connect bridges in <code>system</code> and <code>netdev</code>
+        datapaths.
+      </p>
+
+      <p>
+        The following command creates and connects patch ports <code>p0</code>
+        and <code>p1</code> and adds them to bridges <code>br0</code> and
+        <code>br1</code>, respectively:
+      </p>
+
+      <pre>
+ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
+       -- add-port br1 p1 -- set Interface p1 type=patch options:peer=p0
+      </pre>
 
       <column name="options" key="peer">
         The <ref column="name"/> of the <ref table="Interface"/> for the other
@@ -2315,10 +2609,11 @@
           Specifies the PCI address associated with the port for physical
           devices, or the virtual driver to be used for the port when a virtual
           PMD is intended to be used. For the latter, the argument string
-          typically takes the form of eth_&lt;driver_name&gt;&lt;x&gt; where
-          'driver_name' is a valid virtual DPDK PMD driver name and where 'x'
-          lies in the range of 0 to RTE_MAX_ETHPORTS-1.
-          Only supported by the dpdk port type.
+          typically takes the form of
+          <code>eth_<var>driver_name</var><var>x</var></code>, where
+          <var>driver_name</var> is a valid virtual DPDK PMD driver name and
+          <var>x</var> is a unique identifier of your choice for the given
+          port.  Only supported by the dpdk port type.
         </p>
       </column>
 
@@ -2668,12 +2963,12 @@
         BFD operates by regularly transmitting BFD control messages at a rate
         negotiated independently in each direction.  Each endpoint specifies
         the rate at which it expects to receive control messages, and the rate
-        at which it is willing to transmit them.  Open vSwitch uses a detection
-        multiplier of three, meaning that an endpoint signals a connectivity
-        fault if three consecutive BFD control messages fail to arrive.  In the
-        case of a unidirectional connectivity issue, the system not receiving
-        BFD control messages signals the problem to its peer in the messages it
-        transmits.
+        at which it is willing to transmit them.  By default, Open vSwitch uses
+        a detection multiplier of three, meaning that an endpoint signals a
+        connectivity fault if three consecutive BFD control messages fail to
+        arrive.  In the case of a unidirectional connectivity issue, the system
+        not receiving BFD control messages signals the problem to its peer in
+        the messages it transmits.
       </p>
 
       <p>
@@ -2783,6 +3078,13 @@
           to indicate that the encapsulated packet is an OAM frame. By setting
           this to true, BFD packets will be marked as OAM if encapsulated in
           one of these tunnels.
+        </column>
+
+        <column name="bfd" key="mult"
+                type='{"type": "integer", "minInteger": 1, "maxInteger": 255}'>
+          The BFD detection multiplier, which defaults to 3.  An endpoint
+          signals a connectivity fault if the given number of consecutive BFD
+          control messages fail to arrive.
         </column>
       </group>
 
@@ -3202,20 +3504,6 @@
               type='{"type": "boolean"}'>
         Set to <code>true</code> to enable flow control auto negotiation on
         physical ports. By default, auto-neg is disabled.
-      </column>
-    </group>
-
-    <group title="Rx Checksum Offload Configuration">
-      <p>
-        The checksum validation on the incoming packets are performed on NIC
-        using Rx checksum offload feature. Implemented only for <code>dpdk
-        </code>physical interfaces.
-      </p>
-
-      <column name="options" key="rx-checksum-offload"
-              type='{"type": "boolean"}'>
-        Set to <code>false</code> to disble Rx checksum offloading on <code>
-        dpdk</code>physical ports. By default, Rx checksum offload is enabled.
       </column>
     </group>
 

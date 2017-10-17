@@ -61,8 +61,7 @@
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
 
-int ovs_net_id __read_mostly;
-EXPORT_SYMBOL_GPL(ovs_net_id);
+unsigned int ovs_net_id __read_mostly;
 
 static struct genl_family dp_packet_genl_family;
 static struct genl_family dp_flow_genl_family;
@@ -135,7 +134,6 @@ int lockdep_ovsl_is_held(void)
 	else
 		return 1;
 }
-EXPORT_SYMBOL_GPL(lockdep_ovsl_is_held);
 #endif
 
 static int queue_gso_packets(struct datapath *dp, struct sk_buff *,
@@ -390,7 +388,7 @@ static int queue_gso_packets(struct datapath *dp, struct sk_buff *skb,
 }
 
 static size_t upcall_msg_size(const struct dp_upcall_info *upcall_info,
-			      unsigned int hdrlen)
+			      unsigned int hdrlen, int actions_attrlen)
 {
 	size_t size = NLMSG_ALIGN(sizeof(struct ovs_header))
 		+ nla_total_size(hdrlen) /* OVS_PACKET_ATTR_PACKET */
@@ -407,7 +405,7 @@ static size_t upcall_msg_size(const struct dp_upcall_info *upcall_info,
 
 	/* OVS_PACKET_ATTR_ACTIONS */
 	if (upcall_info->actions_len)
-		size += nla_total_size(upcall_info->actions_len);
+		size += nla_total_size(actions_attrlen);
 
 	/* OVS_PACKET_ATTR_MRU */
 	if (upcall_info->mru)
@@ -422,7 +420,7 @@ static void pad_packet(struct datapath *dp, struct sk_buff *skb)
 		size_t plen = NLA_ALIGN(skb->len) - skb->len;
 
 		if (plen > 0)
-			memset(skb_put(skb, plen), 0, plen);
+			skb_put_zero(skb, plen);
 	}
 }
 
@@ -462,7 +460,7 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 
 	/* Complete checksum if needed */
 	if (skb->ip_summed == CHECKSUM_PARTIAL &&
-	    (err = skb_checksum_help(skb)))
+	    (err = skb_csum_hwoffload_help(skb, 0)))
 		goto out;
 
 	/* Older versions of OVS user space enforce alignment of the last
@@ -474,7 +472,8 @@ static int queue_userspace_packet(struct datapath *dp, struct sk_buff *skb,
 	else
 		hlen = skb->len;
 
-	len = upcall_msg_size(upcall_info, hlen - cutlen);
+	len = upcall_msg_size(upcall_info, hlen - cutlen,
+			      OVS_CB(skb)->acts_origlen);
 	user_skb = genlmsg_new(len, GFP_ATOMIC);
 	if (!user_skb) {
 		err = -ENOMEM;
@@ -571,7 +570,6 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	struct sw_flow *flow;
 	struct sw_flow_actions *sf_acts;
 	struct datapath *dp;
-	struct ethhdr *eth;
 	struct vport *input_vport;
 	u16 mru = 0;
 	int len;
@@ -591,18 +589,6 @@ static int ovs_packet_cmd_execute(struct sk_buff *skb, struct genl_info *info)
 	skb_reserve(packet, NET_IP_ALIGN);
 
 	nla_memcpy(__skb_put(packet, len), a[OVS_PACKET_ATTR_PACKET], len);
-
-	skb_reset_mac_header(packet);
-	eth = eth_hdr(packet);
-
-	/* Normally, setting the skb 'protocol' field would be handled by a
-	 * call to eth_type_trans(), but it assumes there's a sending
-	 * device, which we may not have.
-	 */
-	if (eth_proto_is_802_3(eth->h_proto))
-		packet->protocol = eth->h_proto;
-	else
-		packet->protocol = htons(ETH_P_802_2);
 
 	/* Set packet's mru */
 	if (a[OVS_PACKET_ATTR_MRU]) {
@@ -939,7 +925,6 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 	struct sw_flow_mask mask;
 	struct sk_buff *reply;
 	struct datapath *dp;
-	struct sw_flow_key key;
 	struct sw_flow_actions *acts;
 	struct sw_flow_match match;
 	u32 ufid_flags = ovs_nla_get_ufid_flags(a[OVS_FLOW_ATTR_UFID_FLAGS]);
@@ -967,19 +952,23 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 	}
 
 	/* Extract key. */
-	ovs_match_init(&match, &key, &mask);
+	ovs_match_init(&match, &new_flow->key, false, &mask);
 	error = ovs_nla_get_match(net, &match, a[OVS_FLOW_ATTR_KEY],
 				  a[OVS_FLOW_ATTR_MASK], log);
 	if (error)
 		goto err_kfree_flow;
 
-	ovs_flow_mask_key(&new_flow->key, &key, true, &mask);
-
 	/* Extract flow identifier. */
 	error = ovs_nla_get_identifier(&new_flow->id, a[OVS_FLOW_ATTR_UFID],
-				       &key, log);
+				       &new_flow->key, log);
 	if (error)
 		goto err_kfree_flow;
+
+	/* unmasked key is needed to match when ufid is not used. */
+	if (ovs_identifier_is_key(&new_flow->id))
+		match.key = new_flow->id.unmasked_key;
+
+	ovs_flow_mask_key(&new_flow->key, &new_flow->key, true, &mask);
 
 	/* Validate actions. */
 	error = ovs_nla_copy_actions(net, a[OVS_FLOW_ATTR_ACTIONS],
@@ -1007,7 +996,7 @@ static int ovs_flow_cmd_new(struct sk_buff *skb, struct genl_info *info)
 	if (ovs_identifier_is_ufid(&new_flow->id))
 		flow = ovs_flow_tbl_lookup_ufid(&dp->table, &new_flow->id);
 	if (!flow)
-		flow = ovs_flow_tbl_lookup(&dp->table, &key);
+		flow = ovs_flow_tbl_lookup(&dp->table, &new_flow->key);
 	if (likely(!flow)) {
 		rcu_assign_pointer(new_flow->sf_acts, acts);
 
@@ -1112,6 +1101,58 @@ static struct sw_flow_actions *get_flow_actions(struct net *net,
 	return acts;
 }
 
+/* Factor out match-init and action-copy to avoid
+ * "Wframe-larger-than=1024" warning. Because mask is only
+ * used to get actions, we new a function to save some
+ * stack space.
+ *
+ * If there are not key and action attrs, we return 0
+ * directly. In the case, the caller will also not use the
+ * match as before. If there is action attr, we try to get
+ * actions and save them to *acts. Before returning from
+ * the function, we reset the match->mask pointer. Because
+ * we should not to return match object with dangling reference
+ * to mask.
+ * */
+static int ovs_nla_init_match_and_action(struct net *net,
+					 struct sw_flow_match *match,
+					 struct sw_flow_key *key,
+					 struct nlattr **a,
+					 struct sw_flow_actions **acts,
+					 bool log)
+{
+	struct sw_flow_mask mask;
+	int error = 0;
+
+	if (a[OVS_FLOW_ATTR_KEY]) {
+		ovs_match_init(match, key, true, &mask);
+		error = ovs_nla_get_match(net, match, a[OVS_FLOW_ATTR_KEY],
+					  a[OVS_FLOW_ATTR_MASK], log);
+		if (error)
+			goto error;
+	}
+
+	if (a[OVS_FLOW_ATTR_ACTIONS]) {
+		if (!a[OVS_FLOW_ATTR_KEY]) {
+			OVS_NLERR(log,
+				  "Flow key attribute not present in set flow.");
+			return -EINVAL;
+		}
+
+		*acts = get_flow_actions(net, a[OVS_FLOW_ATTR_ACTIONS], key,
+					 &mask, log);
+		if (IS_ERR(*acts)) {
+			error = PTR_ERR(*acts);
+			goto error;
+		}
+	}
+
+	/* On success, error is 0. */
+error:
+	match->mask = NULL;
+	return error;
+}
+
 static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 {
 	struct net *net = sock_net(skb->sk);
@@ -1119,7 +1160,6 @@ static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 	struct ovs_header *ovs_header = info->userhdr;
 	struct sw_flow_key key;
 	struct sw_flow *flow;
-	struct sw_flow_mask mask;
 	struct sk_buff *reply = NULL;
 	struct datapath *dp;
 	struct sw_flow_actions *old_acts = NULL, *acts = NULL;
@@ -1131,34 +1171,18 @@ static int ovs_flow_cmd_set(struct sk_buff *skb, struct genl_info *info)
 	bool ufid_present;
 
 	ufid_present = ovs_nla_get_ufid(&sfid, a[OVS_FLOW_ATTR_UFID], log);
-	if (a[OVS_FLOW_ATTR_KEY]) {
-		ovs_match_init(&match, &key, &mask);
-		error = ovs_nla_get_match(net, &match, a[OVS_FLOW_ATTR_KEY],
-					  a[OVS_FLOW_ATTR_MASK], log);
-	} else if (!ufid_present) {
+	if (!a[OVS_FLOW_ATTR_KEY] && !ufid_present) {
 		OVS_NLERR(log,
 			  "Flow set message rejected, Key attribute missing.");
-		error = -EINVAL;
+		return -EINVAL;
 	}
+
+	error = ovs_nla_init_match_and_action(net, &match, &key, a,
+					      &acts, log);
 	if (error)
 		goto error;
 
-	/* Validate actions. */
-	if (a[OVS_FLOW_ATTR_ACTIONS]) {
-		if (!a[OVS_FLOW_ATTR_KEY]) {
-			OVS_NLERR(log,
-				  "Flow key attribute not present in set flow.");
-			error = -EINVAL;
-			goto error;
-		}
-
-		acts = get_flow_actions(net, a[OVS_FLOW_ATTR_ACTIONS], &key,
-					&mask, log);
-		if (IS_ERR(acts)) {
-			error = PTR_ERR(acts);
-			goto error;
-		}
-
+	if (acts) {
 		/* Can allocate before locking if have acts. */
 		reply = ovs_flow_cmd_alloc_info(acts, &sfid, info, false,
 						ufid_flags);
@@ -1249,7 +1273,7 @@ static int ovs_flow_cmd_get(struct sk_buff *skb, struct genl_info *info)
 
 	ufid_present = ovs_nla_get_ufid(&ufid, a[OVS_FLOW_ATTR_UFID], log);
 	if (a[OVS_FLOW_ATTR_KEY]) {
-		ovs_match_init(&match, &key, NULL);
+		ovs_match_init(&match, &key, true, NULL);
 		err = ovs_nla_get_match(net, &match, a[OVS_FLOW_ATTR_KEY], NULL,
 					log);
 	} else if (!ufid_present) {
@@ -1308,7 +1332,7 @@ static int ovs_flow_cmd_del(struct sk_buff *skb, struct genl_info *info)
 
 	ufid_present = ovs_nla_get_ufid(&ufid, a[OVS_FLOW_ATTR_UFID], log);
 	if (a[OVS_FLOW_ATTR_KEY]) {
-		ovs_match_init(&match, &key, NULL);
+		ovs_match_init(&match, &key, true, NULL);
 		err = ovs_nla_get_match(net, &match, a[OVS_FLOW_ATTR_KEY],
 					NULL, log);
 		if (unlikely(err))
@@ -1377,7 +1401,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	int err;
 
 	err = genlmsg_parse(cb->nlh, &dp_flow_genl_family, a,
-			    OVS_FLOW_ATTR_MAX, flow_policy);
+			    OVS_FLOW_ATTR_MAX, flow_policy, NULL);
 	if (err)
 		return err;
 	ufid_flags = ovs_nla_get_ufid_flags(a[OVS_FLOW_ATTR_UFID_FLAGS]);
@@ -2309,6 +2333,8 @@ static int __net_init ovs_init_net(struct net *net)
 	INIT_LIST_HEAD(&ovs_net->dps);
 	INIT_WORK(&ovs_net->dp_notify_work, ovs_dp_notify_wq);
 	ovs_ct_init(net);
+	ovs_netns_frags_init(net);
+	ovs_netns_frags6_init(net);
 	return 0;
 }
 
@@ -2344,6 +2370,8 @@ static void __net_exit ovs_exit_net(struct net *dnet)
 	struct net *net;
 	LIST_HEAD(head);
 
+	ovs_netns_frags6_exit(dnet);
+	ovs_netns_frags_exit(dnet);
 	ovs_ct_exit(dnet);
 	ovs_lock();
 	list_for_each_entry_safe(dp, dp_next, &ovs_net->dps, list_node)
@@ -2380,13 +2408,9 @@ static int __init dp_init(void)
 
 	pr_info("Open vSwitch switching datapath %s\n", VERSION);
 
-	err = compat_init();
-	if (err)
-		goto error;
-
 	err = action_fifos_init();
 	if (err)
-		goto error_compat_exit;
+		goto error;
 
 	err = ovs_internal_dev_rtnl_link_register();
 	if (err)
@@ -2404,9 +2428,13 @@ static int __init dp_init(void)
 	if (err)
 		goto error_vport_exit;
 
-	err = register_netdevice_notifier(&ovs_dp_device_notifier);
+	err = compat_init();
 	if (err)
 		goto error_netns_exit;
+
+	err = register_netdevice_notifier(&ovs_dp_device_notifier);
+	if (err)
+		goto error_compat_exit;
 
 	err = ovs_netdev_init();
 	if (err)
@@ -2422,6 +2450,8 @@ error_unreg_netdev:
 	ovs_netdev_exit();
 error_unreg_notifier:
 	unregister_netdevice_notifier(&ovs_dp_device_notifier);
+error_compat_exit:
+	compat_exit();
 error_netns_exit:
 	unregister_pernet_device(&ovs_net_ops);
 error_vport_exit:
@@ -2432,8 +2462,6 @@ error_unreg_rtnl_link:
 	ovs_internal_dev_rtnl_link_unregister();
 error_action_fifos_exit:
 	action_fifos_exit();
-error_compat_exit:
-	compat_exit();
 error:
 	return err;
 }
@@ -2443,13 +2471,13 @@ static void dp_cleanup(void)
 	dp_unregister_genl(ARRAY_SIZE(dp_genl_families));
 	ovs_netdev_exit();
 	unregister_netdevice_notifier(&ovs_dp_device_notifier);
+	compat_exit();
 	unregister_pernet_device(&ovs_net_ops);
 	rcu_barrier();
 	ovs_vport_exit();
 	ovs_flow_exit();
 	ovs_internal_dev_rtnl_link_unregister();
 	action_fifos_exit();
-	compat_exit();
 }
 
 module_init(dp_init);

@@ -179,6 +179,40 @@ OFPST_PORT_DESC reply (OF1.5):
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([ofproto - port-desc stats (OpenFlow 1.6)])
+OVS_VSWITCHD_START
+add_of_ports br0 1 2 3
+AT_CHECK([ovs-ofctl -F OXM-OpenFlow16 -O OpenFlow16 -vwarn dump-ports-desc br0], [0], [stdout])
+AT_CHECK([strip_xids < stdout | sed 's/00:0./00:0x/'], [0], [dnl
+OFPST_PORT_DESC reply (OF1.6):
+ 1(p1): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ 2(p2): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ 3(p3): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+ LOCAL(br0): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+])
+AT_CHECK([ovs-ofctl -F OXM-OpenFlow16 -O OpenFlow16 -vwarn dump-ports-desc br0 2], [0], [stdout])
+AT_CHECK([strip_xids < stdout | sed 's/00:0./00:0x/'], [0], [dnl
+OFPST_PORT_DESC reply (OF1.6):
+ 2(p2): addr:aa:55:aa:55:00:0x
+     config:     PORT_DOWN
+     state:      LINK_DOWN
+     speed: 0 Mbps now, 0 Mbps max
+])
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 dnl CHECK_QUEUE_STATS(label, option, format)
 m4_define([CHECK_QUEUE_STATS], [
 AT_SETUP([ofproto - queue stats - (OpenFlow $1)])
@@ -1194,15 +1228,15 @@ AT_CLEANUP
 AT_SETUP([ofproto - mod-port (OpenFlow 1.2)])
 OVS_VSWITCHD_START
 for command_config_state in \
-    'up 0 0' \
+    'up 0 LIVE' \
     'down PORT_DOWN LINK_DOWN' \
     'no-receive PORT_DOWN,NO_RECV LINK_DOWN' \
     'no-forward PORT_DOWN,NO_RECV,NO_FWD LINK_DOWN' \
     'no-packet-in PORT_DOWN,NO_RECV,NO_FWD,NO_PACKET_IN LINK_DOWN' \
     'forward PORT_DOWN,NO_RECV,NO_PACKET_IN LINK_DOWN' \
     'packet-in PORT_DOWN,NO_RECV LINK_DOWN' \
-    'up NO_RECV 0' \
-    'receive 0 0'
+    'up NO_RECV LIVE' \
+    'receive 0 LIVE'
 do
     set $command_config_state
     command=$[1] config=`echo $[2] | sed 's/,/ /g'` state=$[3]
@@ -1225,15 +1259,15 @@ AT_CLEANUP
 AT_SETUP([ofproto - mod-port (OpenFlow 1.4)])
 OVS_VSWITCHD_START
 for command_config_state in \
-    'up 0 0' \
+    'up 0 LIVE' \
     'down PORT_DOWN LINK_DOWN' \
     'no-receive PORT_DOWN,NO_RECV LINK_DOWN' \
     'no-forward PORT_DOWN,NO_RECV,NO_FWD LINK_DOWN' \
     'no-packet-in PORT_DOWN,NO_RECV,NO_FWD,NO_PACKET_IN LINK_DOWN' \
     'forward PORT_DOWN,NO_RECV,NO_PACKET_IN LINK_DOWN' \
     'packet-in PORT_DOWN,NO_RECV LINK_DOWN' \
-    'up NO_RECV 0' \
-    'receive 0 0'
+    'up NO_RECV LIVE' \
+    'receive 0 LIVE'
 do
     set $command_config_state
     command=$[1] config=`echo $[2] | sed 's/,/ /g'` state=$[3]
@@ -1249,6 +1283,38 @@ OFPST_PORT_DESC reply (OF1.4):
      state:      $state
      speed: 0 Mbps now, 0 Mbps max
 OFPT_GET_CONFIG_REPLY (OF1.4): frags=normal miss_send_len=0
+])
+done
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([ofproto - mod-port (OpenFlow 1.6)])
+OVS_VSWITCHD_START
+for command_config_state in \
+    'up 0 LIVE' \
+    'down PORT_DOWN LINK_DOWN' \
+    'no-receive PORT_DOWN,NO_RECV LINK_DOWN' \
+    'no-forward PORT_DOWN,NO_RECV,NO_FWD LINK_DOWN' \
+    'no-packet-in PORT_DOWN,NO_RECV,NO_FWD,NO_PACKET_IN LINK_DOWN' \
+    'forward PORT_DOWN,NO_RECV,NO_PACKET_IN LINK_DOWN' \
+    'packet-in PORT_DOWN,NO_RECV LINK_DOWN' \
+    'up NO_RECV LIVE' \
+    'receive 0 LIVE'
+do
+    set $command_config_state
+    command=$[1] config=`echo $[2] | sed 's/,/ /g'` state=$[3]
+    AT_CHECK([ovs-ofctl -O OpenFlow16 -vwarn mod-port br0 br0 $command])
+    AT_CHECK([ovs-ofctl -O OpenFlow16 -vwarn show br0], [0], [stdout])
+    AT_CHECK_UNQUOTED([strip_xids < stdout], [0], [dnl
+OFPT_FEATURES_REPLY (OF1.6): dpid:fedcba9876543210
+n_tables:254, n_buffers:0
+capabilities: FLOW_STATS TABLE_STATS PORT_STATS GROUP_STATS QUEUE_STATS BUNDLES
+OFPST_PORT_DESC reply (OF1.6):
+ LOCAL(br0): addr:aa:55:aa:55:00:00
+     config:     $config
+     state:      $state
+     speed: 0 Mbps now, 0 Mbps max
+OFPT_GET_CONFIG_REPLY (OF1.6): frags=normal miss_send_len=0
 ])
 done
 OVS_VSWITCHD_STOP
@@ -2033,9 +2099,9 @@ flow in_port=6 actions=group:1
 packet-out in_port=6, packet=0001020304050010203040501234 actions=table
 flow in_port=7 actions=group:2
 ])
-AT_CHECK([ovs-ofctl bundle br0 bundle.txt 2>&1 | sed '/talking to/,$d'], [], [dnl
-Error OFPBAC_BAD_OUT_GROUP for: OFPT_FLOW_MOD (OF1.4) (xid=0x5): ADD in_port=7 actions=group:2
-Error OFPBFC_MSG_FAILED for: OFPT_BUNDLE_CONTROL (OF1.4) (xid=0x8):
+AT_CHECK([ovs-ofctl bundle br0 bundle.txt 2>&1 | sed '/talking to/,$d' | strip_xids], [], [dnl
+Error OFPBAC_BAD_OUT_GROUP for: OFPT_FLOW_MOD (OF1.4): ADD in_port=7 actions=group:2
+Error OFPBFC_MSG_FAILED for: OFPT_BUNDLE_CONTROL (OF1.4):
  bundle_id=0 type=COMMIT_REQUEST flags=atomic ordered
 ])
 
@@ -2046,7 +2112,7 @@ OFPST_FLOW reply (OF1.4):
 ])
 
 # Verify that the packet-in was NOT received via controller action.
-AT_CHECK([sed 's/ (xid=0x[[1-9a-fA-F]][[0-9a-fA-F]]*)//' monitor.log], [0], [])
+AT_CHECK([strip_xids < monitor.log], [0], [])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -2074,10 +2140,10 @@ flow in_port=6 actions=group:1
 packet-out in_port=6, packet=0001020304050010203040501234 actions=table
 packet-out in_port=6, packet=0001020304050010203040501234 actions=group:2
 ])
-AT_CHECK([ovs-ofctl bundle br0 bundle.txt 2>&1 | sed '/talking to/,$d'], [], [dnl
-Error OFPBAC_BAD_OUT_GROUP for: OFPT_PACKET_OUT (OF1.4) (xid=0x5): in_port=6 actions=group:2 data_len=14
+AT_CHECK([ovs-ofctl bundle br0 bundle.txt 2>&1 | sed '/talking to/,$d' | strip_xids], [], [dnl
+Error OFPBAC_BAD_OUT_GROUP for: OFPT_PACKET_OUT (OF1.4): in_port=6 actions=group:2 data_len=14
 vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234
-Error OFPBFC_MSG_FAILED for: OFPT_BUNDLE_CONTROL (OF1.4) (xid=0x8):
+Error OFPBFC_MSG_FAILED for: OFPT_BUNDLE_CONTROL (OF1.4):
  bundle_id=0 type=COMMIT_REQUEST flags=atomic ordered
 ])
 
@@ -2088,7 +2154,7 @@ OFPST_FLOW reply (OF1.4):
 ])
 
 # Verify that the packet-in was NOT received via controller action.
-AT_CHECK([sed 's/ (xid=0x[[1-9a-fA-F]][[0-9a-fA-F]]*)//' monitor.log], [0], [])
+AT_CHECK([strip_xids < monitor.log], [0], [])
 
 OVS_VSWITCHD_STOP
 AT_CLEANUP
@@ -2161,7 +2227,7 @@ OVS_VSWITCHD_START([set-controller br0 tcp:240.0.0.1:6653])
 for i in 1 2 3 4 5; do ovs-appctl time/warp 1000; done
 
 # Check that no hidden flows are visible in OpenFlow.
-AT_CHECK([ovs-ofctl dump-flows br0], [0], [NXST_FLOW reply (xid=0x4):
+AT_CHECK([ovs-ofctl dump-flows br0 | strip_xids], [0], [NXST_FLOW reply:
 ])
 
 # Check that some hidden flows related to 240.0.0.1 are actually in table 0.
@@ -2173,7 +2239,7 @@ AT_CHECK([test `grep '240\.0\.0\.1' stdout | grep -v table_id= | wc -l` -gt 0])
 
 # Check that dump-tables doesn't count the hidden flows.
 head_table() {
-    printf 'OFPST_TABLE reply (xid=0x2):
+    printf 'OFPST_TABLE reply:
   table 0 ("%s"):
     active=0, lookup=0, matched=0
     max_entries=1000000
@@ -2199,7 +2265,7 @@ ditto() {
     done
 }
 (head_table classifier; ditto 1 253) > expout
-AT_CHECK([ovs-ofctl dump-tables br0], [0], [expout])
+AT_CHECK([ovs-ofctl dump-tables br0 | strip_xids], [0], [expout])
 OVS_VSWITCHD_STOP(["/240\.0\.0\.1/d"])
 AT_CLEANUP
 
@@ -2320,10 +2386,11 @@ head_table () {
         actions: output group set_field strip_vlan push_vlan mod_nw_ttl dec_ttl set_mpls_ttl dec_mpls_ttl push_mpls pop_mpls set_queue
         supported on Set-Field: tun_id tun_src tun_dst tun_ipv6_src tun_ipv6_dst tun_flags tun_gbp_id tun_gbp_flags tun_metadata0 dnl
 tun_metadata1 tun_metadata2 tun_metadata3 tun_metadata4 tun_metadata5 tun_metadata6 tun_metadata7 tun_metadata8 tun_metadata9 tun_metadata10 tun_metadata11 tun_metadata12 tun_metadata13 tun_metadata14 tun_metadata15 tun_metadata16 tun_metadata17 tun_metadata18 tun_metadata19 tun_metadata20 tun_metadata21 tun_metadata22 tun_metadata23 tun_metadata24 tun_metadata25 tun_metadata26 tun_metadata27 tun_metadata28 tun_metadata29 tun_metadata30 tun_metadata31 tun_metadata32 tun_metadata33 tun_metadata34 tun_metadata35 tun_metadata36 tun_metadata37 tun_metadata38 tun_metadata39 tun_metadata40 tun_metadata41 tun_metadata42 tun_metadata43 tun_metadata44 tun_metadata45 tun_metadata46 tun_metadata47 tun_metadata48 tun_metadata49 tun_metadata50 tun_metadata51 tun_metadata52 tun_metadata53 tun_metadata54 tun_metadata55 tun_metadata56 tun_metadata57 tun_metadata58 tun_metadata59 tun_metadata60 tun_metadata61 tun_metadata62 tun_metadata63 dnl
-metadata in_port in_port_oxm pkt_mark ct_mark ct_label reg0 reg1 reg2 reg3 reg4 reg5 reg6 reg7 reg8 reg9 reg10 reg11 reg12 reg13 reg14 reg15 xreg0 xreg1 xreg2 xreg3 xreg4 xreg5 xreg6 xreg7 xxreg0 xxreg1 xxreg2 xxreg3 eth_src eth_dst vlan_tci vlan_vid vlan_pcp mpls_label mpls_tc mpls_ttl ip_src ip_dst ipv6_src ipv6_dst ipv6_label nw_tos ip_dscp nw_ecn nw_ttl arp_op arp_spa arp_tpa arp_sha arp_tha tcp_src tcp_dst udp_src udp_dst sctp_src sctp_dst icmp_type icmp_code icmpv6_type icmpv6_code nd_target nd_sll nd_tll
+metadata in_port in_port_oxm pkt_mark ct_mark ct_label reg0 reg1 reg2 reg3 reg4 reg5 reg6 reg7 reg8 reg9 reg10 reg11 reg12 reg13 reg14 reg15 xreg0 xreg1 xreg2 xreg3 xreg4 xreg5 xreg6 xreg7 xxreg0 xxreg1 xxreg2 xxreg3 eth_src eth_dst vlan_tci vlan_vid vlan_pcp mpls_label mpls_tc mpls_ttl ip_src ip_dst ipv6_src ipv6_dst ipv6_label nw_tos ip_dscp nw_ecn nw_ttl arp_op arp_spa arp_tpa arp_sha arp_tha tcp_src tcp_dst udp_src udp_dst sctp_src sctp_dst icmp_type icmp_code icmpv6_type icmpv6_code nd_target nd_sll nd_tll nsh_flags nsh_spi nsh_si nsh_c1 nsh_c2 nsh_c3 nsh_c4
     matching:
       dp_hash: arbitrary mask
       recirc_id: exact match or wildcard
+      packet_type: exact match or wildcard
       conj_id: exact match or wildcard
       tun_id: arbitrary mask
       tun_src: arbitrary mask
@@ -2406,6 +2473,13 @@ metadata in_port in_port_oxm pkt_mark ct_mark ct_label reg0 reg1 reg2 reg3 reg4 
       ct_zone: exact match or wildcard
       ct_mark: arbitrary mask
       ct_label: arbitrary mask
+      ct_nw_proto: exact match or wildcard
+      ct_nw_src: arbitrary mask
+      ct_nw_dst: arbitrary mask
+      ct_ipv6_src: arbitrary mask
+      ct_ipv6_dst: arbitrary mask
+      ct_tp_src: arbitrary mask
+      ct_tp_dst: arbitrary mask
       reg0: arbitrary mask
       reg1: arbitrary mask
       reg2: arbitrary mask
@@ -2474,6 +2548,15 @@ metadata in_port in_port_oxm pkt_mark ct_mark ct_label reg0 reg1 reg2 reg3 reg4 
       nd_target: arbitrary mask
       nd_sll: arbitrary mask
       nd_tll: arbitrary mask
+      nsh_flags: arbitrary mask
+      nsh_mdtype: exact match or wildcard
+      nsh_np: exact match or wildcard
+      nsh_spi: exact match or wildcard
+      nsh_si: exact match or wildcard
+      nsh_c1: arbitrary mask
+      nsh_c2: arbitrary mask
+      nsh_c3: arbitrary mask
+      nsh_c4: arbitrary mask
 
 ' $1
 }
@@ -3139,8 +3222,7 @@ udp,vlan_tci=0x0000,dl_src=00:26:b9:8c:b0:f9,dl_dst=00:25:83:df:b4:00,nw_src=172
     fi
     AT_FAIL_IF([test X"$1" != X])
 
-    ovs-appctl -t ovs-ofctl ofctl/barrier
-    echo >>expout "OFPT_BARRIER_REPLY:"
+    OVS_WAIT_UNTIL([test `wc -l < "monitor.log"` -ge `wc -l < "expout"`])
 
     AT_CHECK(
       [[sed '
@@ -3243,7 +3325,7 @@ udp,vlan_tci=0x0000,dl_src=00:26:b9:8c:b0:f9,dl_dst=00:25:83:df:b4:00,nw_src=172
     fi
     AT_FAIL_IF([test X"$1" != X])
 
-    sleep 1
+    OVS_WAIT_UNTIL([test `wc -l < "monitor.log"` -ge `wc -l < "expout"`])
 
     AT_CHECK(
       [[sed '
@@ -3288,7 +3370,9 @@ OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([ofproto - asynchronous message control (OpenFlow 1.3)])
-OVS_VSWITCHD_START
+OVS_VSWITCHD_START([dnl
+    add-port br0 p1 -- set Interface p1 type=dummy ofport_request=10
+])
 AT_CHECK([ovs-ofctl -O OpenFlow13 -P standard monitor br0 --detach --no-chdir --pidfile])
 check_async () {
     printf '\n\n--- check_async %d ---\n\n\n' $1
@@ -3300,9 +3384,14 @@ check_async () {
     : > expout
 
     # OFPT_PACKET_IN, OFPR_ACTION (controller_id=0)
+    # OFPR_ACTION_SET is treated as OFPR_ACTION in OpenFlow 1.3
     ovs-ofctl -O OpenFlow13 -v packet-out br0 none controller '0001020304050010203040501234'
+    ovs-ofctl -O OpenFlow13 add-flow br0 'in_port=10 actions=write_actions(output(CONTROLLER))'
+    ovs-appctl netdev-dummy/receive p1 'in_port(10),eth(src=00:10:20:30:40:50,dst=00:01:02:03:04:05),eth_type(0x1234)'
     if test X"$1" = X"OFPR_ACTION"; then shift;
         echo >>expout "OFPT_PACKET_IN (OF1.3): total_len=14 in_port=ANY (via action) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234"
+        echo >>expout "OFPT_PACKET_IN (OF1.3): cookie=0x0 total_len=14 in_port=10 (via action) data_len=14 (unbuffered)
 vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234"
     fi
 
@@ -3349,14 +3438,13 @@ udp,vlan_tci=0x0000,dl_src=00:26:b9:8c:b0:f9,dl_dst=00:25:83:df:b4:00,nw_src=172
     ovs-ofctl -O OpenFlow13 add-group br0 group_id=1234,type=all,bucket=output:10
     ovs-ofctl -O OpenFlow13 add-flow br0 send_flow_rem,actions=group:1234
     ovs-ofctl -O OpenFlow13 --strict del-groups br0 group_id=1234
-    if test X"$1" = X"OFPRR_DELETE"; then shift;
-        echo >>expout "OFPT_FLOW_REMOVED (OF1.3):  reason=gropu_delete table_id=0"
+    if test X"$1" = X"OFPRR_GROUP_DELETE"; then shift;
+        echo >>expout "OFPT_FLOW_REMOVED (OF1.3):  reason=group_delete table_id=0"
     fi
 
     AT_FAIL_IF([test X"$1" != X])
 
-    ovs-appctl -t ovs-ofctl ofctl/barrier
-    echo >>expout "OFPT_BARRIER_REPLY (OF1.3):"
+    OVS_WAIT_UNTIL([test `wc -l < "monitor.log"` -ge `wc -l < "expout"`])
 
     AT_CHECK(
       [[sed '
@@ -3371,19 +3459,19 @@ check_async 1
 
 # Set miss_send_len to 128, turning on packet-ins for our service connection.
 ovs-appctl -t ovs-ofctl ofctl/send 0409000c0123456700000080
-check_async 2 OFPR_ACTION OFPPR_ADD OFPPR_DELETE OFPRR_DELETE
+check_async 2 OFPR_ACTION OFPPR_ADD OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE
 
 # Become slave (OF 1.3), which should disable everything except port status.
 ovs-appctl -t ovs-ofctl ofctl/send 041800180000000200000003000000000000000000000001
 check_async 3 OFPPR_ADD OFPPR_DELETE
 
 # Use OF 1.3 OFPT_SET_ASYNC to enable a patchwork of asynchronous messages.
-ovs-appctl -t ovs-ofctl ofctl/send 041c002000000002000000020000000500000005000000020000000200000005
-check_async 4 OFPR_INVALID_TTL OFPPR_DELETE OFPRR_DELETE
+ovs-appctl -t ovs-ofctl ofctl/send 041c00200000000200000002000000050000000500000002000000020000000d
+check_async 4 OFPR_INVALID_TTL OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE
 
 # Set controller ID 123.
 ovs-appctl -t ovs-ofctl ofctl/send 04040018000000030000232000000014000000000000007b
-check_async 5 OFPR_NO_MATCH OFPPR_DELETE OFPRR_DELETE
+check_async 5 OFPR_NO_MATCH OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE
 
 # Restore controller ID 0.
 ovs-appctl -t ovs-ofctl ofctl/send 040400180000000300002320000000140000000000000000
@@ -3397,7 +3485,9 @@ OVS_VSWITCHD_STOP
 AT_CLEANUP
 
 AT_SETUP([ofproto - asynchronous message control (OpenFlow 1.4)])
-OVS_VSWITCHD_START
+OVS_VSWITCHD_START([dnl
+    add-port br0 p1 -- set Interface p1 type=dummy ofport_request=10
+])
 AT_CHECK([ovs-ofctl -O OpenFlow14 -P standard monitor br0 --detach --no-chdir --pidfile])
 check_async () {
     printf '\n\n--- check_async %d ---\n\n\n' $1
@@ -3408,10 +3498,18 @@ check_async () {
     ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
     : > expout
 
-    # OFPT_PACKET_IN, OFPR_ACTION (controller_id=0)
+    # OFPT_PACKET_IN, OFPR_PACKET_OUT (controller_id=0)
     ovs-ofctl -O OpenFlow14 -v packet-out br0 none controller '0001020304050010203040501234'
-    if test X"$1" = X"OFPR_ACTION"; then shift;
-        echo >>expout "OFPT_PACKET_IN (OF1.4): total_len=14 in_port=ANY (via action) data_len=14 (unbuffered)
+    if test X"$1" = X"OFPR_PACKET_OUT"; then shift;
+        echo >>expout "OFPT_PACKET_IN (OF1.4): total_len=14 in_port=ANY (via packet_out) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234"
+    fi
+
+    # OFPT_PACKET_IN, OFPR_ACTION_SET (controller_id=0)
+    ovs-ofctl -O OpenFlow14 add-flow br0 'in_port=10 actions=write_actions(output(CONTROLLER))'
+    ovs-appctl netdev-dummy/receive p1 'in_port(10),eth(src=00:10:20:30:40:50,dst=00:01:02:03:04:05),eth_type(0x1234)'
+    if test X"$1" = X"OFPR_ACTION_SET"; then shift;
+        echo >>expout "OFPT_PACKET_IN (OF1.4): cookie=0x0 total_len=14 in_port=10 (via action_set) data_len=14 (unbuffered)
 vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234"
     fi
 
@@ -3447,7 +3545,7 @@ udp,vlan_tci=0x0000,dl_src=00:26:b9:8c:b0:f9,dl_dst=00:25:83:df:b4:00,nw_src=172
      speed: 0 Mbps now, 0 Mbps max
 OFPT_PORT_STATUS (OF1.4): MOD: ${INDEX}(test): addr:aa:55:aa:55:00:0x
      config:     0
-     state:      0
+     state:      LIVE
      speed: 0 Mbps now, 0 Mbps max"
     fi
 
@@ -3456,7 +3554,7 @@ OFPT_PORT_STATUS (OF1.4): MOD: ${INDEX}(test): addr:aa:55:aa:55:00:0x
     if test X"$1" = X"OFPPR_DELETE"; then shift;
         echo >>expout "OFPT_PORT_STATUS (OF1.4): DEL: ${INDEX}(test): addr:aa:55:aa:55:00:0x
      config:     0
-     state:      0
+     state:      LIVE
      speed: 0 Mbps now, 0 Mbps max"
     fi
 
@@ -3555,8 +3653,7 @@ table_desc:-
 
     AT_FAIL_IF([test X"$1" != X])
 
-    ovs-appctl -t ovs-ofctl ofctl/barrier
-    echo >>expout "OFPT_BARRIER_REPLY (OF1.4):"
+    OVS_WAIT_UNTIL([test `wc -l < "monitor.log"` -ge `wc -l < "expout"`])
 
     AT_CHECK(
       [[sed '
@@ -3571,14 +3668,14 @@ check_async 1
 
 # Set miss_send_len to 128, turning on packet-ins for our service connection.
 ovs-appctl -t ovs-ofctl ofctl/send 0509000c0123456700000080
-check_async 2 OFPR_ACTION OFPPR_ADD OFPPR_MODIFY OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE
+check_async 2 OFPR_PACKET_OUT OFPR_ACTION_SET OFPPR_ADD OFPPR_MODIFY OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE
 
 # Become slave (OF 1.4), which should disable everything except port status.
 ovs-appctl -t ovs-ofctl ofctl/send 051800180000000200000003000000000000000000000001
 check_async 3 OFPPR_ADD OFPPR_MODIFY OFPPR_DELETE
 
 # Use OF 1.4 OFPT_SET_ASYNC to enable a patchwork of asynchronous messages.
-ovs-appctl -t ovs-ofctl ofctl/send 051c0040000000020000000800000005000100080000000200020008000000020003000800000005000400080000001c00050008000000050008000800000018
+ovs-appctl -t ovs-ofctl ofctl/send 051c0040000000020000000800000005000100080000002000020008000000020003000800000005000400080000001c00050008000000050008000800000018
 check_async 4 OFPR_INVALID_TTL OFPPR_DELETE OFPRR_DELETE OFPRR_GROUP_DELETE OFPTR_VACANCY_UP
 
 # Set controller ID 123.
@@ -3590,7 +3687,7 @@ ovs-appctl -t ovs-ofctl ofctl/send 050400180000000300002320000000140000000000000
 
 # Become master (OF 1.4).
 ovs-appctl -t ovs-ofctl ofctl/send 051800180000000400000002000000000000000000000002
-check_async 6 OFPR_ACTION OFPPR_ADD OFPPR_MODIFY OFPRR_DELETE
+check_async 6 OFPR_PACKET_OUT OFPPR_ADD OFPPR_MODIFY OFPRR_DELETE
 
 OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 OVS_VSWITCHD_STOP
@@ -3629,7 +3726,7 @@ check_async () {
      speed: 0 Mbps now, 0 Mbps max
 OFPT_PORT_STATUS (OF1.5): MOD: 2(test): addr:aa:55:aa:55:00:0x
      config:     0
-     state:      0
+     state:      LIVE
      speed: 0 Mbps now, 0 Mbps max"
     fi
 
@@ -3638,14 +3735,13 @@ OFPT_PORT_STATUS (OF1.5): MOD: 2(test): addr:aa:55:aa:55:00:0x
     if test X"$1" = X"OFPPR_DELETE"; then shift;
         echo >>expout "OFPT_PORT_STATUS (OF1.5): DEL: ${INDEX}(test): addr:aa:55:aa:55:00:0x
      config:     0
-     state:      0
+     state:      LIVE
      speed: 0 Mbps now, 0 Mbps max"
     fi
 
     AT_FAIL_IF([test X"$1" != X])
 
-    ovs-appctl -t ovs-ofctl ofctl/barrier
-    echo >>expout "OFPT_BARRIER_REPLY (OF1.5):"
+    OVS_WAIT_UNTIL([test `wc -l < "monitor.log"` -ge `wc -l < "expout"`])
 
     AT_CHECK(
       [[sed '
@@ -3992,6 +4088,35 @@ OFPT_BARRIER_REPLY (OF1.1):
 OVS_VSWITCHD_STOP
 AT_CLEANUP
 
+AT_SETUP([ofproto - packet-out from controller (OpenFlow 1.5)])
+OVS_VSWITCHD_START
+
+# Start a monitor listening for packet-ins.
+AT_CHECK([ovs-ofctl -O OpenFlow15 -P standard monitor br0 --detach --no-chdir --pidfile])
+ovs-appctl -t ovs-ofctl ofctl/send 0609000c0123456700000080
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
+AT_CAPTURE_FILE([monitor.log])
+
+# Send some packet-outs with OFPP_NONE and OFPP_CONTROLLER (65533) as in_port.
+AT_CHECK([ovs-ofctl -O OpenFlow15 packet-out br0 "in_port=none tun_id=0x11 metadata=0x22 packet=0001020304050010203040501234 actions=controller"])
+AT_CHECK([ovs-ofctl -O OpenFlow15 packet-out br0 "in_port=controller tun_id=0x11 metadata=0x33 packet=0001020304050010203040505678 actions=controller"])
+
+# Stop the monitor and check its output.
+ovs-appctl -t ovs-ofctl ofctl/barrier
+OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
+
+AT_CHECK([sed 's/ (xid=0x[[0-9a-fA-F]]*)//' monitor.log], [0], [dnl
+OFPT_PACKET_IN (OF1.5): total_len=14 tun_id=0x11,metadata=0x22,in_port=ANY (via packet_out) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234
+OFPT_PACKET_IN (OF1.5): total_len=14 tun_id=0x11,metadata=0x33,in_port=CONTROLLER (via packet_out) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x5678
+OFPT_BARRIER_REPLY (OF1.5):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
 dnl This test checks that metadata and userdata are encoded in NXT_PACKET_IN2.
 AT_SETUP([ofproto - packet-out with metadata and userdata (NXT_PACKET_IN2)])
 OVS_VSWITCHD_START
@@ -4015,6 +4140,87 @@ NXT_PACKET_IN2: total_len=14 pkt_mark=0xaa,metadata=0xfafafafa5a5a5a5a,in_port=C
  userdata=01.02.03.04.05
 vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234
 OFPT_BARRIER_REPLY:
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This test checks that 1.5 packet_out is properly encoded/decoded.
+AT_SETUP([ofproto - packet-out with set_field metadata (OpenFlow 1.5)])
+OVS_VSWITCHD_START
+
+# Start a monitor listening for packet-ins.
+AT_CHECK([ovs-ofctl -P standard -O OpenFlow13 monitor br0 --detach --no-chdir --pidfile])
+ovs-appctl -t ovs-ofctl ofctl/send 0409000c0123456700000080
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
+AT_CAPTURE_FILE([monitor.log])
+
+# Send a packet-out with a couple of set-field action to set some metadata, and forward to controller
+AT_CHECK([ovs-ofctl -O OpenFlow15 packet-out br0 CONTROLLER 'set_field:0xfafafafa5a5a5a5a->metadata, controller' '0001020304050010203040501234'])
+
+# Stop the monitor and check its output.
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([sed 's/ (xid=0x[[0-9a-fA-F]]*)//' monitor.log], [0], [dnl
+OFPT_PACKET_IN (OF1.3): total_len=14 metadata=0xfafafafa5a5a5a5a,in_port=CONTROLLER (via action) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234
+OFPT_BARRIER_REPLY (OF1.3):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This test checks that packet_type PT_ETH is properly encoded/decoded in 1.5 packet_out.
+AT_SETUP([ofproto - packet-out with set_field metadata with packet_type PT_ETH (OpenFlow 1.5)])
+OVS_VSWITCHD_START
+
+# Start a monitor listening for packet-ins.
+AT_CHECK([ovs-ofctl -P standard -O OpenFlow13 monitor br0 --detach --no-chdir --pidfile])
+ovs-appctl -t ovs-ofctl ofctl/send 0409000c0123456700000080
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
+AT_CAPTURE_FILE([monitor.log])
+
+# Send a packet-out with a couple of set-field action to set some metadata, and forward to controller
+AT_CHECK([ovs-ofctl -O OpenFlow15 packet-out br0 "in_port=controller packet=0001020304050010203040501234 packet_type(0,0x0) actions=set_field:0xfafafafa5a5a5a5a->metadata,controller"])
+
+# Stop the monitor and check its output.
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([sed 's/ (xid=0x[[0-9a-fA-F]]*)//' monitor.log], [0], [dnl
+OFPT_PACKET_IN (OF1.3): total_len=14 metadata=0xfafafafa5a5a5a5a,in_port=CONTROLLER (via action) data_len=14 (unbuffered)
+vlan_tci=0x0000,dl_src=00:10:20:30:40:50,dl_dst=00:01:02:03:04:05,dl_type=0x1234
+OFPT_BARRIER_REPLY (OF1.3):
+])
+
+OVS_VSWITCHD_STOP
+AT_CLEANUP
+
+dnl This test checks that packet_type PT_IPV4 is properly encoded/decoded in 1.5 packet_out.
+AT_SETUP([ofproto - packet-out with set_field metadata with packet_type PT_IPV4 on PTAP bridge (OpenFlow 1.5)])
+OVS_VSWITCHD_START
+
+# Start a monitor listening for packet-ins.
+AT_CHECK([ovs-ofctl -P standard -O OpenFlow13 monitor br0 --detach --no-chdir --pidfile])
+ovs-appctl -t ovs-ofctl ofctl/send 0409000c0123456700000080
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl ofctl/set-output-file monitor.log
+AT_CAPTURE_FILE([monitor.log])
+
+# Send a packet-out with a couple of set-field action to set some metadata, and forward to controller
+AT_CHECK([ovs-ofctl -O OpenFlow15 packet-out br0 "in_port=controller packet=4500002012344000ff1155670a0000140a00001e006400c8000cea78ffffffff packet_type(1,0x800) actions=set_field:0xfafafafa5a5a5a5a->metadata,controller"])
+
+# Stop the monitor and check its output.
+ovs-appctl -t ovs-ofctl ofctl/barrier
+ovs-appctl -t ovs-ofctl exit
+
+AT_CHECK([sed 's/ (xid=0x[[0-9a-fA-F]]*)//' monitor.log], [0], [dnl
+OFPT_PACKET_IN (OF1.3): total_len=32 packet_type=(1,0x800),metadata=0xfafafafa5a5a5a5a,in_port=CONTROLLER (via action) data_len=32 (unbuffered)
+packet_type=(1,0x800),nw_src=10.0.0.20,nw_dst=10.0.0.30,nw_proto=17,nw_tos=0,nw_ecn=0,nw_ttl=255,tp_src=100,tp_dst=200 udp_csum:ea78
+OFPT_BARRIER_REPLY (OF1.3):
 ])
 
 OVS_VSWITCHD_STOP
@@ -4511,7 +4717,7 @@ OFPT_GET_ASYNC_REPLY (OF1.3):
  master:
        PACKET_IN: no_match action
      PORT_STATUS: add delete modify
-    FLOW_REMOVED: idle hard delete
+    FLOW_REMOVED: idle hard delete group_delete
      ROLE_STATUS: (off)
     TABLE_STATUS: (off)
   REQUESTFORWARD: (off)
@@ -4824,7 +5030,7 @@ OVS_VSWITCHD_START
 
 AT_CHECK([ovs-appctl vlog/set vconn:dbg])
 
-AT_CHECK([ovs-ofctl del-flows br0])
+AT_CHECK([ovs-ofctl --no-names del-flows br0])
 
 AT_DATA([flows.txt], [dnl
 add idle_timeout=50 in_port=2 dl_src=00:66:77:88:99:aa actions=1
@@ -4838,7 +5044,7 @@ add idle_timeout=70 in_port=2 dl_src=00:88:99:aa:bb:cc actions=7
 delete in_port=2 dl_src=00:88:99:aa:bb:cc
 ])
 
-AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl --no-names --bundle add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=output:5
@@ -4851,7 +5057,7 @@ modify actions=drop
 modify_strict in_port=2 dl_src=00:77:88:99:aa:bb actions=7
 ])
 
-AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl --no-names --bundle add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=drop
@@ -4866,7 +5072,7 @@ delete_strict in_port=2 dl_src=00:66:77:88:99:aa
 add in_port=2 dl_src=00:66:77:88:99:aa actions=drop
 ])
 
-AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl --no-names --bundle add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=60, in_port=2,dl_src=00:77:88:99:aa:bb actions=output:8
@@ -5053,9 +5259,9 @@ delete in_port=2 dl_src=00:88:99:aa:bb:cc
 add table=254 actions=drop
 ])
 
-AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d'],
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d' | strip_xids],
 [0], [dnl
-Error OFPBRC_EPERM for: OFPT_FLOW_MOD (OF1.4) (xid=0xb): ADD table:254 actions=drop
+Error OFPBRC_EPERM for: OFPT_FLOW_MOD (OF1.4): ADD table:254 actions=drop
 ])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
@@ -5377,7 +5583,7 @@ OVS_VSWITCHD_START
 
 AT_CHECK([ovs-appctl vlog/set vconn:dbg])
 
-AT_CHECK([ovs-ofctl del-flows br0])
+AT_CHECK([ovs-ofctl --no-names del-flows br0])
 
 AT_DATA([flows.txt], [dnl
 add idle_timeout=50 in_port=2 dl_src=00:66:77:88:99:aa actions=1
@@ -5391,7 +5597,7 @@ add idle_timeout=70 in_port=2 dl_src=00:88:99:aa:bb:cc actions=7
 delete in_port=2 dl_src=00:88:99:aa:bb:cc
 ])
 
-AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl -O OpenFlow13 --no-names --bundle add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=output:5
@@ -5404,7 +5610,7 @@ modify actions=drop
 modify_strict in_port=2 dl_src=00:77:88:99:aa:bb actions=7
 ])
 
-AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl -O OpenFlow13 --no-names --bundle add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=50, in_port=2,dl_src=00:66:77:88:99:aa actions=drop
@@ -5419,7 +5625,7 @@ delete_strict in_port=2 dl_src=00:66:77:88:99:aa
 add in_port=2 dl_src=00:66:77:88:99:aa actions=drop
 ])
 
-AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt])
+AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle --no-names add-flows br0 flows.txt])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
  idle_timeout=60, in_port=2,dl_src=00:77:88:99:aa:bb actions=output:8
@@ -5599,9 +5805,9 @@ delete in_port=2 dl_src=00:88:99:aa:bb:cc
 add table=254 actions=drop
 ])
 
-AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d'],
+AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d' | strip_xids],
 [0], [dnl
-Error OFPBRC_EPERM for: OFPT_FLOW_MOD (OF1.3) (xid=0xb): ADD table:254 actions=drop
+Error OFPBRC_EPERM for: OFPT_FLOW_MOD (OF1.3): ADD table:254 actions=drop
 ])
 
 AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip | sort], [0], [dnl
@@ -5627,10 +5833,10 @@ add idle_timeout=60 in_port=2 dl_src=00:77:88:99:aa:bb actions=group:2
 add idle_timeout=70 in_port=2 dl_src=00:88:99:aa:bb:cc actions=group:3
 ])
 
-AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d'],
+AT_CHECK([ovs-ofctl -O OpenFlow13 --bundle add-flows br0 flows.txt 2>&1 | sed '/talking to/,$d' | strip_xids],
 [0], [dnl
-Error OFPBAC_BAD_OUT_GROUP for: OFPT_FLOW_MOD (OF1.3) (xid=0x2): ADD in_port=2,dl_src=00:66:77:88:99:aa idle:50 actions=group:1
-Error OFPBFC_MSG_FAILED for: ONFT_BUNDLE_CONTROL (OF1.3) (xid=0x7):
+Error OFPBAC_BAD_OUT_GROUP for: OFPT_FLOW_MOD (OF1.3): ADD in_port=2,dl_src=00:66:77:88:99:aa idle:50 actions=group:1
+Error OFPBFC_MSG_FAILED for: ONFT_BUNDLE_CONTROL (OF1.3):
  bundle_id=0 type=COMMIT_REQUEST flags=atomic ordered
 ])
 
@@ -5697,8 +5903,8 @@ dnl Check the length of tun_metadata0 in the replied OXM header.
 dnl Ignore the first 0x50 bytes of hex dump from the reply msg since the NXM
 dnl header that describes the tunnel metadata starts at offset 0x50.
 AT_CHECK([ovs-ofctl dump-flows br0 -mmmm], [0], [stdout])
-AT_CHECK([sed -e 's/duration=[[0-9.]]*s/duration=?s/' -e 's/idle_age=[[0-9]]*/idle_age=?/' -e '/^000000[[0-4]]0 / d' stdout], [0], [dnl
-NXST_FLOW reply (xid=0x4):
+AT_CHECK([sed -e 's/duration=[[0-9.]]*s/duration=?s/' -e 's/idle_age=[[0-9]]*/idle_age=?/' -e '/^000000[[0-4]]0 / d' stdout | strip_xids], [0], [dnl
+NXST_FLOW reply:
  cookie=0x0, duration=?s, table=0, n_packets=0, n_bytes=0, idle_age=?, in_port=1 actions=move:NXM_NX_TUN_METADATA0[[0..31]]->NXM_NX_REG0[[]]
 00000050  ff ff 00 18 00 00 23 20-00 06 00 20 00 00 00 00 |......# ... ....|
 00000060  00 01 50 04 00 01 00 04-                        |..P.....        |
@@ -5800,10 +6006,17 @@ AT_CHECK([strip_xids < stderr | sed '/FLOW_MOD/,$d'], [0], [dnl
 OFPT_ERROR: OFPBAC_BAD_SET_LEN
 ])
 
-AT_CHECK([ovs-ofctl dump-flows br0], [0], [stdout])
-AT_CHECK([sed -e 's/duration=[[0-9.]]*s/duration=?s/' -e 's/idle_age=[[0-9]]*/idle_age=?/' stdout], [0], [dnl
-NXST_FLOW reply (xid=0x4):
- cookie=0x0, duration=?s, table=0, n_packets=0, n_bytes=0, idle_age=?, in_port=1 actions=move:NXM_NX_TUN_METADATA0[[0..31]]->NXM_NX_REG0[[]]
+dnl Check match field with tun_metadata
+AT_CHECK([ovs-ofctl add-flow br0 "tun_metadata0=0x11223344 actions=output:2"], [0], [], [stderr])
+AT_CHECK([ovs-ofctl add-flow br0 "tun_metadata1=0x11223344 actions=output:2"], [1], [], [stderr])
+AT_CHECK([strip_xids < stderr | sed '/FLOW_MOD/,$d'], [0], [dnl
+OFPT_ERROR: NXFMFC_INVALID_TLV_FIELD
+])
+
+AT_CHECK([ovs-ofctl dump-flows br0 | ofctl_strip], [0], [dnl)
+NXST_FLOW reply:
+ in_port=1 actions=move:NXM_NX_TUN_METADATA0[[0..31]]->NXM_NX_REG0[[]]
+ tun_metadata0=0x11223344 actions=output:2
 ])
 
 OVS_VSWITCHD_STOP(["/NXFMFC_INVALID_TLV_FIELD/d

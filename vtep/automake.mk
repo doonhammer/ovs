@@ -27,7 +27,7 @@ bin_PROGRAMS += \
 MAN_ROOTS += \
    vtep/vtep-ctl.8.in
 
-DISTCLEANFILES += \
+CLEANFILES += \
    vtep/vtep-ctl.8
 
 man_MANS += \
@@ -40,7 +40,8 @@ vtep_vtep_ctl_LDADD = vtep/libvtep.la lib/libopenvswitch.la
 scripts_SCRIPTS += \
     vtep/ovs-vtep
 
-EXTRA_DIST += vtep/ovs-vtep
+EXTRA_DIST += vtep/ovs-vtep.in
+CLEANFILES += vtep/ovs-vtep
 
 FLAKE8_PYFILES += vtep/ovs-vtep
 
@@ -61,13 +62,13 @@ vtep/vtep.pic: vtep/vtep.gv ovsdb/dot2pic
 	mv $@.tmp $@
 VTEP_PIC = vtep/vtep.pic
 VTEP_DOT_DIAGRAM_ARG = --er-diagram=$(VTEP_PIC)
-DISTCLEANFILES += vtep/vtep.gv vtep/vtep.pic
+CLEANFILES += vtep/vtep.gv vtep/vtep.pic
 endif
 endif
 
 # VTEP schema documentation
 EXTRA_DIST += vtep/vtep.xml
-DISTCLEANFILES += vtep/vtep.5
+CLEANFILES += vtep/vtep.5
 man_MANS += vtep/vtep.5
 vtep/vtep.5: \
 	ovsdb/ovsdb-doc vtep/vtep.xml $(srcdir)/vtep/vtep.ovsschema $(VTEP_PIC)

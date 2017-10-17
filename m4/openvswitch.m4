@@ -341,22 +341,26 @@ else:
             fi
           done
         done
-        if test $ovs_cv_python != no; then
-          if test -x "$ovs_cv_python" && ! "$ovs_cv_python" -c 'import six' >/dev/null 2>&1; then
-            ovs_cv_python=no
-            AC_MSG_WARN([Missing Python six library.])
-          fi
-        fi
       fi])
-   AC_SUBST([HAVE_PYTHON])
-   AM_MISSING_PROG([PYTHON], [python])
-   if test $ovs_cv_python != no; then
-     PYTHON=$ovs_cv_python
-     HAVE_PYTHON=yes
-   else
-     HAVE_PYTHON=no
+
+   # Set $PYTHON from cache variable.
+   if test $ovs_cv_python = no; then
+     AC_MSG_ERROR([cannot find python 2.7 or higher.])
    fi
-   AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])])
+   AM_MISSING_PROG([PYTHON], [python])
+   PYTHON=$ovs_cv_python
+
+   # HAVE_PYTHON is always true.  (Python has not always been a build
+   # requirement, so this variable is now obsolete.)
+   AC_SUBST([HAVE_PYTHON])
+   HAVE_PYTHON=yes
+   AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON" = yes])
+
+   AC_MSG_CHECKING([whether $PYTHON has six library])
+   if ! $PYTHON -c 'import six ; six.moves.range' >&AS_MESSAGE_LOG_FD 2>&1; then
+     AC_MSG_ERROR([Missing Python six library or version too old.])
+   fi
+   AC_MSG_RESULT([yes])])
 
 dnl Checks for Python 3.x, x >= 4.
 AC_DEFUN([OVS_CHECK_PYTHON3],
@@ -417,7 +421,7 @@ AC_DEFUN([OVS_CHECK_SPHINX],
   [AC_CACHE_CHECK(
     [for sphinx],
     [ovs_cv_sphinx],
-    [if sphinx-build --version >/dev/null 2>&1; then
+    [if type sphinx-build >/dev/null 2>&1; then
        ovs_cv_sphinx=yes
      else
        ovs_cv_sphinx=no
@@ -610,9 +614,25 @@ AC_DEFUN([OVS_LIBTOOL_VERSIONS],
   OVS_MAJOR=`echo "$PACKAGE_VERSION" | sed -e 's/[[.]].*//'`
   OVS_MINOR=`echo "$PACKAGE_VERSION" | sed -e "s/^$OVS_MAJOR//" -e 's/^.//' -e 's/[[.]].*//'`
   OVS_MICRO=`echo "$PACKAGE_VERSION" | sed -e "s/^$OVS_MAJOR.$OVS_MINOR//" -e 's/^.//' -e 's/[[^0-9]].*//'`
-  OVS_LT_RELINFO="-release $OVS_MAJOR"
-  OVS_LT_VERINFO="-version-info $OVS_MINOR:$OVS_MICRO"
+  OVS_LT_RELINFO="-release $OVS_MAJOR.$OVS_MINOR"
+  OVS_LT_VERINFO="-version-info $LT_CURRENT:$OVS_MICRO"
   OVS_LTINFO="$OVS_LT_RELINFO $OVS_LT_VERINFO"
-  AC_MSG_RESULT([libX-$OVS_MAJOR.so.$OVS_MINOR.0.$OVS_MICRO)])
+  AC_MSG_RESULT([libX-$OVS_MAJOR.$OVS_MINOR.so.$LT_CURRENT.0.$OVS_MICRO)])
   AC_SUBST(OVS_LTINFO)
     ])
+
+dnl OVS does not use C++ itself, but it provides public header files
+dnl that a C++ compiler should accept, so when --enable-Werror is in
+dnl effect and a C++ compiler is available, we enable building a C++
+dnl source file that #includes all the public headers, as a way to
+dnl ensure that they are acceptable as C++.
+AC_DEFUN([OVS_CHECK_CXX],
+  [AC_REQUIRE([AC_PROG_CXX])
+   AC_REQUIRE([OVS_ENABLE_WERROR])
+   AX_CXX_COMPILE_STDCXX([11], [], [optional])
+   if test $enable_Werror = yes && test $HAVE_CXX11 = 1; then
+     enable_cxx=:
+   else
+     enable_cxx=false
+   fi
+   AM_CONDITIONAL([HAVE_CXX], [$enable_cxx])])

@@ -53,13 +53,21 @@ extern NL_POLICY nlFlowKeyPolicy[];
 extern UINT32 nlFlowKeyPolicyLen;
 extern NL_POLICY nlFlowTunnelKeyPolicy[];
 extern UINT32 nlFlowTunnelKeyPolicyLen;
+DRIVER_CANCEL OvsCancelIrpDatapath;
 
+_IRQL_raises_(DISPATCH_LEVEL)
+_IRQL_saves_global_(OldIrql, gOvsSwitchContext->pidHashLock)
+_Acquires_lock_(gOvsSwitchContext->pidHashLock)
 static __inline VOID
 OvsAcquirePidHashLock()
 {
     NdisAcquireSpinLock(&(gOvsSwitchContext->pidHashLock));
 }
 
+_IRQL_requires_(DISPATCH_LEVEL)
+_IRQL_restores_global_(OldIrql, gOvsSwitchContext->pidHashLock)
+_Requires_lock_held_(gOvsSwitchContext->pidHashLock)
+_Releases_lock_(gOvsSwitchContext->pidHashLock)
 static __inline VOID
 OvsReleasePidHashLock()
 {
@@ -283,7 +291,8 @@ OvsNlExecuteCmdHandler(POVS_USER_PARAMS_CONTEXT usrParamsCtx,
         [OVS_PACKET_ATTR_ACTIONS] = {.type = NL_A_UNSPEC, .optional = FALSE},
         [OVS_PACKET_ATTR_USERDATA] = {.type = NL_A_UNSPEC, .optional = TRUE},
         [OVS_PACKET_ATTR_EGRESS_TUN_KEY] = {.type = NL_A_UNSPEC,
-                                            .optional = TRUE}
+                                            .optional = TRUE},
+        [OVS_PACKET_ATTR_MRU] = { .type = NL_A_U16, .optional = TRUE }
     };
 
     RtlZeroMemory(&execute, sizeof(OvsPacketExecute));
@@ -381,6 +390,10 @@ _MapNlAttrToOvsPktExec(PNL_MSG_HDR nlMsgHdr, PNL_ATTR *nlAttrs,
     ASSERT(keyAttrs[OVS_KEY_ATTR_IN_PORT]);
     execute->inPort = NlAttrGetU32(keyAttrs[OVS_KEY_ATTR_IN_PORT]);
     execute->keyAttrs = keyAttrs;
+
+    if (nlAttrs[OVS_PACKET_ATTR_MRU]) {
+        execute->mru = NlAttrGetU16(nlAttrs[OVS_PACKET_ATTR_MRU]);
+    }
 }
 
 NTSTATUS
@@ -397,6 +410,7 @@ OvsExecuteDpIoctl(OvsPacketExecute *execute)
     POVS_VPORT_ENTRY            vport = NULL;
     PNL_ATTR tunnelAttrs[__OVS_TUNNEL_KEY_ATTR_MAX];
     OvsFlowKey tempTunKey = {0};
+    POVS_BUFFER_CONTEXT ctx;
 
     if (execute->packetLen == 0) {
         status = STATUS_INVALID_PARAMETER;
@@ -458,6 +472,14 @@ OvsExecuteDpIoctl(OvsPacketExecute *execute)
 
     ndisStatus = OvsExtractFlow(pNbl, execute->inPort, &key, &layers,
                      tempTunKey.tunKey.dst == 0 ? NULL : &tempTunKey.tunKey);
+
+    if (ndisStatus != NDIS_STATUS_SUCCESS) {
+        /* Invalid network header */
+        goto dropit;
+    }
+
+    ctx = (POVS_BUFFER_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(pNbl);
+    ctx->mru = execute->mru;
 
     if (ndisStatus == NDIS_STATUS_SUCCESS) {
         NdisAcquireRWLockRead(gOvsSwitchContext->dispatchLock, &lockState, 0);
@@ -778,7 +800,7 @@ OvsCreateAndAddPackets(PVOID userData,
         if (tsoInfo.LsoV1Transmit.MSS) {
             OVS_LOG_TRACE("l4Offset %d", hdrInfo->l4Offset);
             newNbl = OvsTcpSegmentNBL(switchContext, nbl, hdrInfo,
-                    tsoInfo.LsoV1Transmit.MSS , 0);
+                                      tsoInfo.LsoV1Transmit.MSS , 0, FALSE);
             if (newNbl == NULL) {
                 return NDIS_STATUS_FAILURE;
             }
@@ -988,6 +1010,7 @@ OvsCreateQueueNlPacket(PVOID userData,
     UINT32 nlMsgSize;
     NL_BUFFER nlBuf;
     PNL_MSG_HDR nlMsg;
+    POVS_BUFFER_CONTEXT ctx;
 
     if (vport == NULL){
         /* No vport is not fatal. */
@@ -1069,6 +1092,14 @@ OvsCreateQueueNlPacket(PVOID userData,
     if (MapFlowKeyToNlKey(&nlBuf, key, OVS_PACKET_ATTR_KEY,
                           OVS_KEY_ATTR_TUNNEL) != STATUS_SUCCESS) {
         goto fail;
+    }
+
+    /* Set MRU attribute */
+    ctx = (POVS_BUFFER_CONTEXT)NET_BUFFER_LIST_CONTEXT_DATA_START(nbl);
+    if (ctx->mru != 0) {
+        if (!NlMsgPutTailU16(&nlBuf, OVS_PACKET_ATTR_MRU, (UINT16)ctx->mru)) {
+            goto fail;
+        }
     }
 
     /* XXX must send OVS_PACKET_ATTR_EGRESS_TUN_KEY if set by vswtchd */

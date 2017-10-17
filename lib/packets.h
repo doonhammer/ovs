@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "openvswitch/geneve.h"
 #include "openvswitch/packets.h"
 #include "openvswitch/types.h"
+#include "openvswitch/nsh.h"
 #include "odp-netlink.h"
 #include "random.h"
 #include "hash.h"
@@ -92,6 +93,7 @@ flow_tnl_equal(const struct flow_tnl *a, const struct flow_tnl *b)
 
 /* Datapath packet metadata */
 struct pkt_metadata {
+PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     uint32_t recirc_id;         /* Recirculation id carried with the
                                    recirculating packets. 0 for packets
                                    received from the wire. */
@@ -99,15 +101,33 @@ struct pkt_metadata {
                                    action. */
     uint32_t skb_priority;      /* Packet priority for QoS. */
     uint32_t pkt_mark;          /* Packet mark. */
-    uint16_t ct_state;          /* Connection state. */
+    uint8_t  ct_state;          /* Connection state. */
+    bool ct_orig_tuple_ipv6;
     uint16_t ct_zone;           /* Connection zone. */
     uint32_t ct_mark;           /* Connection mark. */
     ovs_u128 ct_label;          /* Connection label. */
     union flow_in_port in_port; /* Input port. */
+);
+
+PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
+    union {                     /* Populated only for non-zero 'ct_state'. */
+        struct ovs_key_ct_tuple_ipv4 ipv4;
+        struct ovs_key_ct_tuple_ipv6 ipv6;   /* Used only if                */
+    } ct_orig_tuple;                         /* 'ct_orig_tuple_ipv6' is set */
+);
+
+PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline2,
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. Note that
                                  * if 'ip_dst' == 0, the rest of the fields may
                                  * be uninitialized. */
+);
 };
+
+BUILD_ASSERT_DECL(offsetof(struct pkt_metadata, cacheline0) == 0);
+BUILD_ASSERT_DECL(offsetof(struct pkt_metadata, cacheline1) ==
+                  CACHE_LINE_SIZE);
+BUILD_ASSERT_DECL(offsetof(struct pkt_metadata, cacheline2) ==
+                  2 * CACHE_LINE_SIZE);
 
 static inline void
 pkt_metadata_init_tnl(struct pkt_metadata *md)
@@ -121,13 +141,20 @@ pkt_metadata_init_tnl(struct pkt_metadata *md)
 static inline void
 pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 {
+    /* This is called for every packet in userspace datapath and affects
+     * performance if all the metadata is initialized. Hence, fields should
+     * only be zeroed out when necessary.
+     *
+     * Initialize only till ct_state. Once the ct_state is zeroed out rest
+     * of ct fields will not be looked at unless ct_state != 0.
+     */
+    memset(md, 0, offsetof(struct pkt_metadata, ct_orig_tuple_ipv6));
+
     /* It can be expensive to zero out all of the tunnel metadata. However,
      * we can just zero out ip_dst and the rest of the data will never be
      * looked at. */
-    memset(md, 0, offsetof(struct pkt_metadata, in_port));
     md->tunnel.ip_dst = 0;
     md->tunnel.ipv6_dst = in6addr_any;
-
     md->in_port.odp_port = port;
 }
 
@@ -136,7 +163,12 @@ pkt_metadata_init(struct pkt_metadata *md, odp_port_t port)
 static inline void
 pkt_metadata_prefetch_init(struct pkt_metadata *md)
 {
-    ovs_prefetch_range(md, offsetof(struct pkt_metadata, tunnel.ip_src));
+    /* Prefetch cacheline0 as members till ct_state and odp_port will
+     * be initialized later in pkt_metadata_init(). */
+    OVS_PREFETCH(md->cacheline0);
+
+    /* Prefetch cachline2 as ip_dst & ipv6_dst fields will be initialized. */
+    OVS_PREFETCH(md->cacheline2);
 }
 
 bool dpid_from_string(const char *s, uint64_t *dpidp);
@@ -151,6 +183,8 @@ static const struct eth_addr eth_addr_exact OVS_UNUSED
 
 static const struct eth_addr eth_addr_zero OVS_UNUSED
     = { { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } };
+static const struct eth_addr64 eth_addr64_zero OVS_UNUSED
+    = { { { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 } } };
 
 static const struct eth_addr eth_addr_stp OVS_UNUSED
     = { { { 0x01, 0x80, 0xC2, 0x00, 0x00, 0x00 } } };
@@ -183,6 +217,10 @@ static inline bool eth_addr_is_zero(const struct eth_addr a)
 {
     return !(a.be16[0] | a.be16[1] | a.be16[2]);
 }
+static inline bool eth_addr64_is_zero(const struct eth_addr64 a)
+{
+    return !(a.be16[0] | a.be16[1] | a.be16[2] | a.be16[3]);
+}
 
 static inline int eth_mask_is_exact(const struct eth_addr a)
 {
@@ -194,11 +232,21 @@ static inline int eth_addr_compare_3way(const struct eth_addr a,
 {
     return memcmp(&a, &b, sizeof a);
 }
+static inline int eth_addr64_compare_3way(const struct eth_addr64 a,
+                                          const struct eth_addr64 b)
+{
+    return memcmp(&a, &b, sizeof a);
+}
 
 static inline bool eth_addr_equals(const struct eth_addr a,
                                    const struct eth_addr b)
 {
     return !eth_addr_compare_3way(a, b);
+}
+static inline bool eth_addr64_equals(const struct eth_addr64 a,
+                                     const struct eth_addr64 b)
+{
+    return !eth_addr64_compare_3way(a, b);
 }
 
 static inline bool eth_addr_equal_except(const struct eth_addr a,
@@ -310,6 +358,22 @@ ovs_be32 set_mpls_lse_values(uint8_t ttl, uint8_t tc, uint8_t bos,
 
 /* Example:
  *
+ * struct eth_addr64 eui64;
+ *    [...]
+ * printf("The EUI-64 address is "ETH_ADDR64_FMT"\n", ETH_ADDR64_ARGS(mac));
+ *
+ */
+#define ETH_ADDR64_FMT \
+    "%02"PRIx8":%02"PRIx8":%02"PRIx8":%02"PRIx8":" \
+    "%02"PRIx8":%02"PRIx8":%02"PRIx8":%02"PRIx8
+#define ETH_ADDR64_ARGS(EA) ETH_ADDR64_BYTES_ARGS((EA).ea64)
+#define ETH_ADDR64_BYTES_ARGS(EAB) \
+         (EAB)[0], (EAB)[1], (EAB)[2], (EAB)[3], \
+         (EAB)[4], (EAB)[5], (EAB)[6], (EAB)[7]
+#define ETH_ADDR64_STRLEN 23
+
+/* Example:
+ *
  * char *string = "1 00:11:22:33:44:55 2";
  * struct eth_addr mac;
  * int a, b;
@@ -334,6 +398,7 @@ ovs_be32 set_mpls_lse_values(uint8_t ttl, uint8_t tc, uint8_t bos,
 #define ETH_TYPE_RARP          0x8035
 #define ETH_TYPE_MPLS          0x8847
 #define ETH_TYPE_MPLS_MCAST    0x8848
+#define ETH_TYPE_NSH           0x894f
 
 static inline bool eth_type_mpls(ovs_be16 eth_type)
 {
@@ -358,25 +423,31 @@ static inline bool eth_type_vlan(ovs_be16 eth_type)
 #define ETH_TOTAL_MIN (ETH_HEADER_LEN + ETH_PAYLOAD_MIN)
 #define ETH_TOTAL_MAX (ETH_HEADER_LEN + ETH_PAYLOAD_MAX)
 #define ETH_VLAN_TOTAL_MAX (ETH_HEADER_LEN + VLAN_HEADER_LEN + ETH_PAYLOAD_MAX)
-OVS_PACKED(
 struct eth_header {
     struct eth_addr eth_dst;
     struct eth_addr eth_src;
     ovs_be16 eth_type;
-});
+};
 BUILD_ASSERT_DECL(ETH_HEADER_LEN == sizeof(struct eth_header));
+
+void push_eth(struct dp_packet *packet, const struct eth_addr *dst,
+              const struct eth_addr *src);
+void pop_eth(struct dp_packet *packet);
+
+void encap_nsh(struct dp_packet *packet,
+               const struct ovs_action_encap_nsh *encap_nsh);
+bool decap_nsh(struct dp_packet *packet);
 
 #define LLC_DSAP_SNAP 0xaa
 #define LLC_SSAP_SNAP 0xaa
 #define LLC_CNTL_SNAP 3
 
 #define LLC_HEADER_LEN 3
-OVS_PACKED(
 struct llc_header {
     uint8_t llc_dsap;
     uint8_t llc_ssap;
     uint8_t llc_cntl;
-});
+};
 BUILD_ASSERT_DECL(LLC_HEADER_LEN == sizeof(struct llc_header));
 
 /* LLC field values used for STP frames. */
@@ -443,14 +514,13 @@ struct vlan_header {
 BUILD_ASSERT_DECL(VLAN_HEADER_LEN == sizeof(struct vlan_header));
 
 #define VLAN_ETH_HEADER_LEN (ETH_HEADER_LEN + VLAN_HEADER_LEN)
-OVS_PACKED(
 struct vlan_eth_header {
     struct eth_addr veth_dst;
     struct eth_addr veth_src;
     ovs_be16 veth_type;         /* Always htons(ETH_TYPE_VLAN). */
     ovs_be16 veth_tci;          /* Lowest 12 bits are VLAN ID. */
     ovs_be16 veth_next_type;
-});
+};
 BUILD_ASSERT_DECL(VLAN_ETH_HEADER_LEN == sizeof(struct vlan_eth_header));
 
 /* MPLS related definitions */
@@ -584,6 +654,18 @@ char *ip_parse_cidr_len(const char *s, int *n, ovs_be32 *ip,
 
 #ifndef IPPROTO_SCTP
 #define IPPROTO_SCTP 132
+#endif
+
+#ifndef IPPROTO_DCCP
+#define IPPROTO_DCCP 33
+#endif
+
+#ifndef IPPROTO_IGMP
+#define IPPROTO_IGMP 2
+#endif
+
+#ifndef IPPROTO_UDPLITE
+#define IPPROTO_UDPLITE 136
 #endif
 
 /* TOS fields. */
@@ -745,33 +827,34 @@ struct tcp_header {
 };
 BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
 
-/* Connection states */
-enum {
-    CS_NEW_BIT =         0,
-    CS_ESTABLISHED_BIT = 1,
-    CS_RELATED_BIT =     2,
-    CS_REPLY_DIR_BIT =   3,
-    CS_INVALID_BIT =     4,
-    CS_TRACKED_BIT =     5,
-    CS_SRC_NAT_BIT =     6,
-    CS_DST_NAT_BIT =     7,
-};
+/* Connection states.
+ *
+ * Names like CS_RELATED are bit values, e.g. 1 << 2.
+ * Names like CS_RELATED_BIT are bit indexes, e.g. 2. */
+#define CS_STATES                               \
+    CS_STATE(NEW,         0, "new")             \
+    CS_STATE(ESTABLISHED, 1, "est")             \
+    CS_STATE(RELATED,     2, "rel")             \
+    CS_STATE(REPLY_DIR,   3, "rpl")             \
+    CS_STATE(INVALID,     4, "inv")             \
+    CS_STATE(TRACKED,     5, "trk")             \
+    CS_STATE(SRC_NAT,     6, "snat")            \
+    CS_STATE(DST_NAT,     7, "dnat")
 
 enum {
-    CS_NEW =         (1 << CS_NEW_BIT),
-    CS_ESTABLISHED = (1 << CS_ESTABLISHED_BIT),
-    CS_RELATED =     (1 << CS_RELATED_BIT),
-    CS_REPLY_DIR =   (1 << CS_REPLY_DIR_BIT),
-    CS_INVALID =     (1 << CS_INVALID_BIT),
-    CS_TRACKED =     (1 << CS_TRACKED_BIT),
-    CS_SRC_NAT =     (1 << CS_SRC_NAT_BIT),
-    CS_DST_NAT =     (1 << CS_DST_NAT_BIT),
+#define CS_STATE(ENUM, INDEX, NAME) \
+    CS_##ENUM = 1 << INDEX, \
+    CS_##ENUM##_BIT = INDEX,
+    CS_STATES
+#undef CS_STATE
 };
 
 /* Undefined connection state bits. */
-#define CS_SUPPORTED_MASK    (CS_NEW | CS_ESTABLISHED | CS_RELATED \
-                              | CS_INVALID | CS_REPLY_DIR | CS_TRACKED \
-                              | CS_SRC_NAT | CS_DST_NAT)
+enum {
+#define CS_STATE(ENUM, INDEX, NAME) +CS_##ENUM
+    CS_SUPPORTED_MASK = CS_STATES
+#undef CS_STATE
+};
 #define CS_UNSUPPORTED_MASK  (~(uint32_t)CS_SUPPORTED_MASK)
 
 #define ARP_HRD_ETHERNET 1
@@ -839,19 +922,53 @@ struct icmp6_header {
 };
 BUILD_ASSERT_DECL(ICMP6_HEADER_LEN == sizeof(struct icmp6_header));
 
+#define ICMP6_ERROR_HEADER_LEN 8
+struct icmp6_error_header {
+    struct icmp6_header icmp6_base;
+    ovs_be32 icmp6_error_ext;
+};
+BUILD_ASSERT_DECL(ICMP6_ERROR_HEADER_LEN == sizeof(struct icmp6_error_header));
+
 uint32_t packet_csum_pseudoheader6(const struct ovs_16aligned_ip6_hdr *);
 uint16_t packet_csum_upperlayer6(const struct ovs_16aligned_ip6_hdr *,
                                  const void *, uint8_t, uint16_t);
 
 /* Neighbor Discovery option field.
  * ND options are always a multiple of 8 bytes in size. */
-#define ND_OPT_LEN 8
-struct ovs_nd_opt {
-    uint8_t  nd_opt_type;      /* Values defined in icmp6.h */
-    uint8_t  nd_opt_len;       /* in units of 8 octets (the size of this struct) */
-    struct eth_addr nd_opt_mac;   /* Ethernet address in the case of SLL or TLL options */
+#define ND_LLA_OPT_LEN 8
+struct ovs_nd_lla_opt {
+    uint8_t type;               /* One of ND_OPT_*_LINKADDR. */
+    uint8_t len;
+    struct eth_addr mac;
 };
-BUILD_ASSERT_DECL(ND_OPT_LEN == sizeof(struct ovs_nd_opt));
+BUILD_ASSERT_DECL(ND_LLA_OPT_LEN == sizeof(struct ovs_nd_lla_opt));
+
+/* Neighbor Discovery option: Prefix Information. */
+#define ND_PREFIX_OPT_LEN 32
+struct ovs_nd_prefix_opt {
+    uint8_t type;               /* ND_OPT_PREFIX_INFORMATION. */
+    uint8_t len;                /* Always 4. */
+    uint8_t prefix_len;
+    uint8_t la_flags;           /* ND_PREFIX_* flags. */
+    ovs_16aligned_be32 valid_lifetime;
+    ovs_16aligned_be32 preferred_lifetime;
+    ovs_16aligned_be32 reserved;          /* Always 0. */
+    union ovs_16aligned_in6_addr prefix;
+};
+BUILD_ASSERT_DECL(ND_PREFIX_OPT_LEN == sizeof(struct ovs_nd_prefix_opt));
+
+#define ND_PREFIX_ON_LINK            0x80
+#define ND_PREFIX_AUTONOMOUS_ADDRESS 0x40
+
+/* Neighbor Discovery option: MTU. */
+#define ND_MTU_OPT_LEN 8
+struct ovs_nd_mtu_opt {
+    uint8_t  type;      /* ND_OPT_MTU */
+    uint8_t  len;       /* Always 1. */
+    ovs_be16 reserved;  /* Always 0. */
+    ovs_16aligned_be32 mtu;
+};
+BUILD_ASSERT_DECL(ND_MTU_OPT_LEN == sizeof(struct ovs_nd_mtu_opt));
 
 /* Like struct nd_msg (from ndisc.h), but whereas that struct requires 32-bit
  * alignment, this one only requires 16-bit alignment. */
@@ -860,13 +977,29 @@ struct ovs_nd_msg {
     struct icmp6_header icmph;
     ovs_16aligned_be32 rso_flags;
     union ovs_16aligned_in6_addr target;
-    struct ovs_nd_opt options[0];
+    struct ovs_nd_lla_opt options[0];
 };
 BUILD_ASSERT_DECL(ND_MSG_LEN == sizeof(struct ovs_nd_msg));
 
+/* Neighbor Discovery packet flags. */
 #define ND_RSO_ROUTER    0x80000000
 #define ND_RSO_SOLICITED 0x40000000
 #define ND_RSO_OVERRIDE  0x20000000
+
+#define RA_MSG_LEN 16
+struct ovs_ra_msg {
+    struct icmp6_header icmph;
+    uint8_t cur_hop_limit;
+    uint8_t mo_flags;  /* ND_RA_MANAGED_ADDRESS and ND_RA_OTHER_CONFIG flags. */
+    ovs_be16 router_lifetime;
+    ovs_be32 reachable_time;
+    ovs_be32 retrans_timer;
+    struct ovs_nd_lla_opt options[0];
+};
+BUILD_ASSERT_DECL(RA_MSG_LEN == sizeof(struct ovs_ra_msg));
+
+#define ND_RA_MANAGED_ADDRESS 0x80
+#define ND_RA_OTHER_CONFIG    0x40
 
 /*
  * Use the same struct for MLD and MLD2, naming members as the defined fields in
@@ -921,6 +1054,10 @@ extern const struct in6_addr in6addr_exact;
 extern const struct in6_addr in6addr_all_hosts;
 #define IN6ADDR_ALL_HOSTS_INIT { { { 0xff,0x02,0x00,0x00,0x00,0x00,0x00,0x00, \
                                      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01 } } }
+
+extern const struct in6_addr in6addr_all_routers;
+#define IN6ADDR_ALL_ROUTERS_INIT { { { 0xff,0x02,0x00,0x00,0x00,0x00,0x00,0x00, \
+                                       0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x02 } } }
 
 static inline bool ipv6_addr_equals(const struct in6_addr *a,
                                     const struct in6_addr *b)
@@ -990,6 +1127,26 @@ in6_addr_solicited_node(struct in6_addr *addr, const struct in6_addr *ip6)
 }
 
 /*
+ * Generates ipv6 EUI64 address from the given eth addr
+ * and prefix and stores it in 'lla'
+ */
+static inline void
+in6_generate_eui64(struct eth_addr ea, struct in6_addr *prefix,
+                   struct in6_addr *lla)
+{
+    union ovs_16aligned_in6_addr *taddr = (void *) lla;
+    union ovs_16aligned_in6_addr *prefix_taddr = (void *) prefix;
+    taddr->be16[0] = prefix_taddr->be16[0];
+    taddr->be16[1] = prefix_taddr->be16[1];
+    taddr->be16[2] = prefix_taddr->be16[2];
+    taddr->be16[3] = prefix_taddr->be16[3];
+    taddr->be16[4] = htons(((ea.ea[0] ^ 0x02) << 8) | ea.ea[1]);
+    taddr->be16[5] = htons(ea.ea[2] << 8 | 0x00ff);
+    taddr->be16[6] = htons(0xfe << 8 | ea.ea[3]);
+    taddr->be16[7] = ea.be16[2];
+}
+
+/*
  * Generates ipv6 link local address from the given eth addr
  * with prefix 'fe80::/64' and stores it in 'lla'
  */
@@ -1054,11 +1211,103 @@ struct gre_base_hdr {
 
 /* VXLAN protocol header */
 struct vxlanhdr {
-    ovs_16aligned_be32 vx_flags;
+    union {
+        ovs_16aligned_be32 vx_flags; /* VXLAN flags. */
+        struct {
+            uint8_t flags;           /* VXLAN GPE flags. */
+            uint8_t reserved[2];     /* 16 bits reserved. */
+            uint8_t next_protocol;   /* Next Protocol field for VXLAN GPE. */
+        } vx_gpe;
+    };
     ovs_16aligned_be32 vx_vni;
 };
+BUILD_ASSERT_DECL(sizeof(struct vxlanhdr) == 8);
 
 #define VXLAN_FLAGS 0x08000000  /* struct vxlanhdr.vx_flags required value. */
+
+/*
+ * VXLAN Generic Protocol Extension (VXLAN_F_GPE):
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |R|R|Ver|I|P|R|O|       Reserved                |Next Protocol  |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |                VXLAN Network Identifier (VNI) |   Reserved    |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ *
+ * Ver = Version. Indicates VXLAN GPE protocol version.
+ *
+ * P = Next Protocol Bit. The P bit is set to indicate that the
+ *     Next Protocol field is present.
+ *
+ * O = OAM Flag Bit. The O bit is set to indicate that the packet
+ *     is an OAM packet.
+ *
+ * Next Protocol = This 8 bit field indicates the protocol header
+ * immediately following the VXLAN GPE header.
+ *
+ * https://tools.ietf.org/html/draft-ietf-nvo3-vxlan-gpe-01
+ */
+
+/* Fields in struct vxlanhdr.vx_gpe.flags */
+#define VXLAN_GPE_FLAGS_VER     0x30    /* Version. */
+#define VLXAN_GPE_FLAGS_P       0x04    /* Next Protocol Bit. */
+#define VXLAN_GPE_FLAGS_O       0x01    /* OAM Bit. */
+
+/* VXLAN-GPE header flags. */
+#define VXLAN_HF_VER   ((1U <<29) | (1U <<28))
+#define VXLAN_HF_NP    (1U <<26)
+#define VXLAN_HF_OAM   (1U <<24)
+
+#define VXLAN_GPE_USED_BITS (VXLAN_HF_VER | VXLAN_HF_NP | VXLAN_HF_OAM | \
+                            0xff)
+
+/* VXLAN-GPE header Next Protocol. */
+#define VXLAN_GPE_NP_IPV4      0x01
+#define VXLAN_GPE_NP_IPV6      0x02
+#define VXLAN_GPE_NP_ETHERNET  0x03
+#define VXLAN_GPE_NP_NSH       0x04
+
+#define VXLAN_F_GPE  0x4000
+#define VXLAN_HF_GPE 0x04000000
+
+/* Input values for PACKET_TYPE macros have to be in host byte order.
+ * The _BE postfix indicates result is in network byte order. Otherwise result
+ * is in host byte order. */
+#define PACKET_TYPE(NS, NS_TYPE) ((uint32_t) ((NS) << 16 | (NS_TYPE)))
+#define PACKET_TYPE_BE(NS, NS_TYPE) (htonl((NS) << 16 | (NS_TYPE)))
+
+/* Returns the host byte ordered namespace of 'packet type'. */
+static inline uint16_t
+pt_ns(ovs_be32 packet_type)
+{
+    return ntohl(packet_type) >> 16;
+}
+
+/* Returns the network byte ordered namespace type of 'packet type'. */
+static inline ovs_be16
+pt_ns_type_be(ovs_be32 packet_type)
+{
+    return be32_to_be16(packet_type);
+}
+
+/* Returns the host byte ordered namespace type of 'packet type'. */
+static inline uint16_t
+pt_ns_type(ovs_be32 packet_type)
+{
+    return ntohs(pt_ns_type_be(packet_type));
+}
+
+/* Well-known packet_type field values. */
+enum packet_type {
+    PT_ETH  = PACKET_TYPE(OFPHTN_ONF, 0x0000),  /* Default PT: Ethernet */
+    PT_USE_NEXT_PROTO = PACKET_TYPE(OFPHTN_ONF, 0xfffe),  /* Pseudo PT for decap. */
+    PT_IPV4 = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_IP),
+    PT_IPV6 = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_IPV6),
+    PT_MPLS = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_MPLS),
+    PT_MPLS_MC = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_MPLS_MCAST),
+    PT_NSH  = PACKET_TYPE(OFPHTN_ETHERTYPE, ETH_TYPE_NSH),
+    PT_UNKNOWN = PACKET_TYPE(0xffff, 0xffff),   /* Unknown packet type. */
+};
+
 
 void ipv6_format_addr(const struct in6_addr *addr, struct ds *);
 void ipv6_format_addr_bracket(const struct in6_addr *addr, struct ds *,
@@ -1100,6 +1349,10 @@ void packet_set_ipv4_addr(struct dp_packet *packet, ovs_16aligned_be32 *addr,
 void packet_set_ipv6(struct dp_packet *, const struct in6_addr *src,
                      const struct in6_addr *dst, uint8_t tc,
                      ovs_be32 fl, uint8_t hlmit);
+void packet_set_ipv6_addr(struct dp_packet *packet, uint8_t proto,
+                          ovs_16aligned_be32 addr[4],
+                          const struct in6_addr *new_addr,
+                          bool recalculate_csum);
 void packet_set_tcp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_udp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
 void packet_set_sctp_port(struct dp_packet *, ovs_be16 src, ovs_be16 dst);
@@ -1122,7 +1375,44 @@ void compose_nd_na(struct dp_packet *, const struct eth_addr eth_src,
                    const struct in6_addr *ipv6_src,
                    const struct in6_addr *ipv6_dst,
                    ovs_be32 rso_flags);
+void compose_nd_ra(struct dp_packet *,
+                   const struct eth_addr eth_src,
+                   const struct eth_addr eth_dst,
+                   const struct in6_addr *ipv6_src,
+                   const struct in6_addr *ipv6_dst,
+                   uint8_t cur_hop_limit, uint8_t mo_flags,
+                   ovs_be16 router_lt, ovs_be32 reachable_time,
+                   ovs_be32 retrans_timer, ovs_be32 mtu);
+void packet_put_ra_prefix_opt(struct dp_packet *,
+                              uint8_t plen, uint8_t la_flags,
+                              ovs_be32 valid_lifetime,
+                              ovs_be32 preferred_lifetime,
+                              const ovs_be128 router_prefix);
 uint32_t packet_csum_pseudoheader(const struct ip_header *);
 void IP_ECN_set_ce(struct dp_packet *pkt, bool is_ipv6);
+
+#define DNS_HEADER_LEN 12
+struct dns_header {
+    ovs_be16 id;
+    uint8_t lo_flag; /* QR (1), OPCODE (4), AA (1), TC (1) and RD (1) */
+    uint8_t hi_flag; /* RA (1), Z (3) and RCODE (4) */
+    ovs_be16 qdcount; /* Num of entries in the question section. */
+    ovs_be16 ancount; /* Num of resource records in the answer section. */
+
+    /* Num of name server records in the authority record section. */
+    ovs_be16 nscount;
+
+    /* Num of resource records in the additional records section. */
+    ovs_be16 arcount;
+};
+
+BUILD_ASSERT_DECL(DNS_HEADER_LEN == sizeof(struct dns_header));
+
+#define DNS_QUERY_TYPE_A        0x01
+#define DNS_QUERY_TYPE_AAAA     0x1c
+#define DNS_QUERY_TYPE_ANY      0xff
+
+#define DNS_CLASS_IN            0x01
+#define DNS_DEFAULT_RR_TTL      3600
 
 #endif /* packets.h */

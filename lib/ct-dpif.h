@@ -70,7 +70,8 @@ struct ct_dpif_timestamp {
     CT_DPIF_TCP_STATE(CLOSING) \
     CT_DPIF_TCP_STATE(LAST_ACK) \
     CT_DPIF_TCP_STATE(FIN_WAIT_2) \
-    CT_DPIF_TCP_STATE(TIME_WAIT)
+    CT_DPIF_TCP_STATE(TIME_WAIT) \
+    CT_DPIF_TCP_STATE(MAX_NUM)
 
 enum ct_dpif_tcp_state {
 #define CT_DPIF_TCP_STATE(STATE) CT_DPIF_TCPS_##STATE,
@@ -163,10 +164,25 @@ struct ct_dpif_entry {
     struct ct_dpif_protoinfo protoinfo;
 
     ovs_u128 labels;
+    bool have_labels;
     uint32_t status;
     /* Timeout for this entry in seconds */
     uint32_t timeout;
     uint32_t mark;
+    uint32_t bkt;       /* CT bucket number. */
+};
+
+enum {
+    CT_STATS_UDP,
+    CT_STATS_TCP,
+    CT_STATS_SCTP,
+    CT_STATS_ICMP,
+    CT_STATS_ICMPV6,
+    CT_STATS_UDPLITE,
+    CT_STATS_DCCP,
+    CT_STATS_IGMP,
+    CT_STATS_OTHER,
+    CT_STATS_MAX,
 };
 
 struct dpif;
@@ -176,7 +192,7 @@ struct ct_dpif_dump_state {
 };
 
 int ct_dpif_dump_start(struct dpif *, struct ct_dpif_dump_state **,
-                       const uint16_t *zone);
+                       const uint16_t *zone, int *);
 int ct_dpif_dump_next(struct ct_dpif_dump_state *, struct ct_dpif_entry *);
 int ct_dpif_dump_done(struct ct_dpif_dump_state *);
 int ct_dpif_flush(struct dpif *, const uint16_t *zone);
@@ -184,5 +200,7 @@ void ct_dpif_entry_uninit(struct ct_dpif_entry *);
 void ct_dpif_format_entry(const struct ct_dpif_entry *, struct ds *,
                           bool verbose, bool print_stats);
 void ct_dpif_format_tuple(struct ds *, const struct ct_dpif_tuple *);
+uint8_t ct_dpif_coalesce_tcp_state(uint8_t state);
+void ct_dpif_format_tcp_stat(struct ds *, int, int);
 
 #endif /* CT_DPIF_H */

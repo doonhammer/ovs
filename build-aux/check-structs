@@ -15,7 +15,8 @@ types['ovs_be16'] = {"size": 2, "alignment": 2}
 types['ovs_be32'] = {"size": 4, "alignment": 4}
 types['ovs_be64'] = {"size": 8, "alignment": 8}
 types['ovs_32aligned_be64'] = {"size": 8, "alignment": 4}
-types['struct eth_addr'] = {"size": 6, "alignment": 1}
+types['struct eth_addr'] = {"size": 6, "alignment": 2}
+types['struct eth_addr64'] = {"size": 8, "alignment": 2}
 
 token = None
 line = ""
@@ -211,7 +212,7 @@ def checkStructs():
 
     if '--help' in sys.argv:
         argv0 = os.path.basename(sys.argv[0])
-        print '''\
+        print('''\
 %(argv0)s, for checking struct and struct member alignment
 usage: %(argv0)s -Ipath HEADER [HEADER]...
 
@@ -226,7 +227,7 @@ assertions using OFP_ASSERT.
 
 This program is specialized for reading Open vSwitch's OpenFlow header
 files.  It will not work on arbitrary header files without extensions.\
-''' % {"argv0": argv0}
+''' % {"argv0": argv0})
         sys.exit(0)
 
     global fileName

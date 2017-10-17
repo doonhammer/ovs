@@ -89,11 +89,6 @@ struct sk_buff *rpl_skb_gso_segment(struct sk_buff *skb, netdev_features_t featu
 }
 #endif
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
-#define netif_skb_features rpl_netif_skb_features
-netdev_features_t rpl_netif_skb_features(struct sk_buff *skb);
-#endif
-
 #ifdef HAVE_NETIF_NEEDS_GSO_NETDEV
 #define netif_needs_gso rpl_netif_needs_gso
 static inline bool netif_needs_gso(struct sk_buff *skb,
@@ -106,6 +101,7 @@ static inline bool netif_needs_gso(struct sk_buff *skb,
 #endif
 
 #ifndef HAVE_NETDEV_MASTER_UPPER_DEV_LINK_PRIV
+#ifndef HAVE_NETDEV_MASTER_UPPER_DEV_LINK_RH
 static inline int rpl_netdev_master_upper_dev_link(struct net_device *dev,
 					       struct net_device *upper_dev,
 					       void *upper_priv, void *upper_info)
@@ -114,6 +110,7 @@ static inline int rpl_netdev_master_upper_dev_link(struct net_device *dev,
 }
 #define netdev_master_upper_dev_link rpl_netdev_master_upper_dev_link
 
+#endif
 #endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3,16,0)
@@ -273,6 +270,21 @@ static inline void netdev_reset_rx_headroom(struct net_device *dev)
 #define HAVE_IFF_NO_QUEUE
 #else
 #define IFF_NO_QUEUE 0
+#endif
+
+#ifndef HAVE_SKB_CSUM_HWOFFLOAD_HELP
+static inline int skb_csum_hwoffload_help(struct sk_buff *skb,
+					  const netdev_features_t features)
+{
+	/* It's less accurate to approximate to this for older kernels, but
+	 * it was sufficient for a long time. If you care about ensuring that
+	 * upstream commit 7529390d08f0 has the same effect on older kernels,
+	 * consider backporting the following commits:
+	 * b72b5bf6a8fc ("net: introduce skb_crc32c_csum_help")
+	 * 43c26a1a4593 ("net: more accurate checksumming in validate_xmit_skb()")
+	 */
+	return skb_checksum_help(skb);
+}
 #endif
 
 #endif /* __LINUX_NETDEVICE_WRAPPER_H */

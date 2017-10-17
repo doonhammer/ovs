@@ -82,30 +82,28 @@ is_dynamic_lsp_address(const char *address)
                          ETH_ADDR_SCAN_ARGS(ea), &n) && address[n] == '\0'));
 }
 
-/* Extracts the mac, IPv4 and IPv6 addresses from * 'address' which
- * should be of the format 'MAC [IP1 IP2 ..]" where IPn should be a
- * valid IPv4 or IPv6 address and stores them in the 'ipv4_addrs' and
- * 'ipv6_addrs' fields of 'laddrs'.
- *
- * Return true if at least 'MAC' is found in 'address', false otherwise.
- *
- * The caller must call destroy_lport_addresses(). */
-bool
-extract_lsp_addresses(const char *address, struct lport_addresses *laddrs)
+static bool
+parse_and_store_addresses(const char *address, struct lport_addresses *laddrs,
+                          int *ofs, bool extract_eth_addr)
 {
     memset(laddrs, 0, sizeof *laddrs);
 
     const char *buf = address;
+    const char *const start = buf;
     int buf_index = 0;
     const char *buf_end = buf + strlen(address);
-    if (!ovs_scan_len(buf, &buf_index, ETH_ADDR_SCAN_FMT,
-                      ETH_ADDR_SCAN_ARGS(laddrs->ea))) {
-        laddrs->ea = eth_addr_zero;
-        return false;
-    }
 
-    snprintf(laddrs->ea_s, sizeof laddrs->ea_s, ETH_ADDR_FMT,
-             ETH_ADDR_ARGS(laddrs->ea));
+    if (extract_eth_addr) {
+        if (!ovs_scan_len(buf, &buf_index, ETH_ADDR_SCAN_FMT,
+                          ETH_ADDR_SCAN_ARGS(laddrs->ea))) {
+            laddrs->ea = eth_addr_zero;
+            *ofs = 0;
+            return false;
+        }
+
+        snprintf(laddrs->ea_s, sizeof laddrs->ea_s, ETH_ADDR_FMT,
+                 ETH_ADDR_ARGS(laddrs->ea));
+    }
 
     ovs_be32 ip4;
     struct in6_addr ip6;
@@ -129,15 +127,73 @@ extract_lsp_addresses(const char *address, struct lport_addresses *laddrs)
         if (!error) {
             add_ipv6_netaddr(laddrs, ip6, plen);
         } else {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
-            VLOG_INFO_RL(&rl, "invalid syntax '%s' in address", address);
             free(error);
             break;
         }
         buf += buf_index;
     }
 
+    *ofs = buf - start;
     return true;
+}
+
+/* Extracts the mac, IPv4 and IPv6 addresses from * 'address' which
+ * should be of the format "MAC [IP1 IP2 ..] .." where IPn should be a
+ * valid IPv4 or IPv6 address and stores them in the 'ipv4_addrs' and
+ * 'ipv6_addrs' fields of 'laddrs'.  There may be additional content in
+ * 'address' after "MAC [IP1 IP2 .. ]".  The value of 'ofs' that is
+ * returned indicates the offset where that additional content begins.
+ *
+ * Returns true if at least 'MAC' is found in 'address', false otherwise.
+ *
+ * The caller must call destroy_lport_addresses(). */
+bool
+extract_addresses(const char *address, struct lport_addresses *laddrs,
+                  int *ofs)
+{
+    return parse_and_store_addresses(address, laddrs, ofs, true);
+}
+
+/* Extracts the mac, IPv4 and IPv6 addresses from * 'address' which
+ * should be of the format 'MAC [IP1 IP2 ..]" where IPn should be a
+ * valid IPv4 or IPv6 address and stores them in the 'ipv4_addrs' and
+ * 'ipv6_addrs' fields of 'laddrs'.
+ *
+ * Return true if at least 'MAC' is found in 'address', false otherwise.
+ *
+ * The caller must call destroy_lport_addresses(). */
+bool
+extract_lsp_addresses(const char *address, struct lport_addresses *laddrs)
+{
+    int ofs;
+    bool success = extract_addresses(address, laddrs, &ofs);
+
+    if (success && ofs < strlen(address)) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
+        VLOG_INFO_RL(&rl, "invalid syntax '%s' in address", address);
+    }
+
+    return success;
+}
+
+/* Extracts the IPv4 and IPv6 addresses from * 'address' which
+ * should be of the format 'IP1 IP2 .." where IPn should be a
+ * valid IPv4 or IPv6 address and stores them in the 'ipv4_addrs' and
+ * 'ipv6_addrs' fields of 'laddrs'.
+ *
+ * Return true if at least one IP address is found in 'address',
+ * false otherwise.
+ *
+ * The caller must call destroy_lport_addresses(). */
+bool
+extract_ip_addresses(const char *address, struct lport_addresses *laddrs)
+{
+    int ofs;
+    if (parse_and_store_addresses(address, laddrs, &ofs, false)) {
+        return (laddrs->n_ipv4_addrs || laddrs->n_ipv6_addrs);
+    }
+
+    return false;
 }
 
 /* Extracts the mac, IPv4 and IPv6 addresses from the
@@ -171,7 +227,7 @@ extract_lrp_networks(const struct nbrec_logical_router_port *lrp,
 
         error = ip_parse_cidr(lrp->networks[i], &ip4, &plen);
         if (!error) {
-            if (!ip4 || plen == 32) {
+            if (!ip4) {
                 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
                 VLOG_WARN_RL(&rl, "bad 'networks' %s", lrp->networks[i]);
                 continue;
@@ -184,11 +240,6 @@ extract_lrp_networks(const struct nbrec_logical_router_port *lrp,
 
         error = ipv6_parse_cidr(lrp->networks[i], &ip6, &plen);
         if (!error) {
-            if (plen == 128) {
-                static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 1);
-                VLOG_WARN_RL(&rl, "bad 'networks' %s", lrp->networks[i]);
-                continue;
-            }
             add_ipv6_netaddr(laddrs, ip6, plen);
         } else {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);

@@ -79,6 +79,7 @@ that the message is suppressed.
   ``OFPR_INVALID_TTL``                          ---    ---
   ``OFPR_ACTION_SET`` (OF1.4+)                  yes    ---
   ``OFPR_GROUP`` (OF1.4+)                       yes    ---
+  ``OFPR_PACKET_OUT`` (OF1.4+)                  yes    ---
   =========================================== ======= =====
 
 .. table:: ``OFPT_FLOW_REMOVED`` / ``NXT_FLOW_REMOVED``
@@ -90,7 +91,7 @@ that the message is suppressed.
   ``OFPRR_IDLE_TIMEOUT``                        yes    ---
   ``OFPRR_HARD_TIMEOUT``                        yes    ---
   ``OFPRR_DELETE``                              yes    ---
-  ``OFPRR_GROUP_DELETE`` (OF1.4+)               yes    ---
+  ``OFPRR_GROUP_DELETE`` (OF1.3+)               yes    ---
   ``OFPRR_METER_DELETE`` (OF1.4+)               yes    ---
   ``OFPRR_EVICTION`` (OF1.4+)                   yes    ---
   =========================================== ======= =====

@@ -1,4 +1,4 @@
-/* Copyright (c) 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
+/* Copyright (c) 2011, 2012, 2013, 2014, 2015, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -105,13 +105,13 @@ bundle_execute(const struct ofpact_bundle *bundle,
 
 enum ofperr
 bundle_check(const struct ofpact_bundle *bundle, ofp_port_t max_ports,
-             const struct flow *flow)
+             const struct match *match)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
     size_t i;
 
     if (bundle->dst.field) {
-        enum ofperr error = mf_check_dst(&bundle->dst, flow);
+        enum ofperr error = mf_check_dst(&bundle->dst, match);
         if (error) {
             return error;
         }
@@ -145,7 +145,8 @@ bundle_check(const struct ofpact_bundle *bundle, ofp_port_t max_ports,
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string.*/
 static char * OVS_WARN_UNUSED_RESULT
-bundle_parse__(const char *s, char **save_ptr,
+bundle_parse__(const char *s, const struct ofputil_port_map *port_map,
+               char **save_ptr,
                const char *fields, const char *basis, const char *algorithm,
                const char *slave_type, const char *dst,
                const char *slave_delim, struct ofpbuf *ofpacts)
@@ -172,7 +173,7 @@ bundle_parse__(const char *s, char **save_ptr,
             break;
         }
 
-        if (!ofputil_port_from_string(slave, &slave_port)) {
+        if (!ofputil_port_from_string(slave, port_map, &slave_port)) {
             return xasprintf("%s: bad port number", slave);
         }
         ofpbuf_put(ofpacts, &slave_port, sizeof slave_port);
@@ -191,6 +192,10 @@ bundle_parse__(const char *s, char **save_ptr,
         bundle->fields = NX_HASH_FIELDS_SYMMETRIC_L3L4;
     } else if (!strcasecmp(fields, "symmetric_l3l4+udp")) {
         bundle->fields = NX_HASH_FIELDS_SYMMETRIC_L3L4_UDP;
+    } else if (!strcasecmp(fields, "nw_src")) {
+        bundle->fields = NX_HASH_FIELDS_NW_SRC;
+    } else if (!strcasecmp(fields, "nw_dst")) {
+        bundle->fields = NX_HASH_FIELDS_NW_DST;
     } else {
         return xasprintf("%s: unknown fields `%s'", s, fields);
     }
@@ -228,7 +233,8 @@ bundle_parse__(const char *s, char **save_ptr,
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string. */
 char * OVS_WARN_UNUSED_RESULT
-bundle_parse(const char *s, struct ofpbuf *ofpacts)
+bundle_parse(const char *s, const struct ofputil_port_map *port_map,
+             struct ofpbuf *ofpacts)
 {
     char *fields, *basis, *algorithm, *slave_type, *slave_delim;
     char *tokstr, *save_ptr;
@@ -242,7 +248,8 @@ bundle_parse(const char *s, struct ofpbuf *ofpacts)
     slave_type = strtok_r(NULL, ", ", &save_ptr);
     slave_delim = strtok_r(NULL, ": ", &save_ptr);
 
-    error = bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type,
+    error = bundle_parse__(s, port_map,
+                           &save_ptr, fields, basis, algorithm, slave_type,
                            NULL, slave_delim, ofpacts);
     free(tokstr);
 
@@ -255,7 +262,8 @@ bundle_parse(const char *s, struct ofpbuf *ofpacts)
  * Returns NULL if successful, otherwise a malloc()'d string describing the
  * error.  The caller is responsible for freeing the returned string.*/
 char * OVS_WARN_UNUSED_RESULT
-bundle_parse_load(const char *s, struct ofpbuf *ofpacts)
+bundle_parse_load(const char *s, const struct ofputil_port_map *port_map,
+                  struct ofpbuf *ofpacts)
 {
     char *fields, *basis, *algorithm, *slave_type, *dst, *slave_delim;
     char *tokstr, *save_ptr;
@@ -270,7 +278,8 @@ bundle_parse_load(const char *s, struct ofpbuf *ofpacts)
     dst = strtok_r(NULL, ", ", &save_ptr);
     slave_delim = strtok_r(NULL, ": ", &save_ptr);
 
-    error = bundle_parse__(s, &save_ptr, fields, basis, algorithm, slave_type,
+    error = bundle_parse__(s, port_map,
+                           &save_ptr, fields, basis, algorithm, slave_type,
                            dst, slave_delim, ofpacts);
 
     free(tokstr);
@@ -278,9 +287,11 @@ bundle_parse_load(const char *s, struct ofpbuf *ofpacts)
     return error;
 }
 
-/* Appends a human-readable representation of 'nab' to 's'. */
+/* Appends a human-readable representation of 'nab' to 's'.  If 'port_map' is
+ * nonnull, uses it to translate port numbers to names in output. */
 void
-bundle_format(const struct ofpact_bundle *bundle, struct ds *s)
+bundle_format(const struct ofpact_bundle *bundle,
+              const struct ofputil_port_map *port_map, struct ds *s)
 {
     const char *action, *fields, *algorithm;
     size_t i;
@@ -314,7 +325,7 @@ bundle_format(const struct ofpact_bundle *bundle, struct ds *s)
             ds_put_char(s, ',');
         }
 
-        ofputil_format_port(bundle->slaves[i], s);
+        ofputil_format_port(bundle->slaves[i], port_map, s);
     }
 
     ds_put_format(s, "%s)%s", colors.paren, colors.end);

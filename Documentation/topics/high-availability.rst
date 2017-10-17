@@ -66,6 +66,12 @@ a plan for OVN Gateway High Availability which takes into account our past
 experience building similar systems.  It should be considered a fluid changing
 proposal, not a set-in-stone decree.
 
+.. note::
+    This document describes a range of options OVN could take to provide
+    high availability for gateways.  The current implementation provides L3
+    gateway high availability by the "Router Specific Active/Backup"
+    approach described in this document.
+
 Basic Architecture
 ------------------
 
@@ -287,6 +293,14 @@ gateways.  Each gateway monitors the other gateways its cluster to determine
 which are alive, and therefore whether or not that gateway happens to be the
 leader.  If leading, the gateway forwards traffic normally, otherwise it drops
 all traffic.
+
+We should note that this method works well under the assumption that there
+are no inter-gateway connectivity failures, in such case this method would fail
+to elect a single master. The simplest example is two gateways which stop seeing
+each other but can still reach the hypervisors. Protocols like VRRP or CARP
+have the same issue. A mitigation for this type of failure mode could be
+achieved by having all network elements (hypervisors and gateways) periodically
+share their link status to other endpoints.
 
 Gateway Leadership Resignation
 ++++++++++++++++++++++++++++++

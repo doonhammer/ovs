@@ -51,6 +51,7 @@
 /distfiles
 /dist-docs
 /flake8-check
+/docs-check
 /install-sh
 /libtool
 /manpage-check
@@ -74,3 +75,4 @@ testsuite.tmp.orig
 /tests/lcov/
 /Documentation/_build
 /.venv
+/cxx-check

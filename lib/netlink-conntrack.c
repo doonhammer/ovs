@@ -123,7 +123,8 @@ struct nl_ct_dump_state {
 
 /* Initialize a conntrack netlink dump. */
 int
-nl_ct_dump_start(struct nl_ct_dump_state **statep, const uint16_t *zone)
+nl_ct_dump_start(struct nl_ct_dump_state **statep, const uint16_t *zone,
+        int *ptot_bkts)
 {
     struct nl_ct_dump_state *state;
 
@@ -139,6 +140,9 @@ nl_ct_dump_start(struct nl_ct_dump_state **statep, const uint16_t *zone)
                         IPCTNL_MSG_CT_GET, NLM_F_REQUEST);
     nl_dump_start(&state->dump, NETLINK_NETFILTER, &state->buf);
     ofpbuf_clear(&state->buf);
+
+    /* Buckets to store connections are not used. */
+    *ptot_bkts = -1;
 
     return 0;
 }
@@ -463,8 +467,8 @@ nl_ct_parse_tuple_proto(struct nlattr *nla, struct ct_dpif_tuple *tuple)
             tuple->dst_port = nl_attr_get_be16(attrs[CTA_PROTO_DST_PORT]);
         } else {
             /* Unsupported IPPROTO and no ports, leave them zeroed.
-             * We have parsed the ip_proto, so this is not a total failure. */
-            VLOG_INFO_RL(&rl, "Unsupported L4 protocol: %u.", tuple->ip_proto);
+             * We have parsed the ip_proto, so this is not a failure. */
+            VLOG_DBG_RL(&rl, "Unsupported L4 protocol: %u.", tuple->ip_proto);
         }
     } else {
         VLOG_ERR_RL(&rl, "Could not parse nested tuple protocol options. "
@@ -780,6 +784,7 @@ nl_ct_attrs_to_ct_dpif_entry(struct ct_dpif_entry *entry,
         entry->mark = ntohl(nl_attr_get_be32(attrs[CTA_MARK]));
     }
     if (attrs[CTA_LABELS]) {
+        entry->have_labels = true;
         memcpy(&entry->labels, nl_attr_get(attrs[CTA_LABELS]),
                MIN(sizeof entry->labels, nl_attr_get_size(attrs[CTA_LABELS])));
     }

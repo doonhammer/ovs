@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014 Nicira, Inc.
+ * Copyright (c) 2013, 2014, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -69,6 +69,8 @@
  *     int8_t                   atomic_int8_t      (*)
  *     int16_t                  atomic_int16_t     (*)
  *     int32_t                  atomic_int32_t     (*)
+ *     uint64_t                 atomic_uint64_t    (*)
+ *     int64_t                  atomic_int64_t     (*)
  *
  *     (*) Not specified by C11.
  *
@@ -325,6 +327,8 @@
         #include "ovs-atomic-clang.h"
     #elif HAVE_STDATOMIC_H
         #include "ovs-atomic-c11.h"
+    #elif __GNUC__ >= 5
+        #error "GCC 5+ should have <stdatomic.h>"
     #elif __GNUC__ >= 4 && __GNUC_MINOR__ >= 7
         #include "ovs-atomic-gcc4.7+.h"
     #elif __GNUC__ && defined(__x86_64__)
@@ -333,7 +337,7 @@
         #include "ovs-atomic-i586.h"
     #elif HAVE_GCC4_ATOMICS
         #include "ovs-atomic-gcc4+.h"
-    #elif _MSC_VER && _M_IX86 >= 500
+    #elif _MSC_VER
         #include "ovs-atomic-msvc.h"
     #else
         /* ovs-atomic-pthreads implementation is provided for portability.
@@ -376,10 +380,12 @@ typedef ATOMIC(uintptr_t)          atomic_uintptr_t;
 typedef ATOMIC(uint8_t)   atomic_uint8_t;
 typedef ATOMIC(uint16_t)  atomic_uint16_t;
 typedef ATOMIC(uint32_t)  atomic_uint32_t;
+typedef ATOMIC(uint64_t)  atomic_uint64_t;
 
 typedef ATOMIC(int8_t)    atomic_int8_t;
 typedef ATOMIC(int16_t)   atomic_int16_t;
 typedef ATOMIC(int32_t)   atomic_int32_t;
+typedef ATOMIC(int64_t)   atomic_int64_t;
 
 /* Relaxed atomic operations.
  *

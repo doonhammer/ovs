@@ -18,18 +18,23 @@ rpcserver is an XML RPC server that allows RPC client to initiate tests
 
 from __future__ import print_function
 
-import exceptions
 import sys
 
+import exceptions
+
 import six.moves.xmlrpc_client
-from twisted.internet import reactor
-from twisted.internet.error import CannotListenError
-from twisted.web import xmlrpc
-from twisted.web import server
 
 import tcp
+
+from twisted.internet import reactor
+from twisted.internet.error import CannotListenError
+from twisted.web import server
+from twisted.web import xmlrpc
+
 import udp
+
 import util
+
 import vswitch
 
 
@@ -235,13 +240,15 @@ class TestArena(xmlrpc.XMLRPC):
             util.interface_up(bridge)
             (ip_addr, mask) = util.interface_get_ip(iface)
             util.interface_assign_ip(bridge, ip_addr, mask)
+            util.interface_up(bridge)
             util.move_routes(iface, bridge)
-            util.interface_assign_ip(iface, "0.0.0.0", "255.255.255.255")
+            util.interface_remove_ip(iface, ip_addr, mask)
             ret = vswitch.ovs_vsctl_add_port_to_bridge(bridge, iface)
             if ret == 0:
                 self.ports.add(iface)
             else:
                 util.interface_assign_ip(iface, ip_addr, mask)
+                util.interface_up(iface)
                 util.move_routes(bridge, iface)
                 vswitch.ovs_vsctl_del_bridge(bridge)
 
@@ -321,6 +328,12 @@ class TestArena(xmlrpc.XMLRPC):
         This function allows to assing ip address to the given interface.
         """
         return util.interface_assign_ip(iface, ip_address, mask)
+
+    def xmlrpc_interface_remove_ip(self, iface, ip_address, mask):
+        """
+        This function allows to assing ip address to the given interface.
+        """
+        return util.interface_remove_ip(iface, ip_address, mask)
 
     def xmlrpc_get_interface(self, address):
         """

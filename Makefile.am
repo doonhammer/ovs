@@ -1,4 +1,4 @@
-# Copyright (C) 2007-2016 Nicira, Inc.
+# Copyright (C) 2007-2017 Nicira, Inc.
 #
 # Copying and distribution of this file, with or without modification,
 # are permitted in any medium without royalty provided the copyright
@@ -35,12 +35,17 @@ AM_CFLAGS += $(OVS_CFLAGS)
 
 if DPDK_NETDEV
 AM_CFLAGS += -D_FILE_OFFSET_BITS=64
+DPDKSTRIP_FLAGS = --dpdk
+else
+DPDKSTRIP_FLAGS = --nodpdk
 endif
 
 if NDEBUG
 AM_CPPFLAGS += -DNDEBUG
 AM_CFLAGS += -fomit-frame-pointer
 endif
+
+AM_CTAGSFLAGS = $(OVS_CTAGS_IDENTIFIERS_LIST)
 
 if WIN32
 psep=";"
@@ -80,6 +85,7 @@ EXTRA_DIST = \
 	build-aux/cksum-schema-check \
 	build-aux/calculate-schema-cksum \
 	build-aux/dist-docs \
+	build-aux/dpdkstrip.pl \
 	build-aux/sodepends.pl \
 	build-aux/soexpand.pl \
 	build-aux/xml2nroff \
@@ -106,6 +112,7 @@ MAN_ROOTS =
 noinst_DATA =
 noinst_HEADERS =
 lib_LTLIBRARIES =
+noinst_LTLIBRARIES =
 noinst_man_MANS =
 noinst_PROGRAMS =
 noinst_SCRIPTS =
@@ -137,6 +144,7 @@ ro_shell = printf '\043 Generated automatically -- do not modify!    -*- buffer-
 SUFFIXES += .in
 .in:
 	$(AM_V_GEN)$(PERL) $(srcdir)/build-aux/soexpand.pl -I$(srcdir) < $< | \
+	  $(PERL) $(srcdir)/build-aux/dpdkstrip.pl $(DPDKSTRIP_FLAGS) | \
 	  sed \
 	    -e 's,[@]PKIDIR[@],$(PKIDIR),g' \
 	    -e 's,[@]LOGDIR[@],$(LOGDIR),g' \
@@ -184,11 +192,6 @@ CLEAN_LOCAL += clean-pycov
 
 # If we're checked out from a Git repository, make sure that every
 # file that is in Git is distributed.
-#
-# We only enable this check when GNU make is in use because the
-# Makefile in datapath/linux, needed to get the list of files to
-# distribute, requires GNU make extensions.
-if GNU_MAKE
 ALL_LOCAL += dist-hook-git
 dist-hook-git: distfiles
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1; then \
@@ -203,6 +206,11 @@ dist-hook-git: distfiles
 	    cat missing-distfiles; \
 	    exit 1; \
 	  fi; \
+	  if LC_ALL=C grep '\.gitignore$$' all-distfiles; then \
+	    echo "See above for list of files that are distributed but"; \
+	    echo "should not be."; \
+	    exit 1; \
+	  fi \
 	fi
 CLEANFILES += all-distfiles all-gitfiles missing-distfiles
 # The following is based on commands for the Automake "distdir" target.
@@ -215,7 +223,6 @@ distfiles: Makefile
 	      -e "s|^$$topsrcdirstrip/|$(top_builddir)/|;t" | \
 	  LC_ALL=C sort -u > $@
 CLEANFILES += distfiles
-endif
 .PHONY: dist-hook-git
 
 # Check that every .c file includes <config.h>.
@@ -228,6 +235,13 @@ config-h-check:
 	then \
 	  echo "See above for list of violations of the rule that"; \
 	  echo "every C source file must #include <config.h>."; \
+	  exit 1; \
+	fi; \
+	if grep '#include' include/openvswitch/*.h | \
+	    grep -vE '(<.*>)|("openvswitch)|("openflow)'; \
+	then \
+	  echo "See above for list of violations of the rule that"; \
+	  echo "public openvswitch header file should not include internal library."; \
 	  exit 1; \
 	fi
 .PHONY: config-h-check
@@ -242,7 +256,7 @@ printf-check:
 	then \
 	  echo "See above for list of violations of the rule that"; \
 	  echo "'z', 't', 'j', 'hh' printf() type modifiers are"; \
-	  echo "forbidden.  See CodingStyle.rst for replacements."; \
+	  echo "forbidden.  See coding-style.rst for replacements."; \
 	  exit 1; \
 	fi
 .PHONY: printf-check
@@ -305,6 +319,20 @@ thread-safety-check:
 EXTRA_DIST += build-aux/thread-safety-blacklist
 .PHONY: thread-safety-check
 
+# Check that "ip" is used in preference to "ifconfig", because
+# "ifconfig" is not installed ubiquitously anymore.
+ALL_LOCAL += check-ifconfig
+check-ifconfig:
+	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
+	  (cd $(srcdir) && git --no-pager grep -l -E -e 'ifconfig' | \
+           $(EGREP) -v 'Makefile.am|ovs-vsctl-bashcomp|openvswitch-custom\.te'); \
+	then \
+	  echo "See above for list of files that use or reference"; \
+          echo "'ifconfig'.  Please use 'ip' instead."; \
+	  exit 1; \
+	fi
+.PHONY: check-ifconfig
+
 if HAVE_GROFF
 ALL_LOCAL += manpage-check
 manpage-check: $(man_MANS) $(dist_man_MANS) $(noinst_man_MANS)
@@ -343,9 +371,9 @@ ALL_LOCAL += flake8-check
 #   H233 Python 3.x incompatible use of print operator
 #   H238 old style class declaration, use new style (inherit from `object`)
 FLAKE8_SELECT = H231,H232,H233,H238
-FLAKE8_IGNORE = E121,E123,E125,E126,E127,E128,E129,E131,W503,F811,D,H
+FLAKE8_IGNORE = E121,E123,E125,E126,E127,E128,E129,E131,W503,F811,D,H,I
 flake8-check: $(FLAKE8_PYFILES)
-	$(AM_V_GEN) \
+	$(FLAKE8_WERROR)$(AM_V_GEN) \
 	  src='$^' && \
 	  flake8 $$src --select=$(FLAKE8_SELECT) $(FLAKE8_FLAGS) && \
 	  flake8 $$src --ignore=$(FLAKE8_IGNORE) $(FLAKE8_FLAGS) && \
