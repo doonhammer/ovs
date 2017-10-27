@@ -3451,10 +3451,23 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         */
         struct eth_addr traffic_logical_port_ea;
         ovs_be32 traffic_logical_port_ip;
-        ovs_scan(traffic_port->nbsp->addresses[0],
+
+        if (ovs_scan(traffic_port->nbsp->addresses[0],
+                 ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
+                 ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea),
+                 IP_SCAN_ARGS(&traffic_logical_port_ip))){
+
+        } else if (is_dynamic_lsp_address(traffic_port->nbsp->addresses[0])) {
+            ovs_scan(traffic_port->nbsp->addresses[0],
                  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
                  ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea),
                  IP_SCAN_ARGS(&traffic_logical_port_ip));
+        } else {
+            static struct vlog_rate_limit rl =
+                        VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,"Invalid Port Type for Service Chain Port\n");
+        }  
+
         /* Set the port to use as source or destination. */
         if (strcmp(lcc->direction, "entry-lport") == 0) {
             chain_path = 0;
