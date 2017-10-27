@@ -143,10 +143,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 4; then
-       if test "$version" = 4 && test "$patchlevel" -le 12; then
+       if test "$version" = 4 && test "$patchlevel" -le 13; then
           : # Linux 4.x
        else
-          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.11.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.13.x is not supported (please refer to the FAQ for advice)])
        fi
     elif test "$version" = 3 && test "$patchlevel" -ge 10; then
        : # Linux 3.x
@@ -766,7 +766,18 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_FIND_FIELD_IFELSE([$KSRC/include/net/vxlan.h], [vxlan_dev], [cfg],
                         [OVS_DEFINE([HAVE_VXLAN_DEV_CFG])])
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_helper.h],
-                  [nf_conntrack_helper_put])
+                  [nf_conntrack_helper_put],
+                  [OVS_DEFINE(HAVE_NF_CONNTRACK_HELPER_PUT)])
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],[SKB_GSO_UDP],
+                  [OVS_DEFINE([HAVE_SKB_GSO_UDP])])
+  OVS_GREP_IFELSE([$KSRC/include/net/dst.h],[DST_NOCACHE],
+                  [OVS_DEFINE([HAVE_DST_NOCACHE])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/net/rtnetlink.h], [rtnl_link_ops],
+                        [extack],
+                  [OVS_DEFINE([HAVE_EXT_ACK_IN_RTNL_LINKOPS])])
+  OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_ops],
+                        [list],
+                        [OVS_DEFINE([HAVE_LIST_IN_NF_HOOK_OPS])])
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then

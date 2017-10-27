@@ -61,7 +61,8 @@ vSwitch? Start here.
   :doc:`intro/install/dpdk` |
   :doc:`Installation FAQs <faq/releases>`
 
-- **Tutorials:** :doc:`tutorials/ovs-advanced` |
+- **Tutorials:** :doc:`tutorials/faucet` |
+  :doc:`tutorials/ovs-advanced` |
   :doc:`tutorials/ovn-sandbox` |
   :doc:`tutorials/ovn-openstack`
 
@@ -107,7 +108,8 @@ Learn more about the Open vSwitch project and about how you can contribute:
 
 - **Maintaining:** :doc:`internals/maintainers` |
   :doc:`internals/committer-responsibilities` |
-  :doc:`internals/committer-grant-revocation`
+  :doc:`internals/committer-grant-revocation` |
+  :doc:`internals/committer-emeritus-status`
 
 - **Documentation:** :doc:`internals/contributing/documentation-style` |
   :doc:`Building Open vSwitch Documentation <intro/install/documentation>` |

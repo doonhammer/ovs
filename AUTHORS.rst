@@ -93,7 +93,7 @@ Daniel Borkmann                 dborkman@redhat.com
 Daniel Hiltgen                  daniel@netkine.com
 Daniel Roman                    droman@nicira.com
 Daniele Di Proietto             daniele.di.proietto@gmail.com
-Daniele Venturino               daniele.venturino@m3s.it
+Daniele Venturino               venturino.daniele+ovs@gmail.com
 Danny Kukawka                   danny.kukawka@bisect.de
 Darrell Ball                    dlu998@gmail.com
 Dave Tucker                     dave@dtucker.co.uk
@@ -150,7 +150,9 @@ Hui Kang                        kangh@us.ibm.com
 Ian Campbell                    Ian.Campbell@citrix.com
 Ian Stokes                      ian.stokes@intel.com
 Ilya Maximets                   i.maximets@samsung.com
+Iman Tabrizian                  tabrizian@outlook.com
 Isaku Yamahata                  yamahata@valinux.co.jp
+IWASE Yusuke                    iwase.yusuke@gmail.com
 Jakub Libosvar                  libosvar@redhat.com
 Jakub Sitnicki                  jkbs@redhat.com
 James P.                        roampune@gmail.com
@@ -330,6 +332,7 @@ Wenyu Zhang                     wenyuz@vmware.com
 William Fulton
 William Tu                      u9012063@gmail.com
 Xiao Liang                      shaw.leon@gmail.com
+xu rong                         xu.rong@zte.com.cn
 YAMAMOTO Takashi                yamamoto@midokura.com
 Yasuhito Takamiya               yasuhito@gmail.com
 Yi-Hung Wei                     yihung.wei@gmail.com
@@ -441,6 +444,7 @@ Henrik Amren                    henrik@nicira.com
 Hiroshi Tanaka                  htanaka@nicira.com
 Hiroshi Miyata                  miyahiro.dazu@gmail.com
 Hsin-Yi Shen                    shenh@vmware.com
+Hui Xiang                       xianghuir@gmail.com
 Hyojoon Kim                     joonk@gatech.edu
 Igor Ganichev                   iganichev@nicira.com
 Igor Sever                      igor@xorops.com
