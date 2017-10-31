@@ -3459,7 +3459,7 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
                  IP_SCAN_ARGS(&traffic_logical_port_ip))){
 
         } else if (is_dynamic_lsp_address(traffic_port->nbsp->addresses[0])) {
-            ovs_scan(traffic_port->nbsp->addresses[0],
+            ovs_scan(traffic_port->nbsp->dynamic_addresses,
                  ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
                  ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea),
                  IP_SCAN_ARGS(&traffic_logical_port_ip));
