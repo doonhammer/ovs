@@ -62,6 +62,7 @@ Ariel Tubaltsev                 atubaltsev@vmware.com
 Arnoldo Lutz                    arnoldo.lutz.guevara@hpe.com
 Arun Sharma                     arun.sharma@calsoftinc.com
 Aryan TaheriMonfared            aryan.taherimonfared@uis.no
+Ashish Varma                    ashishvarma.ovs@gmail.com
 Ashwin Swaminathan              ashwinds@arista.com
 Babu Shanmugam                  bschanmu@redhat.com
 Ben Pfaff                       blp@ovn.org
@@ -107,6 +108,7 @@ Dmitry Krivenok                 krivenok.dmitry@gmail.com
 Dominic Curran                  dominic.curran@citrix.com
 Dongdong                        dongdong1@huawei.com
 Dongjun                         dongj@dtdream.com
+Duan Jiong                      djduanjiong@gmail.com
 Duffie Cooley                   dcooley@nicira.com
 Dustin Lundquist                dustin@null-ptr.net
 Ed Maste                        emaste@freebsd.org
@@ -178,6 +180,7 @@ Jorge Arturo Sauma Vargas       jorge.sauma@hpe.com
 Jun Nakajima                    jun.nakajima@intel.com
 JunoZhu                         zhunatuzi@gmail.com
 Justin Pettit                   jpettit@ovn.org
+Kaige Fu                        fukaige@huawei.com
 Keith Amidon                    keith@nicira.com
 Ken Ajiro                       ajiro@mxw.nes.nec.co.jp
 Kenneth Duda                    kduda@arista.com
@@ -218,6 +221,7 @@ Markos Chandras                 mchandras@suse.de
 Martin Casado                   casado@nicira.com
 Martino Fornasa                 mf@fornasa.it
 Maryam Tahhan                   maryam.tahhan@intel.com
+Matteo Croce                    mcroce@redhat.com
 Mauricio Vásquez                mauricio.vasquezbernal@studenti.polito.it
 Maxime Coquelin                 maxime.coquelin@redhat.com
 Mehak Mahajan                   mmahajan@nicira.com
@@ -263,6 +267,7 @@ Raymond Burkholder              ray@oneunified.net
 Reid Price                      reid@nicira.com
 Remko Tronçon                   git@el-tramo.be
 Rich Lane                       rlane@bigswitch.com
+Richard Oliver                  richard@richard-oliver.co.uk
 Rishi Bamba                     rishi.bamba@tcs.com
 Rob Adams                       readams@readams.net
 Robert Åkerblom-Andersson       Robert.nr1@gmail.com
@@ -322,6 +327,7 @@ Tony van der Peet               tony.vanderpeet@alliedtelesis.co.nz
 Tonghao Zhang                   xiangxia.m.yue@gmail.com
 Valient Gough                   vgough@pobox.com
 Venkata Anil Kommaddi           vkommadi@redhat.com
+Vishal Deep Ajmera              vishal.deep.ajmera@ericsson.com
 Vivien Bernet-Rollande          vbr@soprive.net
 wangqianyu                      wang.qianyu@zte.com.cn
 Wang Sheng-Hui                  shhuiw@gmail.com
@@ -336,6 +342,7 @@ xu rong                         xu.rong@zte.com.cn
 YAMAMOTO Takashi                yamamoto@midokura.com
 Yasuhito Takamiya               yasuhito@gmail.com
 Yi-Hung Wei                     yihung.wei@gmail.com
+Yifeng Sun                      pkusunyifeng@gmail.com
 Yin Lin                         linyi@vmware.com
 Yu Zhiguo                       yuzg@cn.fujitsu.com
 Yuanhan Liu                     yuanhan.liu@linux.intel.com

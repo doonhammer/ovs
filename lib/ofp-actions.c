@@ -5482,7 +5482,6 @@ parse_UNROLL_XLATE(char *arg OVS_UNUSED,
                    enum ofputil_protocol *usable_protocols OVS_UNUSED)
 {
     OVS_NOT_REACHED();
-    return NULL;
 }
 
 static void
@@ -5535,7 +5534,7 @@ encode_CLONE(const struct ofpact_nest *clone,
     const size_t ofs = out->size;
     struct ext_action_header *eah;
 
-    eah = put_NXAST_CLONE(out);
+    put_NXAST_CLONE(out);
     len = ofpacts_put_openflow_actions(clone->actions,
                                        ofpact_nest_get_action_len(clone),
                                        out, ofp_version);

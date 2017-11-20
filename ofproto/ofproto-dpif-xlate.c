@@ -424,6 +424,8 @@ const char *xlate_strerror(enum xlate_error error)
         return "Too many MPLS labels";
     case XLATE_INVALID_TUNNEL_METADATA:
         return "Invalid tunnel metadata";
+    case XLATE_UNSUPPORTED_PACKET_TYPE:
+        return "Unsupported packet type";
     }
     return "Unknown error";
 }
@@ -3229,7 +3231,6 @@ propagate_tunnel_data_to_flow(struct xlate_ctx *ctx, struct eth_addr dmac,
     case __OVS_VPORT_TYPE_MAX:
     default:
         OVS_NOT_REACHED();
-        break;
     }
     /*
      * Update base_flow first followed by flow as the dst_flow gets modified
@@ -4676,7 +4677,8 @@ finish_freezing(struct xlate_ctx *ctx)
  * the remainder of the current action list and asynchronously resume pipeline
  * processing in 'table' with the current metadata and action set. */
 static void
-compose_recirculate_and_fork(struct xlate_ctx *ctx, uint8_t table)
+compose_recirculate_and_fork(struct xlate_ctx *ctx, uint8_t table,
+                             const uint16_t zone)
 {
     uint32_t recirc_id;
     ctx->freezing = true;
@@ -4685,7 +4687,7 @@ compose_recirculate_and_fork(struct xlate_ctx *ctx, uint8_t table)
     if (OVS_UNLIKELY(ctx->xin->trace) && recirc_id) {
         if (oftrace_add_recirc_node(ctx->xin->recirc_queue,
                                     OFT_RECIRC_CONNTRACK, &ctx->xin->flow,
-                                    ctx->xin->packet, recirc_id)) {
+                                    ctx->xin->packet, recirc_id, zone)) {
             xlate_report(ctx, OFT_DETAIL, "A clone of the packet is forked to "
                          "recirculate. The forked pipeline will be resumed at "
                          "table %u.", table);
@@ -5128,7 +5130,7 @@ xlate_learn_action(struct xlate_ctx *ctx, const struct ofpact_learn *learn)
             }
         }
 
-        if (ctx->xin->xcache) {
+        if (ofm != &ofm__) {
             free(ofm);
         }
 
@@ -5783,7 +5785,7 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
 
     if (ofc->recirc_table != NX_CT_RECIRC_NONE) {
         ctx->conntracked = true;
-        compose_recirculate_and_fork(ctx, ofc->recirc_table);
+        compose_recirculate_and_fork(ctx, ofc->recirc_table, zone);
     }
 
     /* The ct_* fields are only available in the scope of the 'recirc_table'
@@ -5810,7 +5812,7 @@ rewrite_flow_encap_ethernet(struct xlate_ctx *ctx,
         xlate_report_debug(ctx, OFT_ACTION,
                            "Dropping packet as encap(ethernet) is not "
                            "supported for packet type ethernet.");
-        ctx->error = 1;
+        ctx->error = XLATE_UNSUPPORTED_PACKET_TYPE;
     }
 }
 
@@ -5891,7 +5893,7 @@ rewrite_flow_encap_nsh(struct xlate_ctx *ctx,
                                "Dropping packet as encap(nsh) is not "
                                "supported for packet type (%d,0x%x)",
                                pt_ns(packet_type), pt_ns_type(packet_type));
-            ctx->error = 1;
+            ctx->error = XLATE_UNSUPPORTED_PACKET_TYPE;
             return buf;
     }
     /* Note that we have matched on packet_type! */
@@ -5947,7 +5949,6 @@ xlate_generic_encap_action(struct xlate_ctx *ctx,
         default:
             /* New packet type was checked during decoding. */
             OVS_NOT_REACHED();
-            break;
     }
 
     if (!ctx->error) {
@@ -5975,7 +5976,7 @@ xlate_generic_decap_action(struct xlate_ctx *ctx,
                 /* Error handling: drop packet. */
                 xlate_report_debug(ctx, OFT_ACTION, "Dropping packet, cannot "
                                    "decap Ethernet if VLAN is present.");
-                ctx->error = 1;
+                ctx->error = XLATE_UNSUPPORTED_PACKET_TYPE;
             } else {
                 /* Just change the packet_type.
                  * Delay generating pop_eth to the next commit. */
@@ -6006,7 +6007,7 @@ xlate_generic_decap_action(struct xlate_ctx *ctx,
                 xlate_report_debug(ctx, OFT_ACTION,
                                    "Dropping packet as NSH next protocol %d "
                                    "is not supported", flow->nsh.np);
-                ctx->error = 1;
+                ctx->error = XLATE_UNSUPPORTED_PACKET_TYPE;
                 return false;
                 break;
             }
@@ -6020,7 +6021,7 @@ xlate_generic_decap_action(struct xlate_ctx *ctx,
                     "Dropping packet as the decap() does not support "
                     "packet type (%d,0x%x)",
                     pt_ns(flow->packet_type), pt_ns_type(flow->packet_type));
-            ctx->error = 1;
+            ctx->error = XLATE_UNSUPPORTED_PACKET_TYPE;
             return false;
     }
 }

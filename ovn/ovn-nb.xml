@@ -142,8 +142,8 @@
     </column>
 
     <column name="load_balancer">
-      Load balance a virtual ipv4 address to a set of logical port endpoint
-      ipv4 addresses.
+      Load balance a virtual ip address to a set of logical port endpoint
+      ip addresses.
     </column>
 
     <column name="acls">
@@ -1104,16 +1104,20 @@
 
     <column name="vips">
       <p>
-        A map of virtual IPv4 addresses (and an optional port number with
+        A map of virtual IP addresses (and an optional port number with
         <code>:</code> as a separator) associated with this load balancer and
-        their corresponding endpoint IPv4 addresses (and optional port numbers
+        their corresponding endpoint IP addresses (and optional port numbers
         with <code>:</code> as separators) separated by commas.  If
         the destination IP address (and port number) of a packet leaving a
-        container or a VM matches the virtual IPv4 address (and port number)
+        container or a VM matches the virtual IP address (and port number)
         provided here as a key, then OVN will statefully replace the
-        destination IP address by one of the provided IPv4 address (and port
-        number) in this map as a value.  Examples for keys are "192.168.1.4"
-        and "172.16.1.8:80".  Examples for value are "10.0.0.1, 10.0.0.2" and
+        destination IP address by one of the provided IP address (and port
+        number) in this map as a value.  IPv4 and IPv6 addresses are supported
+        for load balancing; however a VIP of one address family may not be
+        mapped to a destination IP address of a different family.  If
+        specifying an IPv6 address with a port, the address portion must be
+        enclosed in square brackets.  Examples for keys are "192.168.1.4" and
+        "[fd0f::1]:8800".  Examples for value are "10.0.0.1, 10.0.0.2" and
         "20.0.0.10:8800, 20.0.0.11:8800".
       </p>
     </column>
@@ -1302,7 +1306,7 @@
     </column>
 
     <column name="load_balancer">
-      Load balance a virtual ipv4 address to a set of logical port ipv4
+      Load balance a virtual ip address to a set of logical port ip
       addresses.  Load balancer rules only work on the Gateway routers.
     </column>
 
@@ -1517,6 +1521,45 @@
       column is set to <code>false</code>, the port is disabled.  A disabled
       port has all ingress and egress traffic dropped.
     </column>
+
+    <group title="ipv6_ra_configs">
+      <p>
+        This column defines the IPv6 ND RA address mode and ND MTU Option to be
+        included by <code>ovn-controller</code> when it replies to the IPv6
+        Router solicitation requests.
+      </p>
+
+      <column name="ipv6_ra_configs" key="address_mode">
+        The address mode to be used for IPv6 address configuration.
+        The supported values are:
+        <ul>
+          <li>
+            <code>slaac</code>: Address configuration using Router
+            Advertisement (RA) packet. The IPv6 prefixes defined in the
+            <ref table="Logical_Router_Port"/> table's
+            <ref table="Logical_Router_Port" column="networks"/> column will
+            be included in the RA's ICMPv6 option - Prefix information.
+          </li>
+
+          <li>
+            <code>dhcpv6_stateful</code>: Address configuration using DHCPv6.
+          </li>
+
+          <li>
+            <code>dhcpv6_stateless</code>: Address configuration using Router
+            Advertisement (RA) packet. Other IPv6 options are provided by
+            DHCPv6.
+          </li>
+        </ul>
+      </column>
+
+      <column name="ipv6_ra_configs" key="mtu">
+        The recommended MTU for the link. Default is 0, which means no MTU
+        Option will be included in RA packet replied by ovn-controller.
+        Per RFC 2460, the mtu value is recommended no less than 1280, so
+        any mtu value less than 1280 will be considered as no MTU Option.
+      </column>
+    </group>
 
     <group title="Options">
       <p>

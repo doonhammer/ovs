@@ -472,7 +472,7 @@ dpctl_del_if(int argc, const char *argv[], struct dpctl_params *dpctl_p)
             continue;
         }
 
-        error = dpif_port_del(dpif, port);
+        error = dpif_port_del(dpif, port, false);
         if (error) {
             dpctl_error(dpctl_p, error, "deleting port %s from %s failed",
                         name, argv[1]);
@@ -825,6 +825,9 @@ dpctl_dump_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
         }
     }
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc == 1 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc > 1) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         error = EINVAL;
@@ -960,6 +963,9 @@ dpctl_put_flow(int argc, const char *argv[], enum dpif_flow_put_flags flags,
     struct simap port_names;
     int n, error;
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 4 - we retrieve it from the
+     * current setup, assuming only one exists. */
     dp_name = argc == 4 ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!dp_name) {
         return EINVAL;
@@ -1069,6 +1075,9 @@ dpctl_get_flow(int argc, const char *argv[], struct dpctl_params *dpctl_p)
     struct ds ds;
     int n, error;
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 3 - we retrieve it from the
+     * current setup, assuming only one exists. */
     dp_name = argc == 3 ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!dp_name) {
         return EINVAL;
@@ -1125,6 +1134,9 @@ dpctl_del_flow(int argc, const char *argv[], struct dpctl_params *dpctl_p)
     struct simap port_names;
     int n, error;
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 3 - we retrieve it from the
+     * current setup, assuming only one exists. */
     dp_name = argc == 3 ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!dp_name) {
         return EINVAL;
@@ -1202,6 +1214,9 @@ dpctl_del_flows(int argc, const char *argv[], struct dpctl_params *dpctl_p)
     char *name;
     int error;
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 2 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         return EINVAL;
@@ -1268,6 +1283,9 @@ dpctl_dump_conntrack(int argc, const char *argv[],
         pzone = &zone;
         argc--;
     }
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 2 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         return EINVAL;
@@ -1286,7 +1304,7 @@ dpctl_dump_conntrack(int argc, const char *argv[],
         return error;
     }
 
-    while (!ct_dpif_dump_next(dump, &cte)) {
+    while (!(error = ct_dpif_dump_next(dump, &cte))) {
         struct ds s = DS_EMPTY_INITIALIZER;
 
         ct_dpif_format_entry(&cte, &s, dpctl_p->verbosity,
@@ -1296,6 +1314,13 @@ dpctl_dump_conntrack(int argc, const char *argv[],
         dpctl_print(dpctl_p, "%s\n", ds_cstr(&s));
         ds_destroy(&s);
     }
+    if (error == EOF) {
+        /* Any CT entry was dumped with no issue. */
+        error = 0;
+    } else if (error) {
+        dpctl_error(dpctl_p, error, "dumping conntrack entry");
+    }
+
     ct_dpif_dump_done(dump);
     dpif_close(dpif);
     return error;
@@ -1314,6 +1339,9 @@ dpctl_flush_conntrack(int argc, const char *argv[],
         pzone = &zone;
         argc--;
     }
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 2 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         return EINVAL;
@@ -1361,7 +1389,9 @@ dpctl_ct_stats_show(int argc, const char *argv[],
             }
         }
     }
-
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc == 1 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc > 1) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         return EINVAL;
@@ -1384,7 +1414,7 @@ dpctl_ct_stats_show(int argc, const char *argv[],
     }
 
     int tot_conn = 0;
-    while (!ct_dpif_dump_next(dump, &cte)) {
+    while (!(error = ct_dpif_dump_next(dump, &cte))) {
         ct_dpif_entry_uninit(&cte);
         tot_conn++;
         switch (cte.tuple_orig.ip_proto) {
@@ -1424,6 +1454,13 @@ dpctl_ct_stats_show(int argc, const char *argv[],
             proto_stats[CT_STATS_OTHER]++;
             break;
         }
+    }
+    if (error == EOF) {
+        /* All CT entries were dumped with no issue.  */
+        error = 0;
+    } else if (error) {
+        dpctl_error(dpctl_p, error, "dumping conntrack entry");
+        /* Fall through to show any other info we collected. */
     }
 
     dpctl_print(dpctl_p, "Connections Stats:\n    Total: %d\n", tot_conn);
@@ -1489,6 +1526,9 @@ dpctl_ct_bkts(int argc, const char *argv[],
         }
     }
 
+    /* The datapath name is not a mandatory parameter for this command.
+     * If it is not specified - so argc < 2 - we retrieve it from the
+     * current setup, assuming only one exists. */
     name = (argc == 2) ? xstrdup(argv[1]) : get_one_dp(dpctl_p);
     if (!name) {
         return EINVAL;
@@ -1521,7 +1561,7 @@ dpctl_ct_bkts(int argc, const char *argv[],
     int tot_conn = 0;
     uint32_t *conn_per_bkts = xzalloc(tot_bkts * sizeof(uint32_t));
 
-    while (!ct_dpif_dump_next(dump, &cte)) {
+    while (!(error = ct_dpif_dump_next(dump, &cte))) {
         ct_dpif_entry_uninit(&cte);
         tot_conn++;
         if (tot_bkts > 0) {
@@ -1532,6 +1572,13 @@ dpctl_ct_bkts(int argc, const char *argv[],
                         cte.bkt, tot_bkts);
             }
         }
+    }
+    if (error == EOF) {
+        /* All CT entries were dumped with no issue.  */
+        error = 0;
+    } else if (error) {
+        dpctl_error(dpctl_p, error, "dumping conntrack entry");
+        /* Fall through and display all the collected info.  */
     }
 
     dpctl_print(dpctl_p, "Current Connections: %d\n", tot_conn);

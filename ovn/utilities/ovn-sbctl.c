@@ -44,7 +44,7 @@
 #include "ovn/lib/ovn-util.h"
 #include "ovsdb-data.h"
 #include "ovsdb-idl.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "process.h"
 #include "sset.h"
 #include "stream-ssl.h"
@@ -860,7 +860,10 @@ cmd_lflow_list(struct ctl_context *ctx)
         lflows[n_flows] = lflow;
         n_flows++;
     }
-    qsort(lflows, n_flows, sizeof *lflows, lflow_cmp);
+
+    if (n_flows) {
+        qsort(lflows, n_flows, sizeof *lflows, lflow_cmp);
+    }
 
     bool print_uuid = shash_find(&ctx->options, "--uuid") != NULL;
 
@@ -1235,7 +1238,7 @@ do_sbctl(const char *args, struct ctl_command *commands, size_t n_commands,
     const struct sbrec_sb_global *sb = sbrec_sb_global_first(idl);
     if (!sb) {
         /* XXX add verification that table is empty */
-        sb = sbrec_sb_global_insert(txn);
+        sbrec_sb_global_insert(txn);
     }
 
     symtab = ovsdb_symbol_table_create();

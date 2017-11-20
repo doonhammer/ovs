@@ -68,11 +68,13 @@ struct simap;
     OVNACT(PUT_ARP,           ovnact_put_mac_bind)    \
     OVNACT(GET_ND,            ovnact_get_mac_bind)    \
     OVNACT(PUT_ND,            ovnact_put_mac_bind)    \
-    OVNACT(PUT_DHCPV4_OPTS,   ovnact_put_dhcp_opts)   \
-    OVNACT(PUT_DHCPV6_OPTS,   ovnact_put_dhcp_opts)   \
+    OVNACT(PUT_DHCPV4_OPTS,   ovnact_put_opts)        \
+    OVNACT(PUT_DHCPV6_OPTS,   ovnact_put_opts)        \
     OVNACT(SET_QUEUE,         ovnact_set_queue)       \
     OVNACT(DNS_LOOKUP,        ovnact_dns_lookup)      \
-    OVNACT(LOG,               ovnact_log)
+    OVNACT(LOG,               ovnact_log)             \
+    OVNACT(PUT_ND_RA_OPTS,    ovnact_put_opts)        \
+    OVNACT(ND_NS,             ovnact_nest)
 
 /* enum ovnact_type, with a member OVNACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ovnact_type {
@@ -200,7 +202,11 @@ struct ovnact_ct_nat {
 };
 
 struct ovnact_ct_lb_dst {
-    ovs_be32 ip;
+    int family;
+    union {
+        struct in6_addr ipv6;
+        ovs_be32 ipv4;
+    };
     uint16_t port;
 };
 
@@ -234,16 +240,16 @@ struct ovnact_put_mac_bind {
     struct expr_field mac;      /* 48-bit Ethernet address. */
 };
 
-struct ovnact_dhcp_option {
-    const struct dhcp_opts_map *option;
+struct ovnact_gen_option {
+    const struct gen_opts_map *option;
     struct expr_constant_set value;
 };
 
 /* OVNACT_PUT_DHCPV4_OPTS, OVNACT_PUT_DHCPV6_OPTS. */
-struct ovnact_put_dhcp_opts {
+struct ovnact_put_opts {
     struct ovnact ovnact;
     struct expr_field dst;      /* 1-bit destination field. */
-    struct ovnact_dhcp_option *options;
+    struct ovnact_gen_option *options;
     size_t n_options;
 };
 
@@ -418,6 +424,20 @@ enum action_opcode {
      *   - A variable length string containing the name.
      */
     ACTION_OPCODE_LOG,
+
+    /* "result = put_nd_ra_opts(option, ...)".
+     * Arguments follow the action_header, in this format:
+     *   - A 32-bit or 64-bit OXM header designating the result field.
+     *   - A 32-bit integer specifying a bit offset within the result field.
+     *   - Any number of ICMPv6 options.
+     */
+    ACTION_OPCODE_PUT_ND_RA_OPTS,
+
+    /* "nd_ns { ...actions... }".
+     *
+     * The actions, in OpenFlow 1.3 format, follow the action_header.
+     */
+    ACTION_OPCODE_ND_NS,
 };
 
 /* Header. */
@@ -432,11 +452,14 @@ struct ovnact_parse_params {
      * expr_parse()). */
     const struct shash *symtab;
 
-    /* hmap of 'struct dhcp_opts_map' to support 'put_dhcp_opts' action */
+    /* hmap of 'struct gen_opts_map' to support 'put_dhcp_opts' action */
     const struct hmap *dhcp_opts;
 
-    /* hmap of 'struct dhcp_opts_map'  to support 'put_dhcpv6_opts' action */
+    /* hmap of 'struct gen_opts_map'  to support 'put_dhcpv6_opts' action */
     const struct hmap *dhcpv6_opts;
+
+    /* hmap of 'struct gen_opts_map' to support 'put_nd_ra_opts' action */
+    const struct hmap *nd_ra_opts;
 
     /* Each OVN flow exists in a logical table within a logical pipeline.
      * These parameters express this context for a set of OVN actions being

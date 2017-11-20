@@ -799,6 +799,20 @@ struct udp_header {
 };
 BUILD_ASSERT_DECL(UDP_HEADER_LEN == sizeof(struct udp_header));
 
+#define ESP_HEADER_LEN 8
+struct esp_header {
+    ovs_be32 spi;
+    ovs_be32 seq_no;
+};
+BUILD_ASSERT_DECL(ESP_HEADER_LEN == sizeof(struct esp_header));
+
+#define ESP_TRAILER_LEN 2
+struct esp_trailer {
+    uint8_t pad_len;
+    uint8_t next_hdr;
+};
+BUILD_ASSERT_DECL(ESP_TRAILER_LEN == sizeof(struct esp_trailer));
+
 #define TCP_FIN 0x001
 #define TCP_SYN 0x002
 #define TCP_RST 0x004
@@ -1093,7 +1107,9 @@ static inline bool ipv6_addr_is_multicast(const struct in6_addr *ip) {
 static inline struct in6_addr
 in6_addr_mapped_ipv4(ovs_be32 ip4)
 {
-    struct in6_addr ip6 = { .s6_addr = { [10] = 0xff, [11] = 0xff } };
+    struct in6_addr ip6;
+    memset(&ip6, 0, sizeof(ip6));
+    ip6.s6_addr[10] = 0xff, ip6.s6_addr[11] = 0xff;
     memcpy(&ip6.s6_addr[12], &ip4, 4);
     return ip6;
 }
@@ -1324,6 +1340,16 @@ bool ipv6_is_zero(const struct in6_addr *a);
 struct in6_addr ipv6_create_mask(int mask);
 int ipv6_count_cidr_bits(const struct in6_addr *netmask);
 bool ipv6_is_cidr(const struct in6_addr *netmask);
+
+enum port_flags {
+    PORT_OPTIONAL,
+    PORT_REQUIRED,
+    PORT_FORBIDDEN,
+};
+
+char *ipv46_parse(const char *s, enum port_flags flags,
+                  struct sockaddr_storage *ss)
+    OVS_WARN_UNUSED_RESULT;
 
 bool ipv6_parse(const char *s, struct in6_addr *ip);
 char *ipv6_parse_masked(const char *s, struct in6_addr *ipv6,

@@ -277,12 +277,13 @@ odp_set_nsh(struct dp_packet *packet, const struct ovs_key_nsh *key,
             const struct ovs_key_nsh *mask)
 {
     struct nsh_hdr *nsh = dp_packet_l3(packet);
+    uint8_t mdtype = nsh_md_type(nsh);
 
     if (!mask) {
-        nsh->ver_flags_len = htons(key->flags << NSH_FLAGS_SHIFT) |
-                             (nsh->ver_flags_len & ~htons(NSH_FLAGS_MASK));
+        nsh->ver_flags_ttl_len = htons(key->flags << NSH_FLAGS_SHIFT) |
+                (nsh->ver_flags_ttl_len & ~htons(NSH_FLAGS_MASK));
         put_16aligned_be32(&nsh->path_hdr, key->path_hdr);
-        switch (nsh->md_type) {
+        switch (mdtype) {
             case NSH_M_TYPE1:
                 for (int i = 0; i < 4; i++) {
                     put_16aligned_be32(&nsh->md1.c[i], key->c[i]);
@@ -294,16 +295,16 @@ odp_set_nsh(struct dp_packet *packet, const struct ovs_key_nsh *key,
                 break;
         }
     } else {
-        uint8_t flags = (ntohs(nsh->ver_flags_len) & NSH_FLAGS_MASK) >>
+        uint8_t flags = (ntohs(nsh->ver_flags_ttl_len) & NSH_FLAGS_MASK) >>
                             NSH_FLAGS_SHIFT;
         flags = key->flags | (flags & ~mask->flags);
-        nsh->ver_flags_len = htons(flags << NSH_FLAGS_SHIFT) |
-                             (nsh->ver_flags_len & ~htons(NSH_FLAGS_MASK));
+        nsh->ver_flags_ttl_len = htons(flags << NSH_FLAGS_SHIFT) |
+                (nsh->ver_flags_ttl_len & ~htons(NSH_FLAGS_MASK));
 
         ovs_be32 path_hdr = get_16aligned_be32(&nsh->path_hdr);
         path_hdr = key->path_hdr | (path_hdr & ~mask->path_hdr);
         put_16aligned_be32(&nsh->path_hdr, path_hdr);
-        switch (nsh->md_type) {
+        switch (mdtype) {
             case NSH_M_TYPE1:
                 for (int i = 0; i < 4; i++) {
                     ovs_be32 p = get_16aligned_be32(&nsh->md1.c[i]);
@@ -799,6 +800,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                  * stolen them.  */
                 return;
             }
+            break;
         case OVS_ACTION_ATTR_METER:
             /* Not implemented yet. */
             break;
@@ -826,7 +828,8 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             break;
         }
         case OVS_ACTION_ATTR_DECAP_NSH: {
-            size_t i, num = batch->count;
+            size_t i;
+            const size_t num = dp_packet_batch_size(batch);
 
             DP_PACKET_BATCH_REFILL_FOR_EACH (i, num, packet, batch) {
                 if (decap_nsh(packet)) {

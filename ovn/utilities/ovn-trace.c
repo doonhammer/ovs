@@ -36,11 +36,11 @@
 #include "ovn/lex.h"
 #include "ovn/lib/acl-log.h"
 #include "ovn/lib/logical-fields.h"
+#include "ovn/lib/ovn-l7.h"
 #include "ovn/lib/ovn-sb-idl.h"
-#include "ovn/lib/ovn-dhcp.h"
 #include "ovn/lib/ovn-util.h"
 #include "ovsdb-idl.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "stream-ssl.h"
 #include "stream.h"
 #include "unixctl.h"
@@ -418,8 +418,9 @@ static struct shash symtab;
 static struct shash address_sets;
 
 /* DHCP options. */
-static struct hmap dhcp_opts;   /* Contains "struct dhcp_opts_map"s. */
-static struct hmap dhcpv6_opts; /* Contains "struct dhcp_opts_map"s. */
+static struct hmap dhcp_opts;   /* Contains "struct gen_opts_map"s. */
+static struct hmap dhcpv6_opts; /* Contains "struct gen_opts_map"s. */
+static struct hmap nd_ra_opts; /* Contains "struct gen_opts_map"s. */
 
 static struct ovntrace_datapath *
 ovntrace_datapath_find_by_sb_uuid(const struct uuid *sb_uuid)
@@ -806,6 +807,7 @@ read_flows(void)
             .symtab = &symtab,
             .dhcp_opts = &dhcp_opts,
             .dhcpv6_opts = &dhcpv6_opts,
+            .nd_ra_opts = &nd_ra_opts,
             .pipeline = (!strcmp(sblf->pipeline, "ingress")
                          ? OVNACT_P_INGRESS
                          : OVNACT_P_EGRESS),
@@ -867,7 +869,7 @@ read_flows(void)
 }
 
 static void
-read_dhcp_opts(void)
+read_gen_opts(void)
 {
     hmap_init(&dhcp_opts);
     const struct sbrec_dhcp_options *sdo;
@@ -881,6 +883,9 @@ read_dhcp_opts(void)
     SBREC_DHCPV6_OPTIONS_FOR_EACH(sdo6, ovnsb_idl) {
        dhcp_opt_add(&dhcpv6_opts, sdo6->name, sdo6->code, sdo6->type);
     }
+
+    hmap_init(&nd_ra_opts);
+    nd_ra_opts_init(&nd_ra_opts);
 }
 
 static void
@@ -931,7 +936,7 @@ read_db(void)
     read_ports();
     read_mcgroups();
     read_address_sets();
-    read_dhcp_opts();
+    read_gen_opts();
     read_flows();
     read_mac_bindings();
 }
@@ -1505,6 +1510,31 @@ execute_nd_na(const struct ovnact_nest *on, const struct ovntrace_datapath *dp,
 }
 
 static void
+execute_nd_ns(const struct ovnact_nest *on, const struct ovntrace_datapath *dp,
+              const struct flow *uflow, uint8_t table_id,
+              enum ovnact_pipeline pipeline, struct ovs_list *super)
+{
+    struct flow na_flow = *uflow;
+
+    /* Update fields for NA. */
+    na_flow.dl_src = uflow->dl_src;
+    na_flow.ipv6_src = uflow->ipv6_src;
+    na_flow.ipv6_dst = uflow->ipv6_dst;
+    struct in6_addr sn_addr;
+    in6_addr_solicited_node(&sn_addr, &uflow->ipv6_dst);
+    ipv6_multicast_to_ethernet(&na_flow.dl_dst, &sn_addr);
+    na_flow.tp_src = htons(135);
+    na_flow.arp_sha = eth_addr_zero;
+    na_flow.arp_tha = uflow->dl_dst;
+
+    struct ovntrace_node *node = ovntrace_node_append(
+        super, OVNTRACE_NODE_TRANSFORMATION, "nd_ns");
+
+    trace_actions(on->nested, on->nested_len, dp, &na_flow,
+                  table_id, pipeline, &node->subs);
+}
+
+static void
 execute_get_mac_bind(const struct ovnact_get_mac_bind *bind,
                      const struct ovntrace_datapath *dp,
                      struct flow *uflow, struct ovs_list *super)
@@ -1541,19 +1571,15 @@ execute_get_mac_bind(const struct ovnact_get_mac_bind *bind,
 }
 
 static void
-execute_put_dhcp_opts(const struct ovnact_put_dhcp_opts *pdo,
-                      const char *name, struct flow *uflow,
-                      struct ovs_list *super)
+execute_put_opts(const struct ovnact_put_opts *po,
+                 const char *name, struct flow *uflow,
+                 struct ovs_list *super)
 {
-    ovntrace_node_append(
-        super, OVNTRACE_NODE_ERROR,
-        "/* We assume that this packet is DHCPDISCOVER or DHCPREQUEST. */");
-
     /* Format the put_dhcp_opts action. */
     struct ds s = DS_EMPTY_INITIALIZER;
-    for (const struct ovnact_dhcp_option *o = pdo->options;
-         o < &pdo->options[pdo->n_options]; o++) {
-        if (o != pdo->options) {
+    for (const struct ovnact_gen_option *o = po->options;
+         o < &po->options[po->n_options]; o++) {
+        if (o != po->options) {
             ds_put_cstr(&s, ", ");
         }
         ds_put_format(&s, "%s = ", o->option->name);
@@ -1562,19 +1588,38 @@ execute_put_dhcp_opts(const struct ovnact_put_dhcp_opts *pdo,
     ovntrace_node_append(super, OVNTRACE_NODE_MODIFY, "%s(%s)",
                          name, ds_cstr(&s));
 
-    struct mf_subfield dst = expr_resolve_field(&pdo->dst);
+    struct mf_subfield dst = expr_resolve_field(&po->dst);
     if (!mf_is_register(dst.field->id)) {
         /* Format assignment. */
         ds_clear(&s);
-        expr_field_format(&pdo->dst, &s);
+        expr_field_format(&po->dst, &s);
         ovntrace_node_append(super, OVNTRACE_NODE_MODIFY,
                              "%s = 1", ds_cstr(&s));
     }
     ds_destroy(&s);
 
-    struct mf_subfield sf = expr_resolve_field(&pdo->dst);
+    struct mf_subfield sf = expr_resolve_field(&po->dst);
     union mf_subvalue sv = { .u8_val = 1 };
     mf_write_subfield_flow(&sf, &sv, uflow);
+}
+
+static void
+execute_put_dhcp_opts(const struct ovnact_put_opts *pdo,
+                      const char *name, struct flow *uflow,
+                      struct ovs_list *super)
+{
+    ovntrace_node_append(
+        super, OVNTRACE_NODE_ERROR,
+        "/* We assume that this packet is DHCPDISCOVER or DHCPREQUEST. */");
+    execute_put_opts(pdo, name, uflow, super);
+}
+
+static void
+execute_put_nd_ra_opts(const struct ovnact_put_opts *pdo,
+                       const char *name, struct flow *uflow,
+                       struct ovs_list *super)
+{
+    execute_put_opts(pdo, name, uflow, super);
 }
 
 static void
@@ -1791,6 +1836,11 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
                           super);
             break;
 
+        case OVNACT_ND_NS:
+            execute_nd_ns(ovnact_get_ND_NS(a), dp, uflow, table_id, pipeline,
+                          super);
+            break;
+
         case OVNACT_GET_ARP:
             execute_get_mac_bind(ovnact_get_GET_ARP(a), dp, uflow, super);
             break;
@@ -1812,6 +1862,11 @@ trace_actions(const struct ovnact *ovnacts, size_t ovnacts_len,
         case OVNACT_PUT_DHCPV6_OPTS:
             execute_put_dhcp_opts(ovnact_get_PUT_DHCPV6_OPTS(a),
                                   "put_dhcpv6_opts", uflow, super);
+            break;
+
+        case OVNACT_PUT_ND_RA_OPTS:
+            execute_put_nd_ra_opts(ovnact_get_PUT_DHCPV6_OPTS(a),
+                                   "put_nd_ra_opts", uflow, super);
             break;
 
         case OVNACT_SET_QUEUE:

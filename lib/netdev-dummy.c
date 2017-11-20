@@ -35,7 +35,7 @@
 #include "ovs-atomic.h"
 #include "packets.h"
 #include "pcap-file.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "openvswitch/shash.h"
 #include "sset.h"
 #include "stream.h"
@@ -50,8 +50,8 @@ struct reconnect;
 
 struct dummy_packet_stream {
     struct stream *stream;
-    struct dp_packet rxbuf;
     struct ovs_list txq;
+    struct dp_packet rxbuf;
 };
 
 enum dummy_packet_conn_type {
@@ -1764,7 +1764,6 @@ netdev_dummy_ip6addr(struct unixctl_conn *conn, int argc OVS_UNUSED,
             unixctl_command_reply_error(conn, error);
             free(error);
         }
-        netdev_close(netdev);
     } else {
         unixctl_command_reply_error(conn, "Unknown Dummy Interface");
     }

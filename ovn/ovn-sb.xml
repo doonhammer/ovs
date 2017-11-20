@@ -911,6 +911,10 @@
         <li><code>nd</code> expands to <code>icmp6.type == {135, 136} &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
         <li><code>nd_ns</code> expands to <code>icmp6.type == 135 &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
         <li><code>nd_na</code> expands to <code>icmp6.type == 136 &amp;&amp; icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
+        <li><code>nd_rs</code> expands to <code>icmp6.type == 133 &amp;&amp;
+        icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
+        <li><code>nd_ra</code> expands to <code>icmp6.type == 134 &amp;&amp;
+        icmp6.code == 0 &amp;&amp; ip.ttl == 255</code></li>
         <li><code>tcp</code> expands to <code>ip.proto == 6</code></li>
         <li><code>udp</code> expands to <code>ip.proto == 17</code></li>
         <li><code>sctp</code> expands to <code>ip.proto == 132</code></li>
@@ -1254,6 +1258,43 @@
           <p><b>Example:</b> <code>put_arp(inport, arp.spa, arp.sha);</code></p>
         </dd>
 
+        <dt><code>nd_ns { <var>action</var>; </code>...<code> };</code></dt>
+        <dd>
+          <p>
+            Temporarily replaces the IPv6 packet being processed by an IPv6
+            Neighbor Solicitation packet and executes each nested
+            <var>action</var> on the IPv6 NS packet.  Actions following the
+            <var>nd_ns</var> action, if any, apply to the original, unmodified
+            packet.
+          </p>
+
+          <p>
+            The IPv6 NS packet that this action operates on is initialized
+            based on the IPv6 packet being processed, as follows.  These are
+            default values that the nested actions will probably want to
+            change:
+          </p>
+
+          <ul>
+            <li><code>eth.src</code> unchanged</li>
+            <li><code>eth.dst</code> set to IPv6 multicast MAC address</li>
+            <li><code>eth.type = 0x86dd</code></li>
+            <li><code>ip6.src</code> copied from <code>ip6.src</code></li>
+            <li>
+              <code>ip6.dst</code> set to IPv6 Solicited-Node multicast address
+            </li>
+            <li><code>icmp6.type = 135</code> (Neighbor Solicitation)</li>
+            <li><code>nd.target</code> copied from <code>ip6.dst</code></li>
+          </ul>
+
+          <p>
+            The IPv6 NS packet has the same VLAN header, if any, as the IP
+            packet it replaces.
+          </p>
+
+          <p><b>Prerequisite:</b> <code>ip6</code></p>
+        </dd>
+
         <dt>
           <code>nd_na { <var>action</var>; </code>...<code> };</code>
         </dt>
@@ -1514,6 +1555,83 @@
 
           <p>
             <b>Prerequisite:</b> <code>udp</code>
+          </p>
+        </dd>
+
+        <dt>
+          <code><var>R</var> = put_nd_ra_opts(<var>D1</var> = <var>V1</var>, <var>D2</var> = <var>V2</var>, ..., <var>Dn</var> = <var>Vn</var>);</code>
+        </dt>
+
+        <dd>
+          <p>
+            <b>Parameters</b>: The following IPv6 ND Router Advertisement
+               option/value pairs as defined in RFC 4861.
+
+            <ul>
+              <li>
+                <code>addr_mode</code>
+                <p>
+                  Mandatory parameter which specifies the address mode flag to
+                  be set in the RA flag options field. The value of this option
+                  is a string and the following values can be defined -
+                  "slaac", "dhcpv6_stateful" and "dhcpv6_stateless".
+                </p>
+              </li>
+
+              <li>
+                <code>slla</code>
+                <p>
+                  Mandatory parameter which specifies the link-layer address of
+                  the interface from which the Router Advertisement is sent.
+                </p>
+              </li>
+
+              <li>
+                <code>mtu</code>
+                <p>
+                  Optional parameter which specifies the MTU.
+                </p>
+              </li>
+
+              <li>
+                <code>prefix</code>
+                <p>
+                  Optional parameter which should be specified if the addr_mode
+                  is "slaac" or "dhcpv6_stateless". The value should be an IPv6
+                  prefix which will be used for stateless IPv6 address
+                  configuration. This option can be defined multiple times.
+                </p>
+              </li>
+            </ul>
+          </p>
+
+          <p>
+            <b>Result</b>: stored to a 1-bit subfield <var>R</var>.
+          </p>
+
+          <p>
+            Valid only in the ingress pipeline.
+          </p>
+
+          <p>
+            When this action is applied to an IPv6 Router solicitation request
+            packet, it changes the packet into an IPv6 Router Advertisement
+            reply and adds the options specified in the parameters, and stores
+            1 in <var>R</var>.
+          </p>
+
+          <p>
+            When this action is applied to a non-IPv6 Router solicitation
+            packet or an invalid IPv6 request packet , it leaves the packet
+            unchanged and stores 0 in <var>R</var>.
+          </p>
+
+          <p>
+            <b>Example:</b>
+            <code>
+              reg0[3] = put_nd_ra_opts(addr_mode = "slaac",
+              slla = 00:00:00:00:10:02, prefix = aef0::/64, mtu = 1450);
+            </code>
           </p>
         </dd>
       </dl>

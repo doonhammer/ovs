@@ -91,7 +91,8 @@ oftrace_node_destroy(struct oftrace_node *node)
 bool
 oftrace_add_recirc_node(struct ovs_list *recirc_queue,
                         enum oftrace_recirc_type type, const struct flow *flow,
-                        const struct dp_packet *packet, uint32_t recirc_id)
+                        const struct dp_packet *packet, uint32_t recirc_id,
+                        const uint16_t zone)
 {
     if (!recirc_id_node_find_and_ref(recirc_id)) {
         return false;
@@ -104,6 +105,7 @@ oftrace_add_recirc_node(struct ovs_list *recirc_queue,
     node->recirc_id = recirc_id;
     node->flow = *flow;
     node->flow.recirc_id = recirc_id;
+    node->flow.ct_zone = zone;
     node->packet = packet ? dp_packet_clone(packet) : NULL;
 
     return true;
@@ -133,7 +135,9 @@ oftrace_pop_ct_state(struct ovs_list *next_ct_states)
 {
     struct oftrace_next_ct_state *s;
     LIST_FOR_EACH_POP (s, node, next_ct_states) {
-        return s->state;
+        uint32_t state = s->state;
+        free(s);
+        return state;
     }
     OVS_NOT_REACHED();
 }

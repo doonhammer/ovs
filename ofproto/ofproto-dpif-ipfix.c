@@ -29,7 +29,7 @@
 #include "ofproto-dpif.h"
 #include "dp-packet.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "sset.h"
 #include "util.h"
 #include "timeval.h"
@@ -1314,7 +1314,6 @@ ipfix_def_options_template_fields(enum ipfix_options_template opt_tmpl_type,
     case NUM_IPFIX_OPTIONS_TEMPLATE:
     default:
         OVS_NOT_REACHED();
-        break;
     }
 
     return 0;

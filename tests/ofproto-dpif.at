@@ -7333,7 +7333,7 @@ m4_define([OFPROTO_DPIF_GET_FLOW],
                        set Open_vSwitch . other_config:max-idle=10000], [], [],
                        [m4_if([$1], [], [], [--dummy-numa="0,0,0,0,1,1,1,1"])])
 
-   func=`echo -n "$1_" | cut -c 4-`
+   func=`printf '%s_' "$1" | cut -c 4-`
    add_${func}of_ports br0 1 2
 
    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:05,dst=50:54:00:00:00:07),eth_type(0x0800),ipv4(src=192.168.0.1,dst=192.168.0.2,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
@@ -7665,7 +7665,7 @@ m4_define([OFPROTO_DPIF_MEGAFLOW_NORMAL],
   [AT_SETUP([ofproto-dpif megaflow - normal$1])
    OVS_VSWITCHD_START([], [], [], [m4_if([$1], [], [], [--dummy-numa="0,0,0,0,1,1,1,1"])])
    AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
-   func=`echo -n "$1_" | cut -c 4-`
+   func=`printf '%s_' "$1" | cut -c 4-`
    add_${func}of_ports br0 1 2
    AT_CHECK([ovs-ofctl add-flow br0 action=normal])
    AT_CHECK([ovs-appctl netdev-dummy/receive p1 'in_port(1),eth(src=50:54:00:00:00:09,dst=50:54:00:00:00:0a),eth_type(0x0800),ipv4(src=10.0.0.2,dst=10.0.0.1,proto=1,tos=0,ttl=64,frag=no),icmp(type=8,code=0)'])
@@ -8068,7 +8068,7 @@ m4_define([OFPROTO_DPIF_MEGAFLOW_DISABLED],
   [AT_SETUP([ofproto-dpif megaflow - disabled$1])
    OVS_VSWITCHD_START([], [], [], [m4_if([$1], [], [], [--dummy-numa="0,0,0,0,1,1,1,1"])])
    AT_CHECK([ovs-appctl vlog/set dpif:dbg dpif_netdev:dbg])
-   func=`echo -n "$1_" | cut -c 4-`
+   func=`printf '%s_' "$1" | cut -c 4-`
    add_${func}of_ports br0 1 2
    AT_DATA([flows.txt], [dnl
 table=0 in_port=1,ip,nw_dst=10.0.0.1 actions=output(2)
@@ -9827,21 +9827,21 @@ table=0,priority=1,action=drop
 dnl
 dnl Table 1
 dnl
-table=1,priority=10,in_port=1,ct_state=+trk+new,udp,action=ct(commit,zone=0),2
-table=1,priority=10,in_port=1,ct_state=+trk+est,udp,action=2
-table=1,priority=10,in_port=2,ct_state=+trk+est,udp,action=1
+table=1,priority=10,in_port=1,ct_zone=0,ct_state=+trk+new,udp,action=ct(commit,zone=0),2
+table=1,priority=10,in_port=1,ct_zone=0,ct_state=+trk+est,udp,action=2
+table=1,priority=10,in_port=2,ct_zone=0,ct_state=+trk+est,udp,action=1
 table=1,priority=1,action=drop
 dnl
 dnl Table 2
 dnl
-table=2,priority=10,in_port=1,tcp,ct_state=+trk+new,tcp,action=ct(commit,zone=1),ct(table=3,zone=2)
-table=2,priority=10,in_port=1,tcp,ct_state=+trk+est,tcp,action=ct(table=3,zone=2)
+table=2,priority=10,in_port=1,tcp,ct_zone=1,ct_state=+trk+new,tcp,action=ct(commit,zone=1),ct(table=3,zone=2)
+table=2,priority=10,in_port=1,tcp,ct_zone=1,ct_state=+trk+est,tcp,action=ct(table=3,zone=2)
 table=2,priority=1,action=drop
 dnl
 dnl Table 3
 dnl
-table=3,priority=10,in_port=1,tcp,ct_state=+trk+new,tcp,action=ct(commit,zone=2),4
-table=3,priority=10,in_port=1,tcp,ct_state=+trk+est,tcp,action=3
+table=3,priority=10,in_port=1,tcp,ct_zone=2,ct_state=+trk+new,tcp,action=ct(commit,zone=2),4
+table=3,priority=10,in_port=1,tcp,ct_zone=2,ct_state=+trk+est,tcp,action=3
 table=2,priority=1,action=drop
 ])
 

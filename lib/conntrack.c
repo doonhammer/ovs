@@ -17,10 +17,10 @@
 #include <config.h>
 #include <ctype.h>
 #include <errno.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <netinet/icmp6.h>
 #include <string.h>
-#include <sys/types.h>
 
 #include "bitmap.h"
 #include "conntrack.h"
@@ -36,7 +36,7 @@
 #include "openvswitch/vlog.h"
 #include "ovs-rcu.h"
 #include "ovs-thread.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "random.h"
 #include "timeval.h"
 

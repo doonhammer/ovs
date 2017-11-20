@@ -540,13 +540,13 @@ parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key)
     /* Check if it is long enough for NSH header, doesn't support
      * MD type 2 yet
      */
-    if (OVS_UNLIKELY(*sizep < NSH_M_TYPE1_LEN)) {
+    if (OVS_UNLIKELY(*sizep < NSH_BASE_HDR_LEN)) {
         return false;
     }
 
     memset(key, 0, sizeof(struct flow_nsh));
 
-    ver_flags_len = ntohs(nsh->ver_flags_len);
+    ver_flags_len = ntohs(nsh->ver_flags_ttl_len);
     version = (ver_flags_len & NSH_VER_MASK) >> NSH_VER_SHIFT;
     flags = (ver_flags_len & NSH_FLAGS_MASK) >> NSH_FLAGS_SHIFT;
 
@@ -554,10 +554,6 @@ parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key)
     length = ((ver_flags_len & NSH_LEN_MASK) >> NSH_LEN_SHIFT) << 2;
 
     if (version != 0) {
-        return false;
-    }
-
-    if (length != NSH_M_TYPE1_LEN) {
         return false;
     }
 
@@ -571,14 +567,17 @@ parse_nsh(const void **datap, size_t *sizep, struct flow_nsh *key)
 
     switch (key->mdtype) {
         case NSH_M_TYPE1:
+            if (length != NSH_M_TYPE1_LEN) {
+                return false;
+            }
             for (size_t i = 0; i < 4; i++) {
                 key->c[i] = get_16aligned_be32(&nsh->md1.c[i]);
             }
             break;
         case NSH_M_TYPE2:
-            /* Don't support MD type 2 yet, so return false */
         default:
-            return false;
+            /* We don't parse other context headers yet. */
+            break;
     }
 
     data_pull(datap, sizep, length);

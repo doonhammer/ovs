@@ -42,7 +42,7 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "seq.h"
 #include "openvswitch/shash.h"
 #include "timeval.h"
@@ -88,13 +88,13 @@ struct bond_slave {
 
     struct netdev *netdev;      /* Network device, owned by the client. */
     uint64_t change_seq;        /* Tracks changes in 'netdev'. */
-    ofp_port_t  ofp_port;       /* OpenFlow port number. */
     char *name;                 /* Name (a copy of netdev_get_name(netdev)). */
+    ofp_port_t  ofp_port;       /* OpenFlow port number. */
 
     /* Link status. */
-    long long delay_expires;    /* Time after which 'enabled' may change. */
     bool enabled;               /* May be chosen for flows? */
     bool may_enable;            /* Client considers this slave bondable. */
+    long long delay_expires;    /* Time after which 'enabled' may change. */
 
     /* Rebalancing info.  Used only by bond_rebalance(). */
     struct ovs_list bal_node;   /* In bond_rebalance()'s 'bals' list. */
@@ -1679,6 +1679,8 @@ bond_slave_lookup(struct bond *bond, const void *slave_)
 static void
 bond_enable_slave(struct bond_slave *slave, bool enable)
 {
+    struct bond *bond = slave->bond;
+
     slave->delay_expires = LLONG_MAX;
     if (enable != slave->enabled) {
         slave->bond->bond_revalidate = true;
@@ -1688,6 +1690,7 @@ bond_enable_slave(struct bond_slave *slave, bool enable)
         if (enable) {
             ovs_list_insert(&slave->bond->enabled_slaves, &slave->list_node);
         } else {
+            bond->send_learning_packets = true;
             ovs_list_remove(&slave->list_node);
         }
         ovs_mutex_unlock(&slave->bond->mutex);
