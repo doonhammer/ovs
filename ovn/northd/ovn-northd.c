@@ -3856,10 +3856,10 @@ build_lswitch_flows(struct hmap *datapaths, struct hmap *ports,
         build_pre_lb(od, lflows);
         build_pre_stateful(od, lflows);
         build_acls(od, lflows);
-        build_chain(od, lflows, ports);
         build_qos(od, lflows);
         build_lb(od, lflows);
         build_stateful(od, lflows);
+        build_chain(od, lflows, ports);
     }
 
     /* Logical switch ingress table 0: Admission control framework (priority
