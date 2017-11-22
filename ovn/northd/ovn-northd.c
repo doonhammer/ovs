@@ -3469,18 +3469,27 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         * Get ethernet address of target port
         */
         struct eth_addr traffic_logical_port_ea;
-        ovs_be32 traffic_logical_port_ip;
-
+        //ovs_be32 traffic_logical_port_ip;
+        VLOG_INFO("Checking ports \n");
+        //VLOG_INFO("Addresses: %s\n", traffic_port->nbsp);
+        if (traffic_port->nbsp->addresses == NULL){
+            static struct vlog_rate_limit rl =
+                VLOG_RATE_LIMIT_INIT(1, 1);
+            VLOG_WARN_RL(&rl,
+                         "MAC Address not set for : %s used in classifier: %s does not not "
+                         "have any port pair groups\n",
+                         lcc->chain->name, lcc->name);
+            break;
+        }
+       
         if (ovs_scan(traffic_port->nbsp->addresses[0],
-                 ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                 ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea),
-                 IP_SCAN_ARGS(&traffic_logical_port_ip))){
-
+                 ETH_ADDR_SCAN_FMT,
+                 ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea))){ 
+                 VLOG_INFO("Static address set\n");
         } else if (is_dynamic_lsp_address(traffic_port->nbsp->addresses[0])) {
             ovs_scan(traffic_port->nbsp->dynamic_addresses,
-                 ETH_ADDR_SCAN_FMT" "IP_SCAN_FMT,
-                 ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea),
-                 IP_SCAN_ARGS(&traffic_logical_port_ip));
+                 ETH_ADDR_SCAN_FMT,
+                 ETH_ADDR_SCAN_ARGS(traffic_logical_port_ea));
         } else {
             static struct vlog_rate_limit rl =
                         VLOG_RATE_LIMIT_INIT(1, 1);
@@ -3504,10 +3513,10 @@ build_chain(struct ovn_datapath *od, struct hmap *lflows, struct hmap *ports)
         /*
          * Allocate space for port-pairs.
          */
-        input_port_array = xmalloc(sizeof * src_port *
-                                   lpc->n_port_pair_groups);
-        output_port_array = xmalloc(sizeof * dst_port *
-                                    (lpc->n_port_pair_groups));
+        input_port_array = xmalloc(sizeof(struct ovn_port) *
+                                    lpc->n_port_pair_groups);
+        output_port_array = xmalloc(sizeof(struct ovn_port) *
+                                    lpc->n_port_pair_groups);
         /* Copy port groups from chain and sort them according to sortkey.*/
         struct nbrec_logical_port_pair_group **port_pair_groups =
             xmemdup(lpc->port_pair_groups,
