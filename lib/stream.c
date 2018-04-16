@@ -18,6 +18,7 @@
 #include "stream-provider.h"
 #include <errno.h>
 #include <inttypes.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdlib.h>
@@ -34,7 +35,7 @@
 #include "openvswitch/vlog.h"
 #include "ovs-thread.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "random.h"
 #include "socket-util.h"
 #include "util.h"

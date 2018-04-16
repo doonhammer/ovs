@@ -344,6 +344,37 @@
         </p>
       </column>
 
+      <column name="other_config" key="vhost-iommu-support"
+              type='{"type": "boolean"}'>
+        <p>
+          vHost IOMMU is a security feature, which restricts the vhost memory
+          that a virtio device may access. vHost IOMMU support is disabled by
+          default, due to a bug in QEMU implementations of the vhost REPLY_ACK
+          protocol, (on which vHost IOMMU relies) prior to v2.9.1. Setting this
+          value to <code>true</code> enables vHost IOMMU support for vHost User
+          Client ports in OvS-DPDK, starting from DPDK v17.11.
+        </p>
+        <p>
+          Changing this value requires restarting the daemon.
+        </p>
+      </column>
+
+      <column name="other_config" key="tx-flush-interval"
+              type='{"type": "integer",
+                     "minInteger": 0, "maxInteger": 1000000}'>
+        <p>
+          Specifies the time in microseconds that a packet can wait in output
+          batch for sending i.e. amount of time that packet can spend in an
+          intermediate output queue before sending to netdev.
+          This option can be used to configure balance between throughput
+          and latency. Lower values decreases latency while higher values
+          may be useful to achieve higher performance.
+        </p>
+        <p>
+          Defaults to 0 i.e. instant packet sending (latency optimized).
+        </p>
+      </column>
+
       <column name="other_config" key="n-handler-threads"
               type='{"type": "integer", "minInteger": 1}'>
         <p>
@@ -751,12 +782,12 @@
 
         <p>
           If there are primary controllers, removing all of them clears the
-          flow table.  If there are no primary controllers, adding one also
-          clears the flow table.  Other changes to the set of controllers, such
-          as adding or removing a service controller, adding another primary
-          controller to supplement an existing primary controller, or removing
-          only one of two primary controllers, have no effect on the flow
-          table.
+          OpenFlow flow tables, group table, and meter table.  If there are no
+          primary controllers, adding one also clears these tables.  Other
+          changes to the set of controllers, such as adding or removing a
+          service controller, adding another primary controller to supplement
+          an existing primary controller, or removing only one of two primary
+          controllers, have no effect on these tables.
         </p>
       </column>
 
@@ -806,7 +837,8 @@
         configured controllers can be contacted.</p>
         <p>
           Changing <ref column="fail_mode"/> when no primary controllers are
-          configured clears the flow table.
+          configured clears the OpenFlow flow tables, group table, and meter
+          table.
         </p>
       </column>
 
@@ -867,12 +899,13 @@
       </column>
 
       <column name="other_config" key="datapath-id">
-        Exactly 16 hex digits to set the OpenFlow datapath ID to a specific
-        value.  May not be all-zero.
+        Overrides the default OpenFlow datapath ID, setting it to the specified
+        value specified in hex.  The value must either have a <code>0x</code>
+        prefix or be exactly 16 hex digits long.  May not be all-zero.
       </column>
 
       <column name="other_config" key="dp-desc">
-        Human readable description of datapath.  It it a maximum 256
+        Human readable description of datapath.  It is a maximum 256
         byte-long free-form string to describe the datapath for
         debugging purposes, e.g. <code>switch3 in room 3120</code>.
       </column>
@@ -2158,7 +2191,18 @@
           imprecisely for internal interfaces.</dd>
 
           <dt><code>tap</code></dt>
-          <dd>A TUN/TAP device managed by Open vSwitch.</dd>
+          <dd>
+            <p>
+              A TUN/TAP device managed by Open vSwitch.
+            </p>
+            <p>
+              Open vSwitch checks the interface state before send packets
+              to the device.  When it is <code>down</code>, the packets are
+              dropped and the tx_dropped statistic is updated accordingly.
+              Older versions of Open vSwitch did not check the interface state
+              and then the tx_packets was incremented along with tx_dropped.
+            </p>
+          </dd>
 
           <dt><code>geneve</code></dt>
           <dd>
@@ -2226,10 +2270,6 @@
           <dd>
             A pair of virtual devices that act as a patch cable.
           </dd>
-
-          <dt><code>null</code></dt>
-          <dd>An ignored interface. Deprecated and slated for removal in
-          February 2013.</dd>
         </dl>
       </column>
     </group>
@@ -2365,6 +2405,11 @@
             about the Nicira OpenFlow vendor extensions.
           </li>
         </ul>
+      </column>
+
+      <column name="options" key="dst_port">
+        Optional.  The tunnel transport layer destination port, for UDP and TCP
+        based tunnel protocols (Geneve, VXLAN, LISP, and STT).
       </column>
 
       <column name="options" key="key">
@@ -2649,6 +2694,17 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         </p>
       </column>
 
+      <column name="options" key="dq-zero-copy"
+              type='{"type": "boolean"}'>
+        <p>
+          The value specifies whether or not to enable dequeue zero copy on
+          the given interface.
+          Must be set before vhost-server-path is specified.
+          Only supported by dpdkvhostuserclient interfaces.
+          The feature is considered experimental.
+        </p>
+      </column>
+
       <column name="options" key="n_rxq_desc"
               type='{"type": "integer", "minInteger": 1, "maxInteger": 4096}'>
         <p>
@@ -2810,6 +2866,70 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         Whether carrier is detected on <ref column="status"
         key="tunnel_egress_iface"/>.
       </column>
+
+      <group title="dpdk">
+        <p>
+          DPDK specific interface status options.
+        </p>
+
+          <column name="status" key="port_no">
+            DPDK port ID.
+          </column>
+
+          <column name="status" key="numa_id">
+            NUMA socket ID to which an Ethernet device is connected.
+          </column>
+
+          <column name="status" key="min_rx_bufsize">
+            Minimum size of RX buffer.
+          </column>
+
+          <column name="status" key="max_rx_pktlen">
+            Maximum configurable length of RX pkt.
+          </column>
+
+          <column name="status" key="max_rx_queues">
+            Maximum number of RX queues.
+          </column>
+
+          <column name="status" key="max_tx_queues">
+            Maximum number of TX queues.
+          </column>
+
+          <column name="status" key="max_mac_addrs">
+            Maximum number of MAC addresses.
+          </column>
+
+          <column name="status" key="max_hash_mac_addrs">
+            Maximum number of hash MAC addresses for MTA and UTA.
+          </column>
+
+          <column name="status" key="max_vfs">
+            Maximum number of hash MAC addresses for MTA and UTA.
+            Maximum number of VFs.
+          </column>
+
+          <column name="status" key="max_vmdq_pools">
+            Maximum number of VMDq pools.
+          </column>
+
+          <column name="status" key="if_type">
+            Interface type ID according to IANA ifTYPE MIB definitions.
+          </column>
+
+          <column name="status" key="if_descr">
+            Interface description string.
+          </column>
+
+          <column name="status" key="pci-vendor_id">
+            Vendor ID of PCI device.
+          </column>
+
+          <column name="status" key="pci-device_id">
+            Device ID of PCI device.
+          </column>
+
+      </group>
     </group>
 
     <group title="Statistics">
@@ -3862,6 +3982,25 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         be transmitted then the cbs will be decremented by the number of
         bytes/tokens of the packet. If there are not enough tokens in the cbs
         bucket the packet will be dropped.
+      </column>
+    </group>
+
+    <group title="Configuration for linux-sfq">
+      <p>
+        The <code>linux-sfq</code> QoS supports the following key-value pairs:
+      </p>
+
+      <column name="other_config" key="perturb" type='{"type": "integer"}'>
+        Number of seconds between consecutive perturbations in hashing algorithm.
+        Different flows can end up in the same hash bucket causing unfairness.
+        Perturbation's goal is to remove possible unfairness.
+        The default and recommended value is 10. Too low a value is discouraged
+        because each perturbation can cause packet reordering.
+      </column>
+      <column name="other_config" key="quantum" type='{"type": "integer"}'>
+        Number of bytes <code>linux-sfq</code> QoS can dequeue in one turn in
+        round-robin from one flow. The default and recommended value is equal
+        to interface's MTU.
       </column>
     </group>
 
@@ -4960,13 +5099,24 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
     monitoring of switches.</p>
 
     <column name="agent">
-      Name of the network device whose IP address should be reported as the
-      ``agent address'' to collectors.  If not specified, the agent device is
-      figured from the first target address and the routing table.  If the
-      routing table does not contain a route to the target, the IP address
-      defaults to the <ref table="Controller" column="local_ip"/> in the
-      collector's <ref table="Controller"/>.  If an agent IP address cannot be
-      determined any of these ways, sFlow is disabled.
+      <p>
+        Determines the agent address, that is, the IP address reported to
+        collectors as the source of the sFlow data.  It may be an IP address or
+        the name of a network device.  In the latter case, the network device's
+        IP address is used,
+      </p>
+
+      <p>
+        If not specified, the agent device is figured from the first target
+        address and the routing table.  If the routing table does not contain a
+        route to the target, the IP address defaults to the <ref
+        table="Controller" column="local_ip"/> in the collector's <ref
+        table="Controller"/>.
+      </p>
+
+      <p>
+        If an agent IP address cannot be determined, sFlow is disabled.
+      </p>
     </column>
 
     <column name="header">

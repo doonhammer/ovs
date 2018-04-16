@@ -24,6 +24,7 @@
 
 #include <rte_log.h>
 #include <rte_memzone.h>
+#include <rte_version.h>
 #ifdef DPDK_PDUMP
 #include <rte_mempool.h>
 #include <rte_pdump.h>
@@ -41,6 +42,7 @@ VLOG_DEFINE_THIS_MODULE(dpdk);
 static FILE *log_stream = NULL;       /* Stream for DPDK log redirection */
 
 static char *vhost_sock_dir = NULL;   /* Location of vhost-user sockets */
+static bool vhost_iommu_enabled = false; /* Status of vHost IOMMU support */
 
 static int
 process_vhost_flags(char *flag, const char *default_val, int size,
@@ -270,20 +272,22 @@ static ssize_t
 dpdk_log_write(void *c OVS_UNUSED, const char *buf, size_t size)
 {
     char *str = xmemdup0(buf, size);
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(600, 600);
+    static struct vlog_rate_limit dbg_rl = VLOG_RATE_LIMIT_INIT(600, 600);
 
     switch (rte_log_cur_msg_loglevel()) {
         case RTE_LOG_DEBUG:
-            VLOG_DBG("%s", str);
+            VLOG_DBG_RL(&dbg_rl, "%s", str);
             break;
         case RTE_LOG_INFO:
         case RTE_LOG_NOTICE:
-            VLOG_INFO("%s", str);
+            VLOG_INFO_RL(&rl, "%s", str);
             break;
         case RTE_LOG_WARNING:
-            VLOG_WARN("%s", str);
+            VLOG_WARN_RL(&rl, "%s", str);
             break;
         case RTE_LOG_ERR:
-            VLOG_ERR("%s", str);
+            VLOG_ERR_RL(&rl, "%s", str);
             break;
         case RTE_LOG_CRIT:
         case RTE_LOG_ALERT:
@@ -344,6 +348,11 @@ dpdk_init__(const struct smap *ovs_other_config)
     } else {
         vhost_sock_dir = sock_dir_subcomponent;
     }
+
+    vhost_iommu_enabled = smap_get_bool(ovs_other_config,
+                                        "vhost-iommu-support", false);
+    VLOG_INFO("IOMMU support for vhost-user-client %s.",
+               vhost_iommu_enabled ? "enabled" : "disabled");
 
     argv = grow_argv(&argv, 0, 1);
     argc = 1;
@@ -465,6 +474,7 @@ dpdk_init(const struct smap *ovs_other_config)
         static struct ovsthread_once once_enable = OVSTHREAD_ONCE_INITIALIZER;
 
         if (ovsthread_once_start(&once_enable)) {
+            VLOG_INFO("Using %s", rte_version());
             VLOG_INFO("DPDK Enabled - initializing...");
             dpdk_init__(ovs_other_config);
             enabled = true;
@@ -482,10 +492,22 @@ dpdk_get_vhost_sock_dir(void)
     return vhost_sock_dir;
 }
 
+bool
+dpdk_vhost_iommu_enabled(void)
+{
+    return vhost_iommu_enabled;
+}
+
 void
 dpdk_set_lcore_id(unsigned cpu)
 {
     /* NON_PMD_CORE_ID is reserved for use by non pmd threads. */
     ovs_assert(cpu != NON_PMD_CORE_ID);
     RTE_PER_LCORE(_lcore_id) = cpu;
+}
+
+void
+print_dpdk_version(void)
+{
+    puts(rte_version());
 }

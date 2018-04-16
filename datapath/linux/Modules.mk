@@ -64,6 +64,7 @@ openvswitch_headers += \
 	linux/compat/include/linux/u64_stats_sync.h \
 	linux/compat/include/linux/udp.h \
 	linux/compat/include/linux/workqueue.h \
+	linux/compat/include/linux/timekeeping.h \
 	linux/compat/include/net/checksum.h \
 	linux/compat/include/net/dst.h \
 	linux/compat/include/net/dst_cache.h \
@@ -91,6 +92,8 @@ openvswitch_headers += \
 	linux/compat/include/net/sock.h \
 	linux/compat/include/net/stt.h \
 	linux/compat/include/net/vrf.h \
+	linux/compat/include/net/tun_proto.h \
+	linux/compat/include/net/nsh.h \
 	linux/compat/include/net/vxlan.h \
 	linux/compat/include/net/netfilter/nf_conntrack.h \
 	linux/compat/include/net/netfilter/nf_conntrack_core.h \

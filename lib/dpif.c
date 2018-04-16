@@ -34,10 +34,9 @@
 #include "odp-execute.h"
 #include "odp-util.h"
 #include "openvswitch/ofp-print.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "route-table.h"
 #include "seq.h"
 #include "openvswitch/shash.h"
@@ -605,21 +604,23 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, odp_port_t *port_nop)
 /* Attempts to remove 'dpif''s port number 'port_no'.  Returns 0 if successful,
  * otherwise a positive errno value. */
 int
-dpif_port_del(struct dpif *dpif, odp_port_t port_no)
+dpif_port_del(struct dpif *dpif, odp_port_t port_no, bool local_delete)
 {
-    int error;
+    int error = 0;
 
     COVERAGE_INC(dpif_port_del);
 
-    error = dpif->dpif_class->port_del(dpif, port_no);
-    if (!error) {
-        VLOG_DBG_RL(&dpmsg_rl, "%s: port_del(%"PRIu32")",
-                    dpif_name(dpif), port_no);
-
-        netdev_ports_remove(port_no, dpif->dpif_class);
-    } else {
-        log_operation(dpif, "port_del", error);
+    if (!local_delete) {
+        error = dpif->dpif_class->port_del(dpif, port_no);
+        if (!error) {
+            VLOG_DBG_RL(&dpmsg_rl, "%s: port_del(%"PRIu32")",
+                        dpif_name(dpif), port_no);
+        } else {
+            log_operation(dpif, "port_del", error);
+        }
     }
+
+    netdev_ports_remove(port_no, dpif->dpif_class);
     return error;
 }
 
@@ -1271,12 +1272,14 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
     case OVS_ACTION_ATTR_PUSH_ETH:
     case OVS_ACTION_ATTR_POP_ETH:
     case OVS_ACTION_ATTR_CLONE:
-    case OVS_ACTION_ATTR_ENCAP_NSH:
-    case OVS_ACTION_ATTR_DECAP_NSH:
+    case OVS_ACTION_ATTR_PUSH_NSH:
+    case OVS_ACTION_ATTR_POP_NSH:
+    case OVS_ACTION_ATTR_CT_CLEAR:
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
+    dp_packet_delete_batch(packets_, may_steal);
 }
 
 /* Executes 'execute' by performing most of the actions in userspace and
@@ -1547,11 +1550,11 @@ dpif_set_config(struct dpif *dpif, const struct smap *cfg)
     return error;
 }
 
-/* Polls for an upcall from 'dpif' for an upcall handler.  Since there
- * there can be multiple poll loops, 'handler_id' is needed as index to
- * identify the corresponding poll loop.  If successful, stores the upcall
- * into '*upcall', using 'buf' for storage.  Should only be called if
- * 'recv_set' has been used to enable receiving packets from 'dpif'.
+/* Polls for an upcall from 'dpif' for an upcall handler.  Since there can
+ * be multiple poll loops, 'handler_id' is needed as index to identify the
+ * corresponding poll loop.  If successful, stores the upcall into '*upcall',
+ * using 'buf' for storage.  Should only be called if 'recv_set' has been used
+ * to enable receiving packets from 'dpif'.
  *
  * 'upcall->key' and 'upcall->userdata' point into data in the caller-provided
  * 'buf', so their memory cannot be freed separately from 'buf'.

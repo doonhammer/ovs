@@ -19,6 +19,8 @@
 #include "route-table.h"
 
 #include <errno.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <linux/rtnetlink.h>
@@ -33,6 +35,7 @@
 #include "ovs-router.h"
 #include "packets.h"
 #include "rtnetlink.h"
+#include "tnl-ports.h"
 #include "openvswitch/vlog.h"
 
 /* Linux 2.6.36 added RTA_MARK, so define it just in case we're building with
@@ -152,7 +155,7 @@ static int
 route_table_reset(void)
 {
     struct nl_dump dump;
-    struct rtgenmsg *rtmsg;
+    struct rtgenmsg *rtgenmsg;
     uint64_t reply_stub[NL_DUMP_BUFSIZE / 8];
     struct ofpbuf request, reply, buf;
 
@@ -163,10 +166,11 @@ route_table_reset(void)
 
     ofpbuf_init(&request, 0);
 
-    nl_msg_put_nlmsghdr(&request, sizeof *rtmsg, RTM_GETROUTE, NLM_F_REQUEST);
+    nl_msg_put_nlmsghdr(&request, sizeof *rtgenmsg, RTM_GETROUTE,
+                        NLM_F_REQUEST);
 
-    rtmsg = ofpbuf_put_zeros(&request, sizeof *rtmsg);
-    rtmsg->rtgen_family = AF_UNSPEC;
+    rtgenmsg = ofpbuf_put_zeros(&request, sizeof *rtgenmsg);
+    rtgenmsg->rtgen_family = AF_UNSPEC;
 
     nl_dump_start(&dump, NETLINK_ROUTE, &request);
     ofpbuf_uninit(&request);
@@ -333,10 +337,16 @@ name_table_init(void)
 
 
 static void
-name_table_change(const struct rtnetlink_change *change OVS_UNUSED,
+name_table_change(const struct rtnetlink_change *change,
                   void *aux OVS_UNUSED)
 {
     /* Changes to interface status can cause routing table changes that some
      * versions of the linux kernel do not advertise for some reason. */
     route_table_valid = false;
+
+    if (change && change->nlmsg_type == RTM_DELLINK) {
+        if (change->ifname) {
+            tnl_port_map_delete_ipdev(change->ifname);
+        }
+    }
 }

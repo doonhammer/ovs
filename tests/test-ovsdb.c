@@ -40,10 +40,11 @@
 #include "ovsdb/query.h"
 #include "ovsdb/row.h"
 #include "ovsdb/server.h"
+#include "ovsdb/storage.h"
 #include "ovsdb/table.h"
 #include "ovsdb/transaction.h"
 #include "ovsdb/trigger.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "stream.h"
 #include "svec.h"
 #include "tests/idltest.h"
@@ -54,6 +55,9 @@
 struct test_ovsdb_pvt_context {
     bool track;
 };
+
+/* Magic to pass to ovsdb_log_open(). */
+static const char *magic = OVSDB_MAGIC;
 
 OVS_NO_RETURN static void usage(void);
 static void parse_options(int argc, char *argv[],
@@ -76,10 +80,16 @@ main(int argc, char *argv[])
 static void
 parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
 {
+    enum {
+        OPT_MAGIC = CHAR_MAX + 1,
+        OPT_NO_RENAME_OPEN_FILES
+    };
     static const struct option long_options[] = {
         {"timeout", required_argument, NULL, 't'},
         {"verbose", optional_argument, NULL, 'v'},
         {"change-track", optional_argument, NULL, 'c'},
+        {"magic", required_argument, NULL, OPT_MAGIC},
+        {"no-rename-open-files", no_argument, NULL, OPT_NO_RENAME_OPEN_FILES},
         {"help", no_argument, NULL, 'h'},
         {NULL, 0, NULL, 0},
     };
@@ -116,6 +126,14 @@ parse_options(int argc, char *argv[], struct test_ovsdb_pvt_context *pvt)
             pvt->track = true;
             break;
 
+        case OPT_MAGIC:
+            magic = optarg;
+            break;
+
+        case OPT_NO_RENAME_OPEN_FILES:
+            ovsdb_log_disable_renaming_open_files();
+            break;
+
         case '?':
             exit(EXIT_FAILURE);
 
@@ -131,8 +149,9 @@ usage(void)
 {
     printf("%s: Open vSwitch database test utility\n"
            "usage: %s [OPTIONS] COMMAND [ARG...]\n\n"
-           "  log-io FILE FLAGS COMMAND...\n"
-           "    open FILE with FLAGS, run COMMANDs\n"
+           "  [--magic=MAGIC] [--no-rename-open-files] "
+           " log-io FILE FLAGS COMMAND...\n"
+           "    open FILE with FLAGS (and MAGIC), run COMMANDs\n"
            "  default-atoms\n"
            "    test ovsdb_atom_default()\n"
            "  default-data\n"
@@ -269,8 +288,7 @@ print_and_free_json(struct json *json)
 static void
 print_and_free_ovsdb_error(struct ovsdb_error *error)
 {
-    char *string = ovsdb_error_to_string(error);
-    ovsdb_error_destroy(error);
+    char *string = ovsdb_error_to_string_free(error);
     puts(string);
     free(string);
 }
@@ -279,8 +297,7 @@ static void
 check_ovsdb_error(struct ovsdb_error *error)
 {
     if (error) {
-        char *s = ovsdb_error_to_string(error);
-        ovsdb_error_destroy(error);
+        char *s = ovsdb_error_to_string_free(error);
         ovs_fatal(0, "%s", s);
     }
 }
@@ -303,7 +320,6 @@ do_log_io(struct ovs_cmdl_context *ctx)
 
     struct ovsdb_error *error;
     enum ovsdb_log_open_mode mode;
-    struct ovsdb_log *log;
     int i;
 
     if (!strcmp(mode_string, "read-only")) {
@@ -312,21 +328,47 @@ do_log_io(struct ovs_cmdl_context *ctx)
         mode = OVSDB_LOG_READ_WRITE;
     } else if (!strcmp(mode_string, "create")) {
         mode = OVSDB_LOG_CREATE;
+    } else if (!strcmp(mode_string, "create-excl")) {
+        mode = OVSDB_LOG_CREATE_EXCL;
     } else {
         ovs_fatal(0, "unknown log-io open mode \"%s\"", mode_string);
     }
 
-    check_ovsdb_error(ovsdb_log_open(name, mode, -1, &log));
+    struct ovsdb_log *log;
+    check_ovsdb_error(ovsdb_log_open(name, magic, mode, -1, &log));
     printf("%s: open successful\n", name);
+
+    struct ovsdb_log *replacement = NULL;
 
     for (i = 3; i < ctx->argc; i++) {
         const char *command = ctx->argv[i];
+
+        struct ovsdb_log *target;
+        const char *target_name;
+        if (!strncmp(command, "old-", 4)) {
+            command += 4;
+            target = log;
+            target_name = name;
+        } else if (!strncmp(command, "new-", 4)) {
+            if (!replacement) {
+                ovs_fatal(0, "%s: can't execute command without "
+                          "replacement log", command);
+            }
+
+            command += 4;
+            target = replacement;
+            target_name = "(temp)";
+        } else {
+            target = log;
+            target_name = name;
+        }
+
         if (!strcmp(command, "read")) {
             struct json *json;
 
-            error = ovsdb_log_read(log, &json);
+            error = ovsdb_log_read(target, &json);
             if (!error) {
-                printf("%s: read: ", name);
+                printf("%s: read: ", target_name);
                 if (json) {
                     print_and_free_json(json);
                 } else {
@@ -336,20 +378,31 @@ do_log_io(struct ovs_cmdl_context *ctx)
             }
         } else if (!strncmp(command, "write:", 6)) {
             struct json *json = parse_json(command + 6);
-            error = ovsdb_log_write(log, json);
+            error = ovsdb_log_write(target, json);
             json_destroy(json);
         } else if (!strcmp(command, "commit")) {
-            error = ovsdb_log_commit(log);
+            error = ovsdb_log_commit_block(target);
+        } else if (!strcmp(command, "replace_start")) {
+            ovs_assert(!replacement);
+            error = ovsdb_log_replace_start(log, &replacement);
+        } else if (!strcmp(command, "replace_commit")) {
+            ovs_assert(replacement);
+            error = ovsdb_log_replace_commit(log, replacement);
+            replacement = NULL;
+        } else if (!strcmp(command, "replace_abort")) {
+            ovs_assert(replacement);
+            ovsdb_log_replace_abort(replacement);
+            replacement = NULL;
+            error = NULL;
         } else {
             ovs_fatal(0, "unknown log-io command \"%s\"", command);
         }
         if (error) {
-            char *s = ovsdb_error_to_string(error);
-            printf("%s: %s failed: %s\n", name, command, s);
+            char *s = ovsdb_error_to_string_free(error);
+            printf("%s: %s failed: %s\n", target_name, command, s);
             free(s);
-            ovsdb_error_destroy(error);
         } else {
-            printf("%s: %s successful\n", name, command);
+            printf("%s: %s successful\n", target_name, command);
         }
     }
 
@@ -450,8 +503,7 @@ do_diff_data(struct ovs_cmdl_context *ctx)
         /* Apply diff to 'old' to create'reincarnation'. */
         error = ovsdb_datum_apply_diff(&reincarnation, &old, &diff, &type);
         if (error) {
-            char *string = ovsdb_error_to_string(error);
-            ovsdb_error_destroy(error);
+            char *string = ovsdb_error_to_string_free(error);
             ovs_fatal(0, "%s", string);
         }
 
@@ -582,6 +634,7 @@ do_parse_atom_strings(struct ovs_cmdl_context *ctx)
         ovsdb_atom_destroy(&atom, base.type);
         if (range_end_atom) {
             ovsdb_atom_destroy(range_end_atom, base.type);
+            free(range_end_atom);
         }
     }
     ovsdb_base_type_destroy(&base);
@@ -872,10 +925,9 @@ do_parse_conditions(struct ovs_cmdl_context *ctx)
         if (!error) {
             print_and_free_json(ovsdb_condition_to_json(&cnd));
         } else {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             ovs_error(0, "%s", s);
             free(s);
-            ovsdb_error_destroy(error);
             exit_code = 1;
         }
         json_destroy(json);
@@ -1043,10 +1095,9 @@ do_parse_mutations(struct ovs_cmdl_context *ctx)
         if (!error) {
             print_and_free_json(ovsdb_mutation_set_to_json(&set));
         } else {
-            char *s = ovsdb_error_to_string(error);
+            char *s = ovsdb_error_to_string_free(error);
             ovs_error(0, "%s", s);
             free(s);
-            ovsdb_error_destroy(error);
             exit_code = 1;
         }
         json_destroy(json);
@@ -1434,7 +1485,7 @@ do_execute__(struct ovs_cmdl_context *ctx, bool ro)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, ovsdb_storage_create_unbacked());
 
     for (i = 2; i < ctx->argc; i++) {
         struct json *params, *result;
@@ -1472,14 +1523,14 @@ struct test_trigger {
 static void
 do_trigger_dump(struct test_trigger *t, long long int now, const char *title)
 {
-    struct json *result;
+    struct jsonrpc_msg *reply;
     char *s;
 
-    result = ovsdb_trigger_steal_result(&t->trigger);
-    s = json_to_string(result, JSSF_SORT);
+    reply = ovsdb_trigger_steal_reply(&t->trigger);
+    s = json_to_string(reply->result, JSSF_SORT);
     printf("t=%lld: trigger %d (%s): %s\n", now, t->number, title, s);
     free(s);
-    json_destroy(result);
+    jsonrpc_msg_destroy(reply);
     ovsdb_trigger_destroy(&t->trigger);
     free(t);
 }
@@ -1500,7 +1551,7 @@ do_trigger(struct ovs_cmdl_context *ctx)
     json = parse_json(ctx->argv[1]);
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    db = ovsdb_create(schema);
+    db = ovsdb_create(schema, ovsdb_storage_create_unbacked());
 
     ovsdb_server_init(&server);
     ovsdb_server_add_db(&server, db);
@@ -1519,8 +1570,10 @@ do_trigger(struct ovs_cmdl_context *ctx)
             json_destroy(params);
         } else {
             struct test_trigger *t = xmalloc(sizeof *t);
-            ovsdb_trigger_init(&session, db, &t->trigger, params, now, false,
-                               NULL, NULL);
+            ovsdb_trigger_init(&session, db, &t->trigger,
+                               jsonrpc_create_request("transact", params,
+                                                      NULL),
+                               now, false, NULL, NULL);
             t->number = number++;
             if (ovsdb_trigger_is_complete(&t->trigger)) {
                 do_trigger_dump(t, now, "immediate");
@@ -1530,10 +1583,11 @@ do_trigger(struct ovs_cmdl_context *ctx)
         }
 
         ovsdb_trigger_run(db, now);
-        while (!ovs_list_is_empty(&session.completions)) {
-            do_trigger_dump(CONTAINER_OF(ovs_list_pop_front(&session.completions),
-                                         struct test_trigger, trigger.node),
-                            now, "delayed");
+
+        struct test_trigger *t;
+        LIST_FOR_EACH_POP (t, trigger.node, &session.completions) {
+            do_trigger_dump(t, now, "delayed");
+            ovsdb_trigger_run(db, now);
         }
 
         ovsdb_trigger_wait(db, now);
@@ -1560,7 +1614,7 @@ static struct ovsdb_table *do_transact_table;
 static void
 do_transact_commit(struct ovs_cmdl_context *ctx OVS_UNUSED)
 {
-    ovsdb_error_destroy(ovsdb_txn_commit(do_transact_txn, false));
+    ovsdb_error_destroy(ovsdb_txn_replay_commit(do_transact_txn));
     do_transact_txn = NULL;
 }
 
@@ -1727,7 +1781,7 @@ do_transact(struct ovs_cmdl_context *ctx)
                       "       \"j\": {\"type\": \"integer\"}}}}}");
     check_ovsdb_error(ovsdb_schema_from_json(json, &schema));
     json_destroy(json);
-    do_transact_db = ovsdb_create(schema);
+    do_transact_db = ovsdb_create(schema, ovsdb_storage_create_unbacked());
     do_transact_table = ovsdb_get_table(do_transact_db, "mytable");
     ovs_assert(do_transact_table != NULL);
 
@@ -2661,6 +2715,87 @@ do_idl_partial_update_set_column(struct ovs_cmdl_context *ctx)
     return;
 }
 
+static void
+do_idl_compound_index_with_ref(struct ovs_cmdl_context *ctx)
+{
+    struct ovsdb_idl *idl;
+    struct ovsdb_idl_txn *myTxn;
+    const struct idltest_simple3 *myRow;
+    struct idltest_simple4 *myRow2;
+    const struct ovsdb_datum *uset OVS_UNUSED;
+    const struct ovsdb_datum *uref OVS_UNUSED;
+    struct ovsdb_idl_index_cursor cursor;
+    int step = 0;
+
+    idl = ovsdb_idl_create(ctx->argv[1], &idltest_idl_class, false, true);
+    ovsdb_idl_add_table(idl, &idltest_table_simple3);
+    ovsdb_idl_add_column(idl, &idltest_simple3_col_name);
+    ovsdb_idl_add_column(idl, &idltest_simple3_col_uset);
+    ovsdb_idl_add_column(idl, &idltest_simple3_col_uref);
+    ovsdb_idl_add_table(idl, &idltest_table_simple4);
+    ovsdb_idl_add_column(idl, &idltest_simple4_col_name);
+
+    struct ovsdb_idl_index *index;
+    index = ovsdb_idl_create_index(idl, &idltest_table_simple3, "uref");
+    ovsdb_idl_index_add_column(index, &idltest_simple3_col_uref,
+                               OVSDB_INDEX_ASC, NULL);
+
+    ovsdb_idl_get_initial_snapshot(idl);
+
+    ovsdb_idl_initialize_cursor(idl, &idltest_table_simple3, "uref",
+                                &cursor);
+
+    setvbuf(stdout, NULL, _IONBF, 0);
+    ovsdb_idl_run(idl);
+
+    /* Adds to a table and update a strong reference in another table. */
+    myTxn = ovsdb_idl_txn_create(idl);
+    myRow = idltest_simple3_insert(myTxn);
+    myRow2 = idltest_simple4_insert(myTxn);
+    idltest_simple4_set_name(myRow2, "test");
+    idltest_simple3_update_uref_addvalue(myRow, myRow2);
+    ovsdb_idl_txn_commit_block(myTxn);
+    ovsdb_idl_txn_destroy(myTxn);
+    ovsdb_idl_get_initial_snapshot(idl);
+    printf("%03d: After add to other table + set of strong ref\n", step++);
+    dump_simple3(idl, myRow, step++);
+
+    myRow2 = (struct idltest_simple4 *) idltest_simple4_first(idl);
+    printf("%03d: check simple4: %s\n", step++,
+           myRow2 ? "not empty" : "empty");
+
+    /* Use index to query the row with reference */
+
+    struct idltest_simple3 *equal;
+    equal = idltest_simple3_index_init_row(idl, &idltest_table_simple3);
+    myRow2 = (struct idltest_simple4 *) idltest_simple4_first(idl);
+    idltest_simple3_index_set_uref(equal, &myRow2, 1);
+    printf("%03d: Query using index with reference\n", step++);
+    IDLTEST_SIMPLE3_FOR_EACH_EQUAL (myRow, &cursor, equal) {
+        print_idl_row_simple3(myRow, step++);
+    }
+    idltest_simple3_index_destroy_row(equal);
+
+    /* Delete the row with reference */
+    myTxn = ovsdb_idl_txn_create(idl);
+    myRow = idltest_simple3_first(idl);
+    idltest_simple3_delete(myRow);
+    ovsdb_idl_txn_commit_block(myTxn);
+    ovsdb_idl_txn_destroy(myTxn);
+    ovsdb_idl_get_initial_snapshot(idl);
+    printf("%03d: After delete\n", step++);
+    dump_simple3(idl, myRow, step++);
+
+    myRow2 = (struct idltest_simple4 *) idltest_simple4_first(idl);
+    printf("%03d: check simple4: %s\n", step++,
+           myRow2 ? "not empty" : "empty");
+
+    ovsdb_idl_destroy(idl);
+    printf("%03d: End test\n", step);
+    return;
+}
+
+
 static int
 test_idl_compound_index_single_column(struct ovsdb_idl *idl,
         struct ovsdb_idl_index_cursor *sCursor,
@@ -2962,6 +3097,8 @@ static struct ovs_cmdl_command all_commands[] = {
     { "trigger", NULL, 2, INT_MAX, do_trigger, OVS_RO },
     { "idl", NULL, 1, INT_MAX, do_idl, OVS_RO },
     { "idl-compound-index", NULL, 2, 2, do_idl_compound_index, OVS_RW },
+    { "idl-compound-index-with-ref", NULL, 1, INT_MAX,
+        do_idl_compound_index_with_ref, OVS_RO },
     { "idl-partial-update-map-column", NULL, 1, INT_MAX,
         do_idl_partial_update_map_column, OVS_RO },
     { "idl-partial-update-set-column", NULL, 1, INT_MAX,

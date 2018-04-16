@@ -16,6 +16,8 @@
 
 #include <config.h>
 #include "netflow.h"
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -29,7 +31,7 @@
 #include "ofproto.h"
 #include "ofproto/netflow.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "socket-util.h"
 #include "timeval.h"
 #include "util.h"

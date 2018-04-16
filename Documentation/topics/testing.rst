@@ -101,7 +101,7 @@ using the ``check-lcov`` target::
 
     $ make check-lcov
 
-All the same options are avaiable via TESTSUITEFLAGS. For example::
+All the same options are available via TESTSUITEFLAGS. For example::
 
     $ make check-lcov TESTSUITEFLAGS='-j8 -k ovn'
 
@@ -117,6 +117,10 @@ valgrind by using the ``check-valgrind`` target::
 
 When you do this, the "valgrind" results for test ``<N>`` are reported in files
 named ``tests/testsuite.dir/<N>/valgrind.*``.
+
+To test the testsuite of kernel datapath under valgrind, you can use the
+``check-kernel-valgrind`` target and find the "valgrind" results under
+directory ``tests/system-kmod-testsuite.dir/``.
 
 All the same options are available via TESTSUITEFLAGS.
 
@@ -280,8 +284,9 @@ Native
 ++++++
 
 The datapath testsuite as invoked by Vagrant above may also be run manually on
-a Linux system with root privileges. These tests may take several minutes to
-complete, and cannot be run in parallel.
+a Linux system with root privileges. Make sure, no other Open vSwitch instance
+is running on the test suite. These tests may take several minutes to complete,
+and cannot be run in parallel.
 
 Userspace datapath
 '''''''''''''''''''
@@ -290,7 +295,7 @@ To invoke the datapath testsuite with the userspace datapath, run::
 
     $ make check-system-userspace
 
-The results of the testsuite are in ``tests/system-userspace-traffic.dir``.
+The results of the testsuite are in ``tests/system-userspace-testsuite.dir``.
 
 Kernel datapath
 '''''''''''''''
@@ -310,7 +315,7 @@ testsuite against that kernel module::
 
     $ make check-kmod
 
-The results of the testsuite are in ``tests/system-kmod-traffic.dir``.
+The results of the testsuite are in ``tests/system-kmod-testsuite.dir``.
 
 .. _testing-static-analysis:
 
@@ -384,3 +389,59 @@ validate the suitability of different vSwitch implementations in a telco
 deployment environment. More information can be found on the `OPNFV wiki`_.
 
 .. _OPNFV wiki: https://wiki.opnfv.org/display/vsperf/VSperf+Home
+
+Proof of Concepts
+~~~~~~~~~~~~~~~~~
+
+Proof of Concepts are documentation materialized into Ansible recipes
+executed in VirtualBox or Libvirt environments orchastrated by Vagrant.
+Proof of Concepts allow developers to create small virtualized setups that
+demonstrate how certain Open vSwitch features are intended to work avoiding
+user introduced errors by overlooking instructions.  Proof of Concepts
+are also helpful when integrating with thirdparty software, because standard
+unit tests with make check are limited.
+
+Vagrant by default uses VirtualBox provider.  However, if Libvirt is your
+choice of virtualization technology, then you can use it by installing Libvirt
+plugin:
+
+    $ vagrant plugin install vagrant-libvirt
+
+And then appending  --provider=libvirt flag to vagrant commands.
+
+The host where Vagrant runs does not need to have any special software
+installed besides vagrant, virtualbox (or libvirt and libvirt-dev) and
+ansible.
+
+The following Proof of Concepts are supported:
+
+Builders
+++++++++
+
+This particular Proof of Concept demonstrates integration with Debian and RPM
+packaging tools:
+
+    $ cd ./poc/builders
+
+    $ vagrant up
+
+Once that command finished you can get packages from /var/www/html
+directory.  Since those hosts are also configured as repositories then
+you can add them to /etc/apt/sources.list.d or /etc/yum.repos.d
+configuration files on another host to retrieve packages with yum or
+apt-get.
+
+When you have made changes to OVS source code and want to rebuild packages run:
+    $ git commit -a
+    $ vagrant rsync && vagrant provision
+
+Whenever packages are rebuilt the Open vSwitch release number increases
+by one and you can simply upgrade Open vSwitch by running yum or apt-get
+update commands.
+
+Once you are done with experimenting you can tear down setup with:
+
+    $ vagrant destroy
+
+Sometimes deployment of Proof of Concept may fail, if, for example, VMs
+don't have network reachability to the Internet.

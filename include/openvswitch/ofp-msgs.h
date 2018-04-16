@@ -262,6 +262,8 @@ enum ofpraw {
     /* OFPT 1.3+ (29): struct ofp13_meter_mod, uint8_t[8][]. */
     OFPRAW_OFPT13_METER_MOD,
 
+    /* ONFT 1.3 (1911): struct ofp14_role_status, uint8_t[8][]. */
+    OFPRAW_ONFT13_ROLE_STATUS,
     /* OFPT 1.4+ (30): struct ofp14_role_status, uint8_t[8][]. */
     OFPRAW_OFPT14_ROLE_STATUS,
 
@@ -441,13 +443,13 @@ enum ofpraw {
  * Nicira extensions that correspond to standard OpenFlow messages are listed
  * alongside the standard versions above. */
 
-    /* NXT 1.0 (12): struct nx_set_flow_format. */
+    /* NXT 1.0 (12): ovs_be32. */
     OFPRAW_NXT_SET_FLOW_FORMAT,
 
-    /* NXT 1.0+ (15): struct nx_flow_mod_table_id. */
+    /* NXT 1.0+ (15): uint8_t[8]. */
     OFPRAW_NXT_FLOW_MOD_TABLE_ID,
 
-    /* NXT 1.0+ (16): struct nx_set_packet_in_format. */
+    /* NXT 1.0+ (16): ovs_be32. */
     OFPRAW_NXT_SET_PACKET_IN_FORMAT,
 
     /* NXT 1.0+ (18): void. */
@@ -615,7 +617,8 @@ enum ofptype {
     OFPTYPE_METER_MOD,            /* OFPRAW_OFPT13_METER_MOD. */
 
     /* Controller role change event messages. */
-    OFPTYPE_ROLE_STATUS,          /* OFPRAW_OFPT14_ROLE_STATUS. */
+    OFPTYPE_ROLE_STATUS,          /* OFPRAW_ONFT13_ROLE_STATUS.
+                                   * OFPRAW_OFPT14_ROLE_STATUS. */
 
     /* Request forwarding by the switch. */
     OFPTYPE_REQUESTFORWARD,       /* OFPRAW_OFPT14_REQUESTFORWARD. */

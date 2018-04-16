@@ -1,5 +1,5 @@
 /*
- * (c) Copyright 2016 Hewlett Packard Enterprise Development LP
+ * (c) Copyright 2016, 2017 Hewlett Packard Enterprise Development LP
  * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -118,10 +118,9 @@ replication_init(const char *sync_from_, const char *exclude_tables,
 {
     free(sync_from);
     sync_from = xstrdup(sync_from_);
-    char *err = set_blacklist_tables(exclude_tables, false);
     /* Caller should have verified that the 'exclude_tables' is
      * parseable. An error here is unexpected. */
-    ovs_assert(!err);
+    ovs_assert(!set_blacklist_tables(exclude_tables, false));
 
     replication_dbs_destroy();
 
@@ -536,7 +535,7 @@ reset_database(struct ovsdb *db)
         }
     }
 
-    return ovsdb_txn_commit(txn, false);
+    return ovsdb_txn_propose_commit_block(txn, false);
 }
 
 /* Create a monitor request for 'db'. The monitor request will include
@@ -615,7 +614,7 @@ process_notification(struct json *table_updates, struct ovsdb *db)
             return error;
         } else {
             /* Commit transaction. */
-            error = ovsdb_txn_commit(txn, false);
+            error = ovsdb_txn_propose_commit_block(txn, false);
         }
     }
 
@@ -874,7 +873,6 @@ replication_status(void)
             break;
         default:
             OVS_NOT_REACHED();
-            break;
         }
     } else {
         ds_put_format(&ds, "not connected to %s", sync_from);

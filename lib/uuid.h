@@ -18,6 +18,10 @@
 
 #include "openvswitch/uuid.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* An initializer or expression for an all-zero UUID. */
 #define UUID_ZERO ((struct uuid) { .parts = { 0, 0, 0, 0 } })
 
@@ -57,8 +61,21 @@ uuid_equals(const struct uuid *a, const struct uuid *b)
             && a->parts[3] == b->parts[3]);
 }
 
+/* Returns the first 'n' hex digits of 'uuid', for 0 < 'n' <= 8.
+ *
+ * This is useful for displaying a few leading digits of the uuid, e.g. to
+ * display 4 digits:
+ *     printf("%04x", uuid_prefix(uuid, 4));
+ */
+static inline unsigned int
+uuid_prefix(const struct uuid *uuid, int digits)
+{
+    return (uuid->parts[0] >> (32 - 4 * digits));
+}
+
 void uuid_init(void);
 void uuid_generate(struct uuid *);
+struct uuid uuid_random(void);
 void uuid_zero(struct uuid *);
 bool uuid_is_zero(const struct uuid *);
 int uuid_compare_3way(const struct uuid *, const struct uuid *);
@@ -67,5 +84,9 @@ bool uuid_from_string_prefix(struct uuid *, const char *);
 int uuid_is_partial_string(const char *);
 int uuid_is_partial_match(const struct uuid *, const char *match);
 void uuid_set_bits_v4(struct uuid *);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* uuid.h */

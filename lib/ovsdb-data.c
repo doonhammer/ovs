@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2014, 2016 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -664,8 +664,7 @@ ovsdb_atom_from_string(union ovsdb_atom *atom,
             free(*range_end_atom);
             *range_end_atom = NULL;
         }
-        msg = ovsdb_error_to_string(error);
-        ovsdb_error_destroy(error);
+        msg = ovsdb_error_to_string_free(error);
     }
     return msg;
 }
@@ -1303,7 +1302,7 @@ ovsdb_datum_from_json__(struct ovsdb_datum *datum,
  * If 'symtab' is nonnull, then named UUIDs in 'symtab' are accepted.  Refer to
  * RFC 7047 for information about this, and for the syntax that this function
  * accepts. */
-struct ovsdb_error *
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_datum_from_json(struct ovsdb_datum *datum,
                       const struct ovsdb_type *type,
                       const struct json *json,
@@ -1329,7 +1328,7 @@ ovsdb_datum_from_json(struct ovsdb_datum *datum,
  *
  * The datum generated should be used then discard. It is not suitable
  * for storing into IDL because of the possible member size violation.  */
-struct ovsdb_error *
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
 ovsdb_transient_datum_from_json(struct ovsdb_datum *datum,
                                 const struct ovsdb_type *type,
                                 const struct json *json)
@@ -1342,6 +1341,74 @@ ovsdb_transient_datum_from_json(struct ovsdb_datum *datum,
     return ovsdb_datum_from_json(datum, &relaxed_type, json, NULL);
 }
 
+/* Parses 'json' as a datum of the type described by 'type', but ignoring all
+ * constraints. */
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_unconstrained_datum_from_json(struct ovsdb_datum *datum,
+                                    const struct ovsdb_type *type,
+                                    const struct json *json)
+{
+    struct ovsdb_type relaxed_type;
+
+    ovsdb_base_type_init(&relaxed_type.key, type->key.type);
+    ovsdb_base_type_init(&relaxed_type.value, type->value.type);
+    relaxed_type.n_min = 0;
+    relaxed_type.n_max = UINT_MAX;
+
+    return ovsdb_datum_from_json(datum, &relaxed_type, json, NULL);
+}
+
+static struct json *
+ovsdb_base_to_json(const union ovsdb_atom *atom,
+                   const struct ovsdb_base_type *base,
+                   bool use_row_names)
+{
+    if (!use_row_names
+        || base->type != OVSDB_TYPE_UUID
+        || !base->u.uuid.refTableName) {
+        return ovsdb_atom_to_json(atom, base->type);
+    } else {
+        return json_array_create_2(
+            json_string_create("named-uuid"),
+            json_string_create_nocopy(ovsdb_data_row_name(&atom->uuid)));
+    }
+}
+
+static struct json *
+ovsdb_datum_to_json__(const struct ovsdb_datum *datum,
+                      const struct ovsdb_type *type,
+                      bool use_row_names)
+{
+    if (ovsdb_type_is_map(type)) {
+        struct json **elems;
+        size_t i;
+
+        elems = xmalloc(datum->n * sizeof *elems);
+        for (i = 0; i < datum->n; i++) {
+            elems[i] = json_array_create_2(
+                ovsdb_base_to_json(&datum->keys[i], &type->key,
+                                   use_row_names),
+                ovsdb_base_to_json(&datum->values[i], &type->value,
+                                   use_row_names));
+        }
+
+        return wrap_json("map", json_array_create(elems, datum->n));
+    } else if (datum->n == 1) {
+        return ovsdb_base_to_json(&datum->keys[0], &type->key, use_row_names);
+    } else {
+        struct json **elems;
+        size_t i;
+
+        elems = xmalloc(datum->n * sizeof *elems);
+        for (i = 0; i < datum->n; i++) {
+            elems[i] = ovsdb_base_to_json(&datum->keys[i], &type->key,
+                                          use_row_names);
+        }
+
+        return wrap_json("set", json_array_create(elems, datum->n));
+    }
+}
+
 /* Converts 'datum', of the specified 'type', to JSON format, and returns the
  * JSON.  The caller is responsible for freeing the returned JSON.
  *
@@ -1352,31 +1419,14 @@ struct json *
 ovsdb_datum_to_json(const struct ovsdb_datum *datum,
                     const struct ovsdb_type *type)
 {
-    if (ovsdb_type_is_map(type)) {
-        struct json **elems;
-        size_t i;
+    return ovsdb_datum_to_json__(datum, type, false);
+}
 
-        elems = xmalloc(datum->n * sizeof *elems);
-        for (i = 0; i < datum->n; i++) {
-            elems[i] = json_array_create_2(
-                ovsdb_atom_to_json(&datum->keys[i], type->key.type),
-                ovsdb_atom_to_json(&datum->values[i], type->value.type));
-        }
-
-        return wrap_json("map", json_array_create(elems, datum->n));
-    } else if (datum->n == 1) {
-        return ovsdb_atom_to_json(&datum->keys[0], type->key.type);
-    } else {
-        struct json **elems;
-        size_t i;
-
-        elems = xmalloc(datum->n * sizeof *elems);
-        for (i = 0; i < datum->n; i++) {
-            elems[i] = ovsdb_atom_to_json(&datum->keys[i], type->key.type);
-        }
-
-        return wrap_json("set", json_array_create(elems, datum->n));
-    }
+struct json *
+ovsdb_datum_to_json_with_row_names(const struct ovsdb_datum *datum,
+                                   const struct ovsdb_type *type)
+{
+    return ovsdb_datum_to_json__(datum, type, true);
 }
 
 static const char *
@@ -1632,6 +1682,19 @@ ovsdb_datum_from_smap(struct ovsdb_datum *datum, const struct smap *smap)
     ovs_assert(i == datum->n);
 
     ovsdb_datum_sort_unique(datum, OVSDB_TYPE_STRING, OVSDB_TYPE_STRING);
+}
+
+struct ovsdb_error * OVS_WARN_UNUSED_RESULT
+ovsdb_datum_convert(struct ovsdb_datum *dst,
+                    const struct ovsdb_type *dst_type,
+                    const struct ovsdb_datum *src,
+                    const struct ovsdb_type *src_type)
+{
+    struct json *json = ovsdb_datum_to_json(src, src_type);
+    struct ovsdb_error *error = ovsdb_datum_from_json(dst, dst_type, json,
+                                                      NULL);
+    json_destroy(json);
+    return error;
 }
 
 static uint32_t
@@ -1898,10 +1961,8 @@ ovsdb_datum_union(struct ovsdb_datum *a, const struct ovsdb_datum *b,
         }
     }
     if (n != a->n) {
-        struct ovsdb_error *error;
         a->n = n;
-        error = ovsdb_datum_sort(a, type->key.type);
-        ovs_assert(!error);
+        ovs_assert(!ovsdb_datum_sort(a, type->key.type));
     }
 }
 
@@ -2150,4 +2211,20 @@ ovsdb_atom_range_check_size(int64_t range_start, int64_t range_end)
                            range_start, range_end, MAX_OVSDB_ATOM_RANGE_SIZE);
     }
     return NULL;
+}
+
+char *
+ovsdb_data_row_name(const struct uuid *uuid)
+{
+    char *name;
+    char *p;
+
+    name = xasprintf("row"UUID_FMT, UUID_ARGS(uuid));
+    for (p = name; *p != '\0'; p++) {
+        if (*p == '-') {
+            *p = '_';
+        }
+    }
+
+    return name;
 }

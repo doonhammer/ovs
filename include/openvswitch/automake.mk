@@ -10,16 +10,33 @@ openvswitchinclude_HEADERS = \
 	include/openvswitch/netdev.h \
 	include/openvswitch/match.h \
 	include/openvswitch/meta-flow.h \
+	include/openvswitch/namemap.h \
 	include/openvswitch/ofpbuf.h \
 	include/openvswitch/ofp-actions.h \
+	include/openvswitch/ofp-bundle.h \
+	include/openvswitch/ofp-connection.h \
 	include/openvswitch/ofp-ed-props.h \
 	include/openvswitch/ofp-errors.h \
+	include/openvswitch/ofp-flow.h \
+	include/openvswitch/ofp-group.h \
+	include/openvswitch/ofp-ipfix.h \
+	include/openvswitch/ofp-match.h \
+	include/openvswitch/ofp-meter.h \
+	include/openvswitch/ofp-monitor.h \
 	include/openvswitch/ofp-msgs.h \
+	include/openvswitch/ofp-packet.h \
 	include/openvswitch/ofp-parse.h \
+	include/openvswitch/ofp-port.h \
 	include/openvswitch/ofp-print.h \
 	include/openvswitch/ofp-prop.h \
+	include/openvswitch/ofp-protocol.h \
+	include/openvswitch/ofp-queue.h \
+	include/openvswitch/ofp-switch.h \
+	include/openvswitch/ofp-table.h \
 	include/openvswitch/ofp-util.h \
 	include/openvswitch/packets.h \
+	include/openvswitch/poll-loop.h \
+	include/openvswitch/rconn.h \
 	include/openvswitch/shash.h \
 	include/openvswitch/thread.h \
 	include/openvswitch/token-bucket.h \
@@ -41,10 +58,12 @@ if HAVE_CXX
 # are acceptable as C++.
 noinst_LTLIBRARIES += include/openvswitch/libcxxtest.la
 nodist_include_openvswitch_libcxxtest_la_SOURCES = include/openvswitch/cxxtest.cc
-include/openvswitch/cxxtest.cc: include/openvswitch/automake.mk
-	$(AM_V_GEN)for header in $(openvswitchinclude_HEADERS); do	\
-	  echo $$header;						\
-	done | sed 's,^include/\(.*\)$$,#include <\1>,' > $@
+include/openvswitch/cxxtest.cc: \
+	include/openvswitch/automake.mk $(top_builddir)/config.status
+	$(AM_V_GEN){ echo "#include <config.h>"; \
+	for header in $(openvswitchinclude_HEADERS); do	\
+	  echo $$header; \
+	done | sed 's,^include/\(.*\)$$,#include <\1>,'; } > $@
 endif
 
 # OVS does not use C++ itself, but it provides public header files

@@ -19,6 +19,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,6 @@
 #include <ifaddrs.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
-#include <sys/types.h>
 #endif
 
 #include "cmap.h"
@@ -45,7 +45,8 @@
 #include "odp-netlink.h"
 #include "openflow/openflow.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/ofp-print.h"
+#include "openvswitch/poll-loop.h"
 #include "seq.h"
 #include "openvswitch/shash.h"
 #include "smap.h"
@@ -771,9 +772,8 @@ netdev_get_pt_mode(const struct netdev *netdev)
  * If the function returns a non-zero value, some of the packets might have
  * been sent anyway.
  *
- * If 'may_steal' is false, the caller retains ownership of all the packets.
- * If 'may_steal' is true, the caller transfers ownership of all the packets
- * to the network device, regardless of success.
+ * The caller transfers ownership of all the packets to the network device,
+ * regardless of success.
  *
  * If 'concurrent_txq' is true, the caller may perform concurrent calls
  * to netdev_send() with the same 'qid'. The netdev provider is responsible
@@ -784,21 +784,15 @@ netdev_get_pt_mode(const struct netdev *netdev)
  * transmission queues, so that the caller does not ordinarily have to
  * do additional queuing of packets.  'qid' specifies the queue to use
  * and can be ignored if the implementation does not support multiple
- * queues.
- *
- * Some network devices may not implement support for this function.  In such
- * cases this function will always return EOPNOTSUPP. */
+ * queues. */
 int
 netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
-            bool may_steal, bool concurrent_txq)
+            bool concurrent_txq)
 {
-    int error = netdev->netdev_class->send(netdev, qid, batch, may_steal,
+    int error = netdev->netdev_class->send(netdev, qid, batch,
                                            concurrent_txq);
     if (!error) {
         COVERAGE_INC(netdev_sent);
-        if (!may_steal) {
-            dp_packet_batch_reset_cutlen(batch);
-        }
     }
     return error;
 }
@@ -861,7 +855,7 @@ netdev_push_header(const struct netdev *netdev,
                    const struct ovs_action_push_tnl *data)
 {
     struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH (packet, batch) {
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
         netdev->netdev_class->push_header(packet, data);
         pkt_metadata_init(&packet->md, data->out_port);
     }
@@ -900,7 +894,13 @@ netdev_set_etheraddr(struct netdev *netdev, const struct eth_addr mac)
 int
 netdev_get_etheraddr(const struct netdev *netdev, struct eth_addr *mac)
 {
-    return netdev->netdev_class->get_etheraddr(netdev, mac);
+    int error;
+
+    error = netdev->netdev_class->get_etheraddr(netdev, mac);
+    if (error) {
+        memset(mac, 0, sizeof *mac);
+    }
+    return error;
 }
 
 /* Returns the name of the network device that 'netdev' represents,
@@ -1094,6 +1094,40 @@ netdev_set_advertisements(struct netdev *netdev,
             ? netdev->netdev_class->set_advertisements(
                     netdev, advertise)
             : EOPNOTSUPP);
+}
+
+static const char *
+netdev_feature_to_name(uint32_t bit)
+{
+    enum netdev_features f = bit;
+
+    switch (f) {
+    case NETDEV_F_10MB_HD:    return "10MB-HD";
+    case NETDEV_F_10MB_FD:    return "10MB-FD";
+    case NETDEV_F_100MB_HD:   return "100MB-HD";
+    case NETDEV_F_100MB_FD:   return "100MB-FD";
+    case NETDEV_F_1GB_HD:     return "1GB-HD";
+    case NETDEV_F_1GB_FD:     return "1GB-FD";
+    case NETDEV_F_10GB_FD:    return "10GB-FD";
+    case NETDEV_F_40GB_FD:    return "40GB-FD";
+    case NETDEV_F_100GB_FD:   return "100GB-FD";
+    case NETDEV_F_1TB_FD:     return "1TB-FD";
+    case NETDEV_F_OTHER:      return "OTHER";
+    case NETDEV_F_COPPER:     return "COPPER";
+    case NETDEV_F_FIBER:      return "FIBER";
+    case NETDEV_F_AUTONEG:    return "AUTO_NEG";
+    case NETDEV_F_PAUSE:      return "AUTO_PAUSE";
+    case NETDEV_F_PAUSE_ASYM: return "AUTO_PAUSE_ASYM";
+    }
+
+    return NULL;
+}
+
+void
+netdev_features_format(struct ds *s, enum netdev_features features)
+{
+    ofp_print_bit_names(s, features, netdev_feature_to_name, ' ');
+    ds_put_char(s, '\n');
 }
 
 /* Assigns 'addr' as 'netdev''s IPv4 address and 'mask' as its netmask.  If
@@ -1421,6 +1455,21 @@ netdev_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
     }
     return error;
 }
+
+/* Retrieves current device custom stats for 'netdev'. */
+int
+netdev_get_custom_stats(const struct netdev *netdev,
+                        struct netdev_custom_stats *custom_stats)
+{
+    int error;
+    memset(custom_stats, 0, sizeof *custom_stats);
+    error = (netdev->netdev_class->get_custom_stats
+             ? netdev->netdev_class->get_custom_stats(netdev, custom_stats)
+             : EOPNOTSUPP);
+
+    return error;
+}
+
 
 /* Attempts to set input rate limiting (policing) policy, such that up to
  * 'kbits_rate' kbps of traffic is accepted, with a maximum accumulative burst
@@ -2169,34 +2218,33 @@ static struct hmap ifindex_to_port OVS_GUARDED_BY(netdev_hmap_mutex)
     = HMAP_INITIALIZER(&ifindex_to_port);
 
 struct port_to_netdev_data {
-    struct hmap_node node;
+    struct hmap_node portno_node; /* By (dpif_class, dpif_port.port_no). */
+    struct hmap_node ifindex_node; /* By (dpif_class, ifindex). */
     struct netdev *netdev;
     struct dpif_port dpif_port;
     const struct dpif_class *dpif_class;
-};
-
-struct ifindex_to_port_data {
-    struct hmap_node node;
     int ifindex;
-    odp_port_t port;
 };
 
-#define NETDEV_PORTS_HASH_INT(port, dpif) \
-                        hash_int(odp_to_u32(port),\
-                            hash_pointer(dpif, 0));
+static uint32_t
+netdev_ports_hash(odp_port_t port, const struct dpif_class *dpif_class)
+{
+    return hash_int(odp_to_u32(port), hash_pointer(dpif_class, 0));
+}
 
 static struct port_to_netdev_data *
 netdev_ports_lookup(odp_port_t port_no, const struct dpif_class *dpif_class)
     OVS_REQUIRES(netdev_hmap_mutex)
 {
-    size_t hash = NETDEV_PORTS_HASH_INT(port_no, dpif_class);
     struct port_to_netdev_data *data;
 
-    HMAP_FOR_EACH_WITH_HASH(data, node, hash, &port_to_netdev) {
-            if (data->dpif_class == dpif_class
-                && data->dpif_port.port_no == port_no) {
-                return data;
-            }
+    HMAP_FOR_EACH_WITH_HASH (data, portno_node,
+                             netdev_ports_hash(port_no, dpif_class),
+                             &port_to_netdev) {
+        if (data->dpif_class == dpif_class
+            && data->dpif_port.port_no == port_no) {
+            return data;
+        }
     }
     return NULL;
 }
@@ -2205,9 +2253,7 @@ int
 netdev_ports_insert(struct netdev *netdev, const struct dpif_class *dpif_class,
                     struct dpif_port *dpif_port)
 {
-    size_t hash = NETDEV_PORTS_HASH_INT(dpif_port->port_no, dpif_class);
     struct port_to_netdev_data *data;
-    struct ifindex_to_port_data *ifidx;
     int ifindex = netdev_get_ifindex(netdev);
 
     if (ifindex < 0) {
@@ -2224,13 +2270,11 @@ netdev_ports_insert(struct netdev *netdev, const struct dpif_class *dpif_class,
     data->netdev = netdev_ref(netdev);
     data->dpif_class = dpif_class;
     dpif_port_clone(&data->dpif_port, dpif_port);
+    data->ifindex = ifindex;
 
-    ifidx = xzalloc(sizeof *ifidx);
-    ifidx->ifindex = ifindex;
-    ifidx->port = dpif_port->port_no;
-
-    hmap_insert(&port_to_netdev, &data->node, hash);
-    hmap_insert(&ifindex_to_port, &ifidx->node, ifidx->ifindex);
+    hmap_insert(&port_to_netdev, &data->portno_node,
+                netdev_ports_hash(dpif_port->port_no, dpif_class));
+    hmap_insert(&ifindex_to_port, &data->ifindex_node, ifindex);
     ovs_mutex_unlock(&netdev_hmap_mutex);
 
     netdev_init_flow_api(netdev);
@@ -2263,32 +2307,11 @@ netdev_ports_remove(odp_port_t port_no, const struct dpif_class *dpif_class)
     ovs_mutex_lock(&netdev_hmap_mutex);
 
     data = netdev_ports_lookup(port_no, dpif_class);
-
     if (data) {
-        int ifindex = netdev_get_ifindex(data->netdev);
-
-        if (ifindex > 0) {
-            struct ifindex_to_port_data *ifidx = NULL;
-
-            HMAP_FOR_EACH_WITH_HASH (ifidx, node, ifindex, &ifindex_to_port) {
-                if (ifidx->port == port_no) {
-                    hmap_remove(&ifindex_to_port, &ifidx->node);
-                    free(ifidx);
-                    break;
-                }
-            }
-            ovs_assert(ifidx);
-        } else {
-            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-
-            VLOG_WARN_RL(&rl, "netdev ports map has dpif port %"PRIu32
-                         " but netdev has no ifindex: %s", port_no,
-                         ovs_strerror(ifindex));
-        }
-
         dpif_port_destroy(&data->dpif_port);
         netdev_close(data->netdev); /* unref and possibly close */
-        hmap_remove(&port_to_netdev, &data->node);
+        hmap_remove(&port_to_netdev, &data->portno_node);
+        hmap_remove(&ifindex_to_port, &data->ifindex_node);
         free(data);
         ret = 0;
     }
@@ -2301,15 +2324,15 @@ netdev_ports_remove(odp_port_t port_no, const struct dpif_class *dpif_class)
 odp_port_t
 netdev_ifindex_to_odp_port(int ifindex)
 {
-    struct ifindex_to_port_data *data;
+    struct port_to_netdev_data *data;
     odp_port_t ret = 0;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH_WITH_HASH(data, node, ifindex, &ifindex_to_port) {
-            if (data->ifindex == ifindex) {
-                ret = data->port;
-                break;
-            }
+    HMAP_FOR_EACH_WITH_HASH (data, ifindex_node, ifindex, &ifindex_to_port) {
+        if (data->ifindex == ifindex) {
+            ret = data->dpif_port.port_no;
+            break;
+        }
     }
     ovs_mutex_unlock(&netdev_hmap_mutex);
 
@@ -2322,7 +2345,7 @@ netdev_ports_flow_flush(const struct dpif_class *dpif_class)
     struct port_to_netdev_data *data;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class) {
             netdev_flow_flush(data->netdev);
         }
@@ -2339,7 +2362,7 @@ netdev_ports_flow_dump_create(const struct dpif_class *dpif_class, int *ports)
     int i = 0;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class) {
             count++;
         }
@@ -2347,7 +2370,7 @@ netdev_ports_flow_dump_create(const struct dpif_class *dpif_class, int *ports)
 
     dumps = count ? xzalloc(sizeof *dumps * count) : NULL;
 
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class) {
             if (netdev_flow_dump_create(data->netdev, &dumps[i])) {
                 continue;
@@ -2371,7 +2394,7 @@ netdev_ports_flow_del(const struct dpif_class *dpif_class,
     struct port_to_netdev_data *data;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class
             && !netdev_flow_del(data->netdev, ufid, stats)) {
             ovs_mutex_unlock(&netdev_hmap_mutex);
@@ -2391,7 +2414,7 @@ netdev_ports_flow_get(const struct dpif_class *dpif_class, struct match *match,
     struct port_to_netdev_data *data;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
         if (data->dpif_class == dpif_class
             && !netdev_flow_get(data->netdev, match, actions,
                                 ufid, stats, buf)) {
@@ -2403,6 +2426,18 @@ netdev_ports_flow_get(const struct dpif_class *dpif_class, struct match *match,
     return ENOENT;
 }
 
+void
+netdev_free_custom_stats_counters(struct netdev_custom_stats *custom_stats)
+{
+    if (custom_stats) {
+        if (custom_stats->counters) {
+            free(custom_stats->counters);
+            custom_stats->counters = NULL;
+            custom_stats->size = 0;
+        }
+    }
+}
+
 #ifdef __linux__
 static void
 netdev_ports_flow_init(void)
@@ -2410,7 +2445,7 @@ netdev_ports_flow_init(void)
     struct port_to_netdev_data *data;
 
     ovs_mutex_lock(&netdev_hmap_mutex);
-    HMAP_FOR_EACH(data, node, &port_to_netdev) {
+    HMAP_FOR_EACH (data, portno_node, &port_to_netdev) {
        netdev_init_flow_api(data->netdev);
     }
     ovs_mutex_unlock(&netdev_hmap_mutex);

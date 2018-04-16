@@ -277,6 +277,15 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
                          const char *name, enum ovs_vport_type type,
                          const char *kind, uint32_t flags)
 {
+    enum {
+        /* For performance, we want to use the largest MTU that the system
+         * supports.  Most existing tunnels will accept UINT16_MAX, treating it
+         * as the actual max MTU, but some do not.  Thus, we use a slightly
+         * smaller value, that should always be safe yet does not noticeably
+         * reduce performance. */
+        MAX_MTU = 65000
+    };
+
     size_t linkinfo_off, infodata_off;
     struct ifinfomsg *ifinfo;
     struct ofpbuf request;
@@ -287,7 +296,7 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
     ifinfo = ofpbuf_put_zeros(&request, sizeof(struct ifinfomsg));
     ifinfo->ifi_change = ifinfo->ifi_flags = IFF_UP;
     nl_msg_put_string(&request, IFLA_IFNAME, name);
-    nl_msg_put_u32(&request, IFLA_MTU, UINT16_MAX);
+    nl_msg_put_u32(&request, IFLA_MTU, MAX_MTU);
     linkinfo_off = nl_msg_start_nested(&request, IFLA_LINKINFO);
     nl_msg_put_string(&request, IFLA_INFO_KIND, kind);
     infodata_off = nl_msg_start_nested(&request, IFLA_INFO_DATA);
@@ -329,6 +338,25 @@ dpif_netlink_rtnl_create(const struct netdev_tunnel_config *tnl_cfg,
     nl_msg_end_nested(&request, linkinfo_off);
 
     err = nl_transact(NETLINK_ROUTE, &request, NULL);
+    if (!err && type == OVS_VPORT_TYPE_GRE) {
+        /* Work around a bug in kernel GRE driver, which ignores IFLA_MTU in
+         * RTM_NEWLINK, by setting the MTU again.  See
+         * https://bugzilla.redhat.com/show_bug.cgi?id=1488484. */
+        ofpbuf_clear(&request);
+        nl_msg_put_nlmsghdr(&request, 0, RTM_SETLINK,
+                            NLM_F_REQUEST | NLM_F_ACK);
+        ofpbuf_put_zeros(&request, sizeof(struct ifinfomsg));
+        nl_msg_put_string(&request, IFLA_IFNAME, name);
+        nl_msg_put_u32(&request, IFLA_MTU, MAX_MTU);
+
+        int err2 = nl_transact(NETLINK_ROUTE, &request, NULL);
+        if (err2) {
+            static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+
+            VLOG_WARN_RL(&rl, "setting MTU of tunnel %s failed (%s)",
+                         name, ovs_strerror(err2));
+        }
+    }
 
 exit:
     ofpbuf_uninit(&request);
@@ -440,6 +468,7 @@ dpif_netlink_rtnl_probe_oot_tunnels(void)
 
     error = netdev_open("ovs-system-probe", "geneve", &netdev);
     if (!error) {
+        struct ofpbuf *reply;
         const struct netdev_tunnel_config *tnl_cfg;
 
         tnl_cfg = netdev_get_tunnel_config(netdev);
@@ -448,6 +477,44 @@ dpif_netlink_rtnl_probe_oot_tunnels(void)
         }
 
         name = netdev_vport_get_dpif_port(netdev, namebuf, sizeof namebuf);
+
+        /* The geneve module exists when ovs-vswitchd crashes
+         * and restarts, handle the case here.
+         */
+        error = dpif_netlink_rtnl_getlink(name, &reply);
+        if (!error) {
+
+            struct nlattr *linkinfo[ARRAY_SIZE(linkinfo_policy)];
+            struct nlattr *rtlink[ARRAY_SIZE(rtlink_policy)];
+            const char *kind;
+
+            if (!nl_policy_parse(reply,
+                                 NLMSG_HDRLEN + sizeof(struct ifinfomsg),
+                                 rtlink_policy, rtlink,
+                                 ARRAY_SIZE(rtlink_policy))
+                || !nl_parse_nested(rtlink[IFLA_LINKINFO], linkinfo_policy,
+                                    linkinfo, ARRAY_SIZE(linkinfo_policy))) {
+                VLOG_ABORT("Error fetching Geneve tunnel device %s "
+                           "linkinfo", name);
+            }
+
+            kind = nl_attr_get_string(linkinfo[IFLA_INFO_KIND]);
+
+            if (!strcmp(kind, "ovs_geneve")) {
+                out_of_tree = true;
+            } else if (!strcmp(kind, "geneve")) {
+                out_of_tree = false;
+            } else {
+                VLOG_ABORT("Geneve tunnel device %s with kind %s"
+                           " not supported", name, kind);
+            }
+
+            ofpbuf_delete(reply);
+            netdev_close(netdev);
+
+            return out_of_tree;
+        }
+
         error = dpif_netlink_rtnl_create(tnl_cfg, name, OVS_VPORT_TYPE_GENEVE,
                                          "ovs_geneve",
                                          (NLM_F_REQUEST | NLM_F_ACK

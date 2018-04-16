@@ -814,6 +814,10 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 00 00 10 ff ff ff fb 05 dc 00 00 00 00 00 00 \
 "], [0], [dnl
 OFPT_PACKET_OUT (OF1.5) (xid=0x11223344): ***decode error: OFPBRC_BAD_PORT***
+00000000  06 0d 00 40 11 22 33 44-ff ff ff 00 00 10 00 00 |...@."3D........|
+00000010  00 01 00 20 80 00 04 08-00 00 00 00 00 00 00 03 |... ............|
+00000020  80 00 4c 08 00 00 00 00-00 00 00 05 00 00 00 00 |..L.............|
+00000030  00 00 00 10 ff ff ff fb-05 dc 00 00 00 00 00 00 |................|
 ])
 
 AT_CHECK([ovs-ofctl ofp-print "\
@@ -834,6 +838,11 @@ AT_CHECK([ovs-ofctl ofp-print "\
 05 dc 00 00 00 00 00 00 \
 "], [0], [dnl
 OFPT_PACKET_OUT (OF1.5) (xid=0x11223344): ***decode error: OFPBRC_PIPELINE_FIELDS_ONLY***
+00000000  06 0d 00 38 11 22 33 44-ff ff ff 00 00 10 00 00 |...8."3D........|
+dnl "
+00000010  00 01 00 18 80 00 00 04-00 00 00 01 80 00 16 04 |................|
+00000020  11 22 33 44 00 00 00 00-00 00 00 10 ff ff ff fb |."3D............|
+00000030  05 dc 00 00 00 00 00 00-                        |........        |
 ])
 
 AT_CLEANUP
@@ -867,9 +876,9 @@ AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
 " 2], [0], [dnl
 OFPT_FLOW_MOD (xid=0x0): ADD priority=65535,arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2 idle:5 buf:0x10e out_port:0 actions=output:3
 ], [dnl
-ofp_util|INFO|normalization changed ofp_match, details:
-ofp_util|INFO| pre: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0
-ofp_util|INFO|post: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2
+ofp_match|INFO|normalization changed ofp_match, details:
+ofp_match|INFO| pre: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0
+ofp_match|INFO|post: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2
 ])
 AT_CLEANUP
 
@@ -925,9 +934,9 @@ AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
 " 3], [0], [dnl
 OFPT_FLOW_MOD (xid=0x0): ADD arp,in_port=1,dl_vlan=65535,dl_vlan_pcp=0,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,nw_src=192.168.0.2,nw_dst=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0 idle:5 pri:65535 buf:0x10e out_port:0 actions=output:3
 ], [dnl
-ofp_util|INFO|normalization changed ofp_match, details:
-ofp_util|INFO| pre: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0
-ofp_util|INFO|post: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2
+ofp_match|INFO|normalization changed ofp_match, details:
+ofp_match|INFO| pre: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2,nw_tos=0,tp_src=0,tp_dst=0
+ofp_match|INFO|post: arp,in_port=1,vlan_tci=0x0000,dl_src=50:54:00:00:00:06,dl_dst=50:54:00:00:00:05,arp_spa=192.168.0.2,arp_tpa=192.168.0.1,arp_op=2
 ])
 AT_CLEANUP
 
@@ -1656,26 +1665,26 @@ AT_KEYWORDS([ofp-print OFPT_STATS_REPLY])
 00 00 00 07 00 00 00 00 00 0f 42 40 "
  tail="00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
 
- echo -n "03 13 7f 90 00 00 00 02 00 03 00 00 00 00 00 00 "
+ printf "03 13 7f 90 00 00 00 02 00 03 00 00 00 00 00 00 "
 
  x=0
  printf "%02x $pad7" $x
  printf "%s$pad32" "classifier" | od -A n -t x1 -v -N 32 | tr '\n' ' '
- echo -n "$mid 00 00 00 01  "
- echo -n "00 00 00 00 00 01 23 76 00 00 00 00 00 01 9e 28 "
+ printf "$mid 00 00 00 01  "
+ printf "00 00 00 00 00 01 23 76 00 00 00 00 00 01 9e 28 "
 
  x=1
  while test $x -lt 254; do
    printf "%02x $pad7" $x
    printf "%s$pad32" "table$x" | od -A n -t x1 -v -N 32 | tr '\n' ' '
-   echo -n "$mid 00 00 00 00 $tail "
+   printf "$mid 00 00 00 00 $tail "
    x=`expr $x + 1`
  done
 
  x=254
  printf "%02x $pad7" $x
  printf "%s$pad32" "table$x" | od -A n -t x1 -v -N 32 | tr '\n' ' '
- echo -n "$mid 00 00 00 02 $tail") > in
+ printf "$mid 00 00 00 02 $tail") > in
 AT_CHECK([ovs-ofctl ofp-print - < in], [0], [expout])
 AT_CLEANUP
 
@@ -2280,6 +2289,8 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 05 00 10 00 00 00 02 00 00 00 02 00 00 00 00
 "], [0], [dnl
 OFPT_METER_MOD (OF1.3) (xid=0x8501d738): ***decode error: OFPMMFC_BAD_BAND***
+00000000  04 1d 00 20 85 01 d7 38-00 00 00 00 00 00 00 01 |... ...8........|
+00000010  00 05 00 10 00 00 00 02-00 00 00 02 00 00 00 00 |................|
 ])
 AT_CLEANUP
 
@@ -2289,6 +2300,7 @@ AT_CHECK([ovs-ofctl ofp-print "\
 04 1d 00 10 28 a6 26 52 00 08 00 00 00 00 00 01
 "], [0], [dnl
 OFPT_METER_MOD (OF1.3) (xid=0x28a62652): ***decode error: OFPMMFC_BAD_COMMAND***
+00000000  04 1d 00 10 28 a6 26 52-00 08 00 00 00 00 00 01 |....@{:@.&R........|
 ])
 AT_CLEANUP
 
@@ -2299,6 +2311,8 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 01 00 10 00 00 00 02 00 00 00 02 00 00 00 00 \
 "], [0], [dnl
 OFPT_METER_MOD (OF1.3) (xid=0x82b3a1a4): ***decode error: OFPMMFC_BAD_FLAGS***
+00000000  04 1d 00 20 82 b3 a1 a4-00 00 00 03 00 00 00 01 |... ............|
+00000010  00 01 00 10 00 00 00 02-00 00 00 02 00 00 00 00 |................|
 ])
 AT_CLEANUP
 
@@ -2838,6 +2852,36 @@ NXT_ROLE_REPLY (xid=0x2): role=slave
 ])
 AT_CLEANUP
 
+AT_SETUP([OFP_ROLE_STATUS - master, experimenter - OF1.3])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+04 04 00 20 00 00 00 0a 4f 4e 46 00 00 00 07 77 \
+00 00 00 02 02 00 00 00 ff ff ff ff ff ff ff ff \
+"], [0], [dnl
+ONFT_ROLE_STATUS (OF1.3) (xid=0xa): role=master reason=experimenter_data_changed
+])
+AT_CLEANUP
+
+AT_SETUP([OFP_ROLE_STATUS - master, config - OF1.3])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+04 04 00 20 00 00 00 0a 4f 4e 46 00 00 00 07 77 \
+00 00 00 02 01 00 00 00 ff ff ff ff ff ff ff ff \
+"], [0], [dnl
+ONFT_ROLE_STATUS (OF1.3) (xid=0xa): role=master reason=configuration_changed
+])
+AT_CLEANUP
+
+AT_SETUP([OFP_ROLE_STATUS - master, config,generation - OF1.3])
+AT_KEYWORDS([ofp-print])
+AT_CHECK([ovs-ofctl ofp-print "\
+04 04 00 20 00 00 00 0a 4f 4e 46 00 00 00 07 77 \
+00 00 00 02 01 00 00 00 00 00 00 00 00 00 00 10 \
+"], [0], [dnl
+ONFT_ROLE_STATUS (OF1.3) (xid=0xa): role=master generation_id=16 reason=configuration_changed
+])
+AT_CLEANUP
+
 AT_SETUP([OFP_ROLE_STATUS - master, experimenter - OF1.4])
 AT_KEYWORDS([ofp-print])
 AT_CHECK([ovs-ofctl ofp-print "\
@@ -3057,6 +3101,10 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 05 00 08 00 00 00 05 \
 "], [0], [dnl
 OFPT_SET_ASYNC (OF1.4) (xid=0x2): ***decode error: OFPACFC_INVALID***
+00000000  05 1c 00 38 00 00 00 02-00 00 00 08 00 00 00 40 |...8...........@|
+00000010  00 01 00 08 00 00 00 02-00 02 00 08 00 00 00 02 |................|
+00000020  00 03 00 08 00 00 00 05-00 04 00 08 00 00 00 1c |................|
+00000030  00 05 00 08 00 00 00 05-                        |........        |
 ], [stderr])
 AT_CHECK([sed 's/.*|//' stderr], [0],
   [bad value 0x40 for PACKET_IN (allowed mask 0x3f)
@@ -3072,6 +3120,10 @@ AT_CHECK([ovs-ofctl ofp-print "\
 00 05 00 08 00 00 00 05\
 "], [0], [dnl
 OFPT_SET_ASYNC (OF1.4) (xid=0x2): ***decode error: OFPACFC_UNSUPPORTED***
+00000000  05 1c 00 38 00 00 00 02-00 00 00 08 00 00 00 05 |...8............|
+00000010  00 11 00 08 00 00 00 02-00 02 00 08 00 00 00 02 |................|
+00000020  00 03 00 08 00 00 00 05-00 04 00 08 00 00 00 1c |................|
+00000030  00 05 00 08 00 00 00 05-                        |........        |
 ], [stderr])
 AT_CHECK([sed 's/.*|//' stderr], [0],
   [unknown async config property type 17
@@ -3580,6 +3632,8 @@ AT_CHECK([ovs-ofctl ofp-print "\
 05 00 00 08 00 00 00 01 00 00 00 00 00 00 00 00 \
 "], [0], [dnl
 OFPT_BUNDLE_ADD_MESSAGE (OF1.4) (xid=0x0): ***decode error: OFPBFC_MSG_BAD_XID***
+00000000  05 22 00 20 00 00 00 00-00 00 00 01 00 00 00 01 |.". ............|
+00000010  05 00 00 08 00 00 00 01-00 00 00 00 00 00 00 00 |................|
 ])
 AT_CLEANUP
 
@@ -3590,8 +3644,10 @@ AT_CHECK([ovs-ofctl '-vPATTERN:console:%c|%p|%m' ofp-print "\
 05 00 00 10 00 00 00 00 00 00 00 00 00 00 00 00 \
 "], [0], [dnl
 OFPT_BUNDLE_ADD_MESSAGE (OF1.4) (xid=0x0): ***decode error: OFPBFC_MSG_UNSUP***
+00000000  05 22 00 20 00 00 00 00-00 00 00 01 00 00 00 01 |.". ............|
+00000010  05 00 00 10 00 00 00 00-00 00 00 00 00 00 00 00 |................|
 ], [dnl
-ofp_util|WARN|OFPT_HELLO message not allowed inside OFPT14_BUNDLE_ADD_MESSAGE
+ofp_bundle|WARN|OFPT_HELLO message not allowed inside OFPT14_BUNDLE_ADD_MESSAGE
 ])
 AT_CLEANUP
 

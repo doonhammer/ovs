@@ -25,6 +25,7 @@
 #include "hash.h"
 #include "openvswitch/hmap.h"
 #include "openvswitch/ofp-actions.h"
+#include "openvswitch/uuid.h"
 #include "odp-netlink.h"
 #include "openflow/openflow.h"
 #include "util.h"
@@ -36,16 +37,15 @@ struct simap;
 struct pkt_metadata;
 
 #define SLOW_PATH_REASONS                                               \
-    /* These reasons are mutually exclusive. */                         \
     SPR(SLOW_CFM,        "cfm",        "Consists of CFM packets")       \
     SPR(SLOW_BFD,        "bfd",        "Consists of BFD packets")       \
     SPR(SLOW_LACP,       "lacp",       "Consists of LACP packets")      \
     SPR(SLOW_STP,        "stp",        "Consists of STP packets")       \
-    SPR(SLOW_LLDP,       "lldp",       "Consists of LLDP packets")    \
-    SPR(SLOW_CONTROLLER, "controller",                                  \
-        "Sends \"packet-in\" messages to the OpenFlow controller")      \
+    SPR(SLOW_LLDP,       "lldp",       "Consists of LLDP packets")      \
     SPR(SLOW_ACTION,     "action",                                      \
-        "Uses action(s) not supported by datapath")
+        "Uses action(s) not supported by datapath")                     \
+    SPR(SLOW_MATCH,      "match",                                       \
+        "Datapath can't match specifically enough")
 
 /* Indexes for slow-path reasons.  Client code uses "enum slow_path_reason"
  * values instead of these, these are just a way to construct those. */
@@ -55,7 +55,7 @@ enum {
 #undef SPR
 };
 
-/* Reasons why a subfacet might not be fast-pathable.
+/* Reasons why a flow might not be fast-pathable.
  *
  * Each reason is a separate bit to allow reasons to be combined. */
 enum slow_path_reason {
@@ -158,6 +158,11 @@ struct odputil_keybuf {
 
 enum odp_key_fitness odp_tun_key_from_attr(const struct nlattr *,
                                            struct flow_tnl *);
+enum odp_key_fitness odp_nsh_key_from_attr(const struct nlattr *,
+                                           struct ovs_key_nsh *,
+                                           struct ovs_key_nsh *);
+enum odp_key_fitness odp_nsh_hdr_from_attr(const struct nlattr *,
+                                           struct nsh_hdr *, size_t);
 
 int odp_ufid_from_string(const char *s_, ovs_u128 *ufid);
 void odp_format_ufid(const ovs_u128 *ufid, struct ds *);
@@ -278,6 +283,7 @@ enum slow_path_reason commit_odp_actions(const struct flow *,
                                          struct flow_wildcards *wc,
                                          bool use_masked,
                                          bool pending_encap,
+                                         bool pending_decap,
                                          struct ofpbuf *encap_data);
 
 /* ofproto-dpif interface.
@@ -293,40 +299,56 @@ enum user_action_cookie_type {
     USER_ACTION_COOKIE_SLOW_PATH,    /* Userspace must process this flow. */
     USER_ACTION_COOKIE_FLOW_SAMPLE,  /* Packet for per-flow sampling. */
     USER_ACTION_COOKIE_IPFIX,        /* Packet for per-bridge IPFIX sampling. */
+    USER_ACTION_COOKIE_CONTROLLER,   /* Forward packet to controller. */
 };
 
 /* user_action_cookie is passed as argument to OVS_ACTION_ATTR_USERSPACE. */
-union user_action_cookie {
+struct user_action_cookie {
     uint16_t type;              /* enum user_action_cookie_type. */
+    ofp_port_t ofp_in_port;     /* OpenFlow in port, or OFPP_NONE. */
+    struct uuid ofproto_uuid;   /* UUID of ofproto-dpif. */
 
-    struct {
-        uint16_t type;          /* USER_ACTION_COOKIE_SFLOW. */
-        ovs_be16 vlan_tci;      /* Destination VLAN TCI. */
-        uint32_t output;        /* SFL_FLOW_SAMPLE_TYPE 'output' value. */
-    } sflow;
+    union {
+        struct {
+            /* USER_ACTION_COOKIE_SFLOW. */
+            ovs_be16 vlan_tci;      /* Destination VLAN TCI. */
+            uint32_t output;        /* SFL_FLOW_SAMPLE_TYPE 'output' value. */
+        } sflow;
 
-    struct {
-        uint16_t type;          /* USER_ACTION_COOKIE_SLOW_PATH. */
-        uint16_t unused;
-        uint32_t reason;        /* enum slow_path_reason. */
-    } slow_path;
+        struct {
+            /* USER_ACTION_COOKIE_SLOW_PATH. */
+            uint16_t unused;
+            uint32_t reason;        /* enum slow_path_reason. */
+        } slow_path;
 
-    struct {
-        uint16_t type;          /* USER_ACTION_COOKIE_FLOW_SAMPLE. */
-        uint16_t probability;   /* Sampling probability. */
-        uint32_t collector_set_id; /* ID of IPFIX collector set. */
-        uint32_t obs_domain_id; /* Observation Domain ID. */
-        uint32_t obs_point_id;  /* Observation Point ID. */
-        odp_port_t output_odp_port; /* The output odp port. */
-        enum nx_action_sample_direction direction;
-    } flow_sample;
+        struct {
+            /* USER_ACTION_COOKIE_FLOW_SAMPLE. */
+            uint16_t probability;   /* Sampling probability. */
+            uint32_t collector_set_id; /* ID of IPFIX collector set. */
+            uint32_t obs_domain_id; /* Observation Domain ID. */
+            uint32_t obs_point_id;  /* Observation Point ID. */
+            odp_port_t output_odp_port; /* The output odp port. */
+            enum nx_action_sample_direction direction;
+        } flow_sample;
 
-    struct {
-        uint16_t   type;            /* USER_ACTION_COOKIE_IPFIX. */
-        odp_port_t output_odp_port; /* The output odp port. */
-    } ipfix;
+        struct {
+            /* USER_ACTION_COOKIE_IPFIX. */
+            odp_port_t output_odp_port; /* The output odp port. */
+        } ipfix;
+
+        struct {
+            /* USER_ACTION_COOKIE_CONTROLLER. */
+            bool dont_send;         /* Don't send the packet to controller. */
+            bool continuation;      /* Send packet-in as a continuation. */
+            uint16_t reason;
+            uint32_t recirc_id;
+            ovs_32aligned_be64 rule_cookie;
+            uint16_t controller_id;
+            uint16_t max_len;
+        } controller;
+    };
 };
-BUILD_ASSERT_DECL(sizeof(union user_action_cookie) == 24);
+BUILD_ASSERT_DECL(sizeof(struct user_action_cookie) == 48);
 
 size_t odp_put_userspace_action(uint32_t pid,
                                 const void *userdata, size_t userdata_size,
@@ -344,4 +366,15 @@ void odp_put_push_eth_action(struct ofpbuf *odp_actions,
                              const struct eth_addr *eth_src,
                              const struct eth_addr *eth_dst);
 
+struct attr_len_tbl {
+    int len;
+    const struct attr_len_tbl *next;
+    int next_max;
+};
+
+#define ATTR_LEN_INVALID  -1
+#define ATTR_LEN_VARIABLE -2
+#define ATTR_LEN_NESTED   -3
+
+extern const struct attr_len_tbl ovs_flow_key_attr_lens[OVS_KEY_ATTR_MAX + 1];
 #endif /* odp-util.h */

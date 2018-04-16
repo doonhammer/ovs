@@ -24,12 +24,14 @@ EXTRA_DIST += \
 	rhel/openvswitch.spec.in \
 	rhel/openvswitch-fedora.spec \
 	rhel/openvswitch-fedora.spec.in \
+	rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
 	rhel/usr_share_openvswitch_scripts_sysconfig.template \
 	rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
 	rhel/usr_lib_udev_rules.d_91-vfio.rules \
 	rhel/usr_lib_systemd_system_openvswitch.service \
 	rhel/usr_lib_systemd_system_ovsdb-server.service \
 	rhel/usr_lib_systemd_system_ovs-vswitchd.service.in \
+	rhel/usr_lib_systemd_system_ovs-delete-transient-ports.service \
 	rhel/usr_lib_systemd_system_ovn-controller.service \
 	rhel/usr_lib_systemd_system_ovn-controller-vtep.service \
 	rhel/usr_lib_systemd_system_ovn-northd.service \

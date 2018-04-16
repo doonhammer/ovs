@@ -25,14 +25,13 @@
 #include "mac-learning.h"
 #include "odp-util.h"
 #include "openvswitch/ofp-actions.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vconn.h"
 #include "openvswitch/vlog.h"
 #include "ofproto.h"
 #include "ofproto-provider.h"
-#include "poll-loop.h"
-#include "rconn.h"
+#include "openvswitch/poll-loop.h"
+#include "openvswitch/rconn.h"
 #include "timeval.h"
 
 VLOG_DEFINE_THIS_MODULE(fail_open);
@@ -131,7 +130,6 @@ send_bogus_packet_ins(struct fail_open *fo)
                 .base = {
                     .packet = dp_packet_data(&b),
                     .packet_len = dp_packet_size(&b),
-                    .flow_metadata = MATCH_CATCHALL_INITIALIZER,
                     .flow_metadata.flow.in_port.ofp_port = OFPP_LOCAL,
                     .flow_metadata.wc.masks.in_port.ofp_port
                     = u16_to_ofp(UINT16_MAX),
@@ -145,6 +143,34 @@ send_bogus_packet_ins(struct fail_open *fo)
     connmgr_send_async_msg(fo->connmgr, &am);
 
     dp_packet_uninit(&b);
+}
+
+static void
+fail_open_del_normal_flow(struct fail_open *fo)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    struct match match;
+
+    match_init_catchall(&match);
+    ofproto_delete_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY);
+}
+
+static void
+fail_open_add_normal_flow(struct fail_open *fo)
+{
+    struct ofpbuf ofpacts;
+    struct match match;
+
+    /* Set up a flow that matches every packet and directs them to
+     * OFPP_NORMAL. */
+    ofpbuf_init(&ofpacts, OFPACT_OUTPUT_SIZE);
+    ofpact_put_OUTPUT(&ofpacts)->port = OFPP_NORMAL;
+
+    match_init_catchall(&match);
+    ofproto_add_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY,
+            ofpacts.data, ofpacts.size);
+
+    ofpbuf_uninit(&ofpacts);
 }
 
 /* Enter fail-open mode if we should be in it. */
@@ -207,14 +233,11 @@ static void
 fail_open_recover(struct fail_open *fo)
     OVS_REQUIRES(ofproto_mutex)
 {
-    struct match match;
-
     VLOG_WARN("No longer in fail-open mode");
     fo->last_disconn_secs = 0;
     fo->next_bogus_packet_in = LLONG_MAX;
 
-    match_init_catchall(&match);
-    ofproto_delete_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY);
+    fail_open_del_normal_flow(fo);
 }
 
 void
@@ -232,19 +255,7 @@ fail_open_flushed(struct fail_open *fo)
     int disconn_secs = connmgr_failure_duration(fo->connmgr);
     bool open = disconn_secs >= trigger_duration(fo);
     if (open) {
-        struct ofpbuf ofpacts;
-        struct match match;
-
-        /* Set up a flow that matches every packet and directs them to
-         * OFPP_NORMAL. */
-        ofpbuf_init(&ofpacts, OFPACT_OUTPUT_SIZE);
-        ofpact_put_OUTPUT(&ofpacts)->port = OFPP_NORMAL;
-
-        match_init_catchall(&match);
-        ofproto_add_flow(fo->ofproto, &match, FAIL_OPEN_PRIORITY,
-                         ofpacts.data, ofpacts.size);
-
-        ofpbuf_uninit(&ofpacts);
+        fail_open_add_normal_flow(fo);
     }
     fo->fail_open_active = open;
 }

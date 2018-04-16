@@ -3,7 +3,6 @@ HAVE_OPENSSL='@HAVE_OPENSSL@'
 HAVE_PYTHON='@HAVE_PYTHON@'
 HAVE_PYTHON3='@HAVE_PYTHON3@'
 EGREP='@EGREP@'
-PERL='@PERL@'
 
 if test x"$PYTHON" = x; then
     PYTHON='@PYTHON@'
@@ -108,7 +107,10 @@ FreeBSD|NetBSD)
 esac
 
 # Check whether to run IPv6 tests.
-if perl -e 'use Socket; socket(FH, PF_INET6, SOCK_STREAM, 0) || exit 1;'; then
+if $PYTHON -c '
+import socket
+socket.socket(family=socket.AF_INET6).bind(("::1", 0, 0, 0))
+'; then
     HAVE_IPV6=yes
 else
     HAVE_IPV6=no
@@ -167,6 +169,13 @@ fi
 find_command tcpdump
 
 CURL_OPT="-g -v --max-time 1 --retry 2 --retry-delay 1 --connect-timeout 1"
+
+# Determine whether "diff" supports "normal" diffs.  (busybox diff does not.)
+if echo xyzzy | diff /dev/null - | grep '^>' >/dev/null; then
+    DIFF_SUPPORTS_NORMAL_FORMAT=yes
+else
+    DIFF_SUPPORTS_NORMAL_FORMAT=no
+fi
 
 # Turn off proxies.
 unset http_proxy

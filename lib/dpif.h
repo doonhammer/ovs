@@ -392,7 +392,7 @@
 #include "dp-packet.h"
 #include "netdev.h"
 #include "openflow/openflow.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-meter.h"
 #include "ovs-numa.h"
 #include "packets.h"
 #include "util.h"
@@ -451,7 +451,7 @@ int dpif_get_dp_stats(const struct dpif *, struct dpif_dp_stats *);
 const char *dpif_port_open_type(const char *datapath_type,
                                 const char *port_type);
 int dpif_port_add(struct dpif *, struct netdev *, odp_port_t *port_nop);
-int dpif_port_del(struct dpif *, odp_port_t port_no);
+int dpif_port_del(struct dpif *, odp_port_t port_no, bool local_delete);
 
 /* A port within a datapath.
  *
@@ -787,9 +787,9 @@ const char *dpif_upcall_type_to_string(enum dpif_upcall_type);
 struct dpif_upcall {
     /* All types. */
     struct dp_packet packet;    /* Packet data,'dp_packet' should be the first
-				   member to avoid a hole. This is because
-				   'rte_mbuf' in dp_packet is aligned atleast
-				   on a 64-byte boundary */
+                                   member to avoid a hole. This is because
+                                   'rte_mbuf' in dp_packet is aligned atleast
+                                   on a 64-byte boundary */
     enum dpif_upcall_type type;
     struct nlattr *key;         /* Flow key. */
     size_t key_len;             /* Length of 'key' in bytes. */

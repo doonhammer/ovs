@@ -764,7 +764,7 @@ dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
 NXT_PACKET_IN2 (xid=0x0): total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
 udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=1,tp_dst=2 udp_csum:0
-NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 ct_state=est|rpl|trk,ct_nw_src=10.1.1.1,ct_nw_dst=10.1.1.2,ct_nw_proto=17,ct_tp_src=1,ct_tp_dst=2,in_port=2 (via action) data_len=42 (unbuffered)
+NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 ct_state=est|rpl|trk,ct_nw_src=10.1.1.1,ct_nw_dst=10.1.1.2,ct_nw_proto=17,ct_tp_src=1,ct_tp_dst=2,ip,in_port=2 (via action) data_len=42 (unbuffered)
 udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=2,tp_dst=1 udp_csum:0
 ])
 
@@ -810,7 +810,7 @@ dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
 NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
 udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=1,tp_dst=2 udp_csum:0
-NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=42 ct_state=new|trk,ct_nw_src=10.1.1.2,ct_nw_dst=10.1.1.1,ct_nw_proto=17,ct_tp_src=2,ct_tp_dst=1,in_port=2 (via action) data_len=42 (unbuffered)
+NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=42 ct_state=new|trk,ct_nw_src=10.1.1.2,ct_nw_dst=10.1.1.1,ct_nw_proto=17,ct_tp_src=2,ct_tp_dst=1,ip,in_port=2 (via action) data_len=42 (unbuffered)
 udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=2,tp_dst=1 udp_csum:0
 ])
 
@@ -830,6 +830,70 @@ udp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=1,dport=2),reply=(src=10.1.1.2,dst=10.
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([conntrack - ct flush by 5-tuple])
+CHECK_CONNTRACK()
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24")
+ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
+
+AT_DATA([flows.txt], [dnl
+priority=1,action=drop
+priority=10,arp,action=normal
+priority=100,in_port=1,udp,action=ct(commit),2
+priority=100,in_port=2,udp,action=ct(zone=5,commit),1
+priority=100,in_port=1,icmp,action=ct(commit),2
+priority=100,in_port=2,icmp,action=ct(zone=5,commit),1
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+
+dnl Test UDP from port 1
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 "in_port=1 packet=50540000000a50540000000908004500001c000000000011a4cd0a0101010a0101020001000200080000 actions=resubmit(,0)"])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.1,"], [], [dnl
+udp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=1,dport=2),reply=(src=10.1.1.2,dst=10.1.1.1,sport=2,dport=1)
+])
+
+AT_CHECK([ovs-appctl dpctl/flush-conntrack 'ct_nw_src=10.1.1.2,ct_nw_dst=10.1.1.1,ct_nw_proto=17,ct_tp_src=2,ct_tp_dst=1'])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.1,"], [1], [dnl
+])
+
+dnl Test UDP from port 2
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 "in_port=2 packet=50540000000a50540000000908004500001c000000000011a4cd0a0101020a0101010002000100080000 actions=resubmit(,0)"])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.2,"], [0], [dnl
+udp,orig=(src=10.1.1.2,dst=10.1.1.1,sport=2,dport=1),reply=(src=10.1.1.1,dst=10.1.1.2,sport=1,dport=2),zone=5
+])
+
+AT_CHECK([ovs-appctl dpctl/flush-conntrack zone=5 'ct_nw_src=10.1.1.1,ct_nw_dst=10.1.1.2,ct_nw_proto=17,ct_tp_src=1,ct_tp_dst=2'])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2)], [0], [dnl
+])
+
+dnl Test ICMP traffic
+NS_CHECK_EXEC([at_ns1], [ping -q -c 3 -i 0.3 -w 2 10.1.1.1 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.2,"], [0], [stdout])
+AT_CHECK([cat stdout | FORMAT_CT(10.1.1.1)], [0],[dnl
+icmp,orig=(src=10.1.1.2,dst=10.1.1.1,id=<cleared>,type=8,code=0),reply=(src=10.1.1.1,dst=10.1.1.2,id=<cleared>,type=0,code=0),zone=5
+])
+
+ICMP_ID=`cat stdout | cut -d ',' -f4 | cut -d '=' -f2`
+ICMP_TUPLE=ct_nw_src=10.1.1.2,ct_nw_dst=10.1.1.1,ct_nw_proto=1,icmp_id=$ICMP_ID,icmp_type=8,icmp_code=0
+AT_CHECK([ovs-appctl dpctl/flush-conntrack zone=5 $ICMP_TUPLE])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | grep "orig=.src=10\.1\.1\.2,"], [1], [dnl
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP(["/could not create datapath/d"])
 AT_CLEANUP
 
 AT_SETUP([conntrack - IPv4 ping])
@@ -869,6 +933,91 @@ NS_CHECK_EXEC([at_ns1], [ping -q -c 3 -i 0.3 -w 2 10.1.1.1 | FORMAT_PING], [0], 
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([conntrack - get_nconns and get/set_maxconns])
+CHECK_CONNTRACK()
+CHECK_CT_DPIF_SET_GET_MAXCONNS()
+CHECK_CT_DPIF_GET_NCONNS()
+OVS_TRAFFIC_VSWITCHD_START()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24")
+ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24")
+
+dnl Allow any traffic from ns0->ns1. Only allow nd, return traffic from ns1->ns0.
+AT_DATA([flows.txt], [dnl
+priority=1,action=drop
+priority=10,arp,action=normal
+priority=100,in_port=1,icmp,action=ct(commit),2
+priority=100,in_port=2,icmp,ct_state=-trk,action=ct(table=0)
+priority=100,in_port=2,icmp,ct_state=+trk+est,action=1
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+
+dnl Pings from ns0->ns1 should work fine.
+NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.1.1.2 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2)], [0], [dnl
+icmp,orig=(src=10.1.1.1,dst=10.1.1.2,id=<cleared>,type=8,code=0),reply=(src=10.1.1.2,dst=10.1.1.1,id=<cleared>,type=0,code=0)
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-set-maxconns one-bad-dp], [2], [], [dnl
+ovs-vswitchd: maxconns missing or malformed (Invalid argument)
+ovs-appctl: ovs-vswitchd: server returned an error
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-set-maxconns a], [2], [], [dnl
+ovs-vswitchd: maxconns missing or malformed (Invalid argument)
+ovs-appctl: ovs-vswitchd: server returned an error
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-set-maxconns one-bad-dp 10], [2], [], [dnl
+ovs-vswitchd: opening datapath (Address family not supported by protocol)
+ovs-appctl: ovs-vswitchd: server returned an error
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-maxconns one-bad-dp], [2], [], [dnl
+ovs-vswitchd: opening datapath (Address family not supported by protocol)
+ovs-appctl: ovs-vswitchd: server returned an error
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-nconns one-bad-dp], [2], [], [dnl
+ovs-vswitchd: opening datapath (Address family not supported by protocol)
+ovs-appctl: ovs-vswitchd: server returned an error
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-nconns], [], [dnl
+1
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-maxconns], [], [dnl
+3000000
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-set-maxconns 10], [], [dnl
+setting maxconns successful
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-maxconns], [], [dnl
+10
+])
+
+AT_CHECK([ovs-appctl dpctl/flush-conntrack])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-nconns], [], [dnl
+0
+])
+
+AT_CHECK([ovs-appctl dpctl/ct-get-maxconns], [], [dnl
+10
+])
+
+OVS_TRAFFIC_VSWITCHD_STOP(["/could not create datapath one-bad-dp of unknown type system/d"])
 AT_CLEANUP
 
 AT_SETUP([conntrack - IPv6 ping])
@@ -1584,17 +1733,17 @@ AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 2 resubmit\(,0\) 'f64c473528c9c
 dnl 2. Send and UDP packet to port 5555
 AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 1 resubmit\(,0\) 'c6f94ecb72dbe64c473528c9080045000021317040004011b138ac100001ac100002a28e15b3000d20966369616f0a'])
 
-dnl 3. Send an ICMP port unreach reply for port 5555, related to the first packet
-AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 2 resubmit\(,0\) 'e64c473528c9c6f94ecb72db080045c0003d2e8700004001f355ac100002ac1000010303553f0000000045000021317040004011b138ac100001ac100002a28e15b3000d20966369616f0a'])
+dnl 3. Send an ICMP port unreach reply from a path midpoint for port 5555, related to the first packet
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 2 resubmit\(,0\) 'e64c473528c9c6f94ecb72db080045c0003d2e8700004001f354ac100003ac1000010303553f0000000045000021317040004011b138ac100001ac100002a28e15b3000d20966369616f0a'])
 
 dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
-NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=inv|trk,in_port=2 (via action) data_len=75 (unbuffered)
+NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=inv|trk,ip,in_port=2 (via action) data_len=75 (unbuffered)
 icmp,vlan_tci=0x0000,dl_src=c6:f5:4e:cb:72:db,dl_dst=f6:4c:47:35:28:c9,nw_src=172.16.0.4,nw_dst=172.16.0.3,nw_tos=192,nw_ecn=0,nw_ttl=64,icmp_type=3,icmp_code=3 icmp_csum:da49
-NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=47 ct_state=new|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,in_port=1 (via action) data_len=47 (unbuffered)
+NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=47 ct_state=new|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,ip,in_port=1 (via action) data_len=47 (unbuffered)
 udp,vlan_tci=0x0000,dl_src=e6:4c:47:35:28:c9,dl_dst=c6:f9:4e:cb:72:db,nw_src=172.16.0.1,nw_dst=172.16.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=41614,tp_dst=5555 udp_csum:2096
-NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=rel|rpl|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,in_port=2 (via action) data_len=75 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=c6:f9:4e:cb:72:db,dl_dst=e6:4c:47:35:28:c9,nw_src=172.16.0.2,nw_dst=172.16.0.1,nw_tos=192,nw_ecn=0,nw_ttl=64,icmp_type=3,icmp_code=3 icmp_csum:553f
+NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=rel|rpl|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,ip,in_port=2 (via action) data_len=75 (unbuffered)
+icmp,vlan_tci=0x0000,dl_src=c6:f9:4e:cb:72:db,dl_dst=e6:4c:47:35:28:c9,nw_src=172.16.0.3,nw_dst=172.16.0.1,nw_tos=192,nw_ecn=0,nw_ttl=64,icmp_type=3,icmp_code=3 icmp_csum:553f
 ])
 
 AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.1)], [0], [dnl
@@ -2400,6 +2549,17 @@ table=1,in_port=2,tcp,ct_state=+trk+est,action=1
 table=1,in_port=2,tcp,ct_state=+trk-new+rel,action=1
 ])
 
+dnl flows3 is same as flows1, except no ALG is specified.
+AT_DATA([flows3.txt], [dnl
+table=0,priority=1,action=drop
+table=0,priority=10,arp,action=normal
+table=0,priority=10,icmp,action=normal
+table=0,priority=100,in_port=1,tcp,action=ct(commit),2
+table=0,priority=100,in_port=2,tcp,action=ct(table=1)
+table=1,in_port=2,tcp,ct_state=+trk+est,action=1
+table=1,in_port=2,tcp,ct_state=+trk+rel,action=1
+])
+
 AT_CHECK([ovs-ofctl --bundle replace-flows br0 flows1.txt])
 
 OVS_START_L7([at_ns0], [ftp])
@@ -2440,6 +2600,16 @@ dnl Passive FTP requests from p0->p1 should work fine.
 NS_CHECK_EXEC([at_ns0], [wget ftp://10.1.1.2 -t 3 -T 1 --retry-connrefused -v -o wget0-2.log])
 AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2)], [0], [dnl
 tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=10.1.1.1,sport=<cleared>,dport=<cleared>),protoinfo=(state=<cleared>),helper=ftp
+])
+
+dnl Try the third set of flows, without alg specifier.
+AT_CHECK([ovs-ofctl --bundle replace-flows br0 flows3.txt])
+AT_CHECK([ovs-appctl dpctl/flush-conntrack])
+
+dnl FTP control requests from p0->p1 should work fine, but helper will not be assigned.
+NS_CHECK_EXEC([at_ns0], [wget ftp://10.1.1.2 --no-passive-ftp -t 3 -T 1 --retry-connrefused -v -o wget0-3.log], [4])
+AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2)], [0], [dnl
+tcp,orig=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.2,dst=10.1.1.1,sport=<cleared>,dport=<cleared>),protoinfo=(state=<cleared>)
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
@@ -3992,6 +4162,79 @@ ovs-appctl dpif/dump-flows br0
 ovs-appctl revalidator/purge
 ovs-ofctl -O OpenFlow15 dump-flows br0
 ovs-ofctl -O OpenFlow15 dump-group-stats br0
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([conntrack - floating IP])
+AT_SKIP_IF([test $HAVE_NC = no])
+CHECK_CONNTRACK()
+OVS_TRAFFIC_VSWITCHD_START()
+OVS_CHECK_CT_CLEAR()
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+ADD_VETH(p0, at_ns0, br0, "10.1.1.1/24", "f0:00:00:01:01:01") dnl FIP 10.254.254.1
+ADD_VETH(p1, at_ns1, br0, "10.1.1.2/24", "f0:00:00:01:01:02") dnl FIP 10.254.254.2
+
+dnl Static ARPs
+NS_CHECK_EXEC([at_ns0], [ip neigh add 10.1.1.2 lladdr f0:00:00:01:01:02 dev p0])
+NS_CHECK_EXEC([at_ns1], [ip neigh add 10.1.1.1 lladdr f0:00:00:01:01:01 dev p1])
+
+dnl Static ARP and route entries for the FIP "gateway"
+NS_CHECK_EXEC([at_ns0], [ip neigh add 10.1.1.254 lladdr f0:00:00:01:01:FE dev p0])
+NS_CHECK_EXEC([at_ns1], [ip neigh add 10.1.1.254 lladdr f0:00:00:01:01:FE dev p1])
+NS_CHECK_EXEC([at_ns0], [ip route add default nexthop via 10.1.1.254])
+NS_CHECK_EXEC([at_ns1], [ip route add default nexthop via 10.1.1.254])
+
+NETNS_DAEMONIZE([at_ns0], [nc -l -k 1234 > /dev/null], [nc0.pid])
+
+AT_DATA([flows.txt], [dnl
+table=0,priority=10  ip action=ct(table=1)
+table=0,priority=1   action=drop
+dnl dst FIP
+table=1,priority=20  ip,ct_state=+trk+est,nw_dst=10.254.254.0/24 action=goto_table:10
+table=1,priority=20  ip,ct_state=+trk+new,nw_dst=10.254.254.0/24 action=ct(commit,table=10)
+dnl dst local
+table=1,priority=10  ip,ct_state=+trk+est action=goto_table:20
+table=1,priority=10  ip,ct_state=+trk+new action=ct(commit,table=20)
+table=1,priority=1   ip,ct_state=+trk+inv action=drop
+dnl
+dnl FIP translation (dst FIP, src local) --> (dst local, src FIP)
+table=10             ip,nw_dst=10.254.254.1 action=set_field:10.1.1.1->nw_dst,goto_table:11
+table=10             ip,nw_dst=10.254.254.2 action=set_field:10.1.1.2->nw_dst,goto_table:11
+table=11             ip,nw_src=10.1.1.1 action=set_field:10.254.254.1->nw_src,goto_table:12
+table=11             ip,nw_src=10.1.1.2 action=set_field:10.254.254.2->nw_src,goto_table:12
+dnl clear conntrack and do another lookup since we changed the tuple
+table=12,priority=10 ip action=ct_clear,ct(table=13)
+table=12,priority=1  action=drop
+table=13             ip,ct_state=+trk+est action=goto_table:20
+table=13             ip,ct_state=+trk+new action=ct(commit,table=20)
+table=13             ip,ct_state=+trk+inv action=drop
+dnl
+dnl Output
+table=20             ip,nw_src=10.1.1.1 action=set_field:f0:00:00:01:01:01->eth_src,goto_table:21
+table=20             ip,nw_src=10.1.1.2 action=set_field:f0:00:00:01:01:02->eth_src,goto_table:21
+table=20             ip,nw_src=10.254.254.0/24 action=set_field:f0:00:00:01:01:FE->eth_src,goto_table:21
+table=21             ip,nw_dst=10.1.1.1 action=set_field:f0:00:00:01:01:01->eth_dst,output:ovs-p0
+table=21             ip,nw_dst=10.1.1.2 action=set_field:f0:00:00:01:01:02->eth_dst,output:ovs-p1
+])
+
+AT_CHECK([ovs-ofctl --bundle add-flows br0 flows.txt])
+
+dnl non-FIP case
+NS_CHECK_EXEC([at_ns1], [echo "foobar" |nc $NC_EOF_OPT 10.1.1.1 1234])
+OVS_WAIT_UNTIL([[ovs-appctl dpctl/dump-conntrack | sed -e 's/port=[0-9]*/port=<cleared>/g' -e 's/id=[0-9]*/id=<cleared>/g' |
+grep "tcp,orig=(src=10.1.1.2,dst=10.1.1.1,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.1,dst=10.1.1.2,sport=<cleared>,dport=<cleared>),protoinfo=(state=TIME_WAIT)"
+]])
+
+dnl Check that the full session ends as expected (i.e. TIME_WAIT). Otherwise it
+dnl means the datapath didn't process the ct_clear action. Ending in SYN_RECV
+dnl (OVS maps to ESTABLISHED) means the initial frame was committed, but not a
+dnl second time after the FIP translation (because ct_clear didn't occur).
+NS_CHECK_EXEC([at_ns1], [echo "foobar" |nc $NC_EOF_OPT 10.254.254.1 1234])
+OVS_WAIT_UNTIL([[ovs-appctl dpctl/dump-conntrack | sed -e 's/port=[0-9]*/port=<cleared>/g' -e 's/id=[0-9]*/id=<cleared>/g' |
+grep "tcp,orig=(src=10.254.254.2,dst=10.1.1.1,sport=<cleared>,dport=<cleared>),reply=(src=10.1.1.1,dst=10.254.254.2,sport=<cleared>,dport=<cleared>),protoinfo=(state=TIME_WAIT)"
+]])
 
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP

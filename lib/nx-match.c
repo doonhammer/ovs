@@ -28,7 +28,8 @@
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofp-errors.h"
-#include "openvswitch/ofp-util.h"
+#include "openvswitch/ofp-match.h"
+#include "openvswitch/ofp-port.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
@@ -1022,8 +1023,8 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     const struct flow *flow = &match->flow;
     const size_t start_len = b->size;
     ovs_be16 dl_type = get_dl_type(flow);
+    ovs_be32 spi_mask;
     int match_len;
-    int i;
 
     BUILD_ASSERT_DECL(FLOW_WC_SEQ == 40);
 
@@ -1157,26 +1158,35 @@ nx_put_raw(struct ofpbuf *b, enum ofp_version oxm, const struct match *match,
     /* Network Service Header */
     nxm_put_8m(&ctx, MFF_NSH_FLAGS, oxm, flow->nsh.flags,
             match->wc.masks.nsh.flags);
+    nxm_put_8m(&ctx, MFF_NSH_TTL, oxm, flow->nsh.ttl,
+            match->wc.masks.nsh.ttl);
     nxm_put_8m(&ctx, MFF_NSH_MDTYPE, oxm, flow->nsh.mdtype,
             match->wc.masks.nsh.mdtype);
     nxm_put_8m(&ctx, MFF_NSH_NP, oxm, flow->nsh.np,
             match->wc.masks.nsh.np);
-    nxm_put_32m(&ctx, MFF_NSH_SPI, oxm, flow->nsh.spi,
-                match->wc.masks.nsh.spi);
-    nxm_put_8m(&ctx, MFF_NSH_SI, oxm, flow->nsh.si, match->wc.masks.nsh.si);
+    spi_mask = nsh_path_hdr_to_spi(match->wc.masks.nsh.path_hdr);
+    if (spi_mask == htonl(NSH_SPI_MASK >> NSH_SPI_SHIFT)) {
+        spi_mask = OVS_BE32_MAX;
+    }
+    nxm_put_32m(&ctx, MFF_NSH_SPI, oxm,
+                nsh_path_hdr_to_spi(flow->nsh.path_hdr),
+                spi_mask);
+    nxm_put_8m(&ctx, MFF_NSH_SI, oxm,
+                nsh_path_hdr_to_si(flow->nsh.path_hdr),
+                nsh_path_hdr_to_si(match->wc.masks.nsh.path_hdr));
     for (int i = 0; i < 4; i++) {
-        nxm_put_32m(&ctx, MFF_NSH_C1 + i, oxm, flow->nsh.c[i],
-                    match->wc.masks.nsh.c[i]);
+        nxm_put_32m(&ctx, MFF_NSH_C1 + i, oxm, flow->nsh.context[i],
+                    match->wc.masks.nsh.context[i]);
     }
 
     /* Registers. */
     if (oxm < OFP15_VERSION) {
-        for (i = 0; i < FLOW_N_REGS; i++) {
+        for (int i = 0; i < FLOW_N_REGS; i++) {
             nxm_put_32m(&ctx, MFF_REG0 + i, oxm,
                         htonl(flow->regs[i]), htonl(match->wc.masks.regs[i]));
         }
     } else {
-        for (i = 0; i < FLOW_N_XREGS; i++) {
+        for (int i = 0; i < FLOW_N_XREGS; i++) {
             nxm_put_64m(&ctx, MFF_XREG0 + i, oxm,
                         htonll(flow_get_xreg(flow, i)),
                         htonll(flow_get_xreg(&match->wc.masks, i)));

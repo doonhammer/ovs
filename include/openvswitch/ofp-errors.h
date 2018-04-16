@@ -29,6 +29,8 @@ extern "C" {
 
 struct ds;
 struct ofpbuf;
+struct ofputil_port_map;
+struct ofputil_table_map;
 
 /* Error codes.
  *
@@ -60,7 +62,9 @@ struct ofpbuf;
  *     type, and sometimes a code for each protocol that supports the error:
  *
  *         # The vendor is OF for standard OpenFlow error codes.  Otherwise it
- *           is one of the *_VENDOR_ID codes defined in openflow-common.h.
+ *           is one of the *_VENDOR_ID codes defined in openflow-common.h.  (To
+ *           add support for a new vendor, add a VENDOR_ID code to that
+ *           header.)
  *
  *         # The version can specify a specific OpenFlow version, a version
  *           range delimited by "-", or an open-ended range with "+".
@@ -167,10 +171,10 @@ enum ofperr {
     /* OF1.0-1.1(1,5), OF1.2+(1,10).  Denied because controller is slave. */
     OFPERR_OFPBRC_IS_SLAVE,
 
-    /* NX1.0-1.1(1,514), OF1.2+(1,11).  Invalid port.  [ A non-standard error
-     * (1,514), formerly OFPERR_NXBRC_BAD_IN_PORT is used for OpenFlow 1.0 and
-     * 1.1 as there seems to be no appropriate error code defined the
-     * specifications. ] */
+    /* NX1.0-1.1(1,514), OF1.2+(1,11).  Invalid or missing port.  [ A
+     * non-standard error (1,514), formerly OFPERR_NXBRC_BAD_IN_PORT is used
+     * for OpenFlow 1.0 and 1.1 as there seems to be no appropriate error code
+     * defined the specifications. ] */
     OFPERR_OFPBRC_BAD_PORT,
 
     /* OF1.2+(1,12).  Invalid packet in packet-out. */
@@ -179,8 +183,21 @@ enum ofperr {
     /* OF1.3+(1,13).  Multipart request overflowed the assigned buffer. */
     OFPERR_OFPBRC_MULTIPART_BUFFER_OVERFLOW,
 
+    /* ONF1.3(2640), OF1.4+(1,14).  Timeout during multipart request. */
+    OFPERR_OFPBRC_MULTIPART_REQUEST_TIMEOUT,
+
+    /* ONF1.3(2641), OF1.4+(1,15).  Timeout during multipart reply. */
+    OFPERR_OFPBRC_MULTIPART_REPLY_TIMEOUT,
+
+    /* OF1.5+(1,16).  Switch received a OFPMP_BUNDLE_FEATURES request and
+     * failed to update the scheduling tolerance. */
+    OFPERR_OFPBRC_MULTIPART_BAD_SCHED,
+
     /* OF1.5+(1,17).  Match fields must include only pipeline fields. */
     OFPERR_OFPBRC_PIPELINE_FIELDS_ONLY,
+
+    /* OF1.5+(1,18).  Unspecified error. */
+    OFPERR_OFPBRC_UNKNOWN,
 
     /* NX1.0-1.1(1,256), NX1.2+(2).  Invalid NXM flow match. */
     OFPERR_NXBRC_NXM_INVALID,
@@ -210,7 +227,7 @@ enum ofperr {
 /* ## OFPET_BAD_ACTION ## */
 /* ## ---------------- ## */
 
-    /* OF1.0+(2,0).  Unknown action type. */
+    /* OF1.0+(2,0).  Unknown or unsupported action type. */
     OFPERR_OFPBAC_BAD_TYPE,
 
     /* OF1.0+(2,1).  Length problem in actions. */
@@ -237,7 +254,7 @@ enum ofperr {
     /* OF1.0+(2,8).  Problem validating output queue. */
     OFPERR_OFPBAC_BAD_QUEUE,
 
-    /* OF1.1+(2,9).  Invalid group id in forward action. */
+    /* OF1.1+(2,9).  Invalid group id in output action. */
     OFPERR_OFPBAC_BAD_OUT_GROUP,
 
     /* NX1.0(1,522), OF1.1+(2,10).  Action can't apply for this match or a
@@ -267,6 +284,9 @@ enum ofperr {
      * bit set to 1. */
     OFPERR_OFPBAC_BAD_SET_MASK,
 
+    /* OF1.5+(2,17).  Invalid meter id in meter action. */
+    OFPERR_OFPBAC_BAD_METER,
+
     /* NX1.0-1.1(2,256), NX1.2+(11).  Must-be-zero action argument had nonzero
      * value. */
     OFPERR_NXBAC_MUST_BE_ZERO,
@@ -284,6 +304,12 @@ enum ofperr {
 
     /* NX1.3+(41).  Error in encap or decap property. */
     OFPERR_NXBAC_BAD_ED_PROP,
+
+    /* NX1.0-1.1(1,265), NX1.2+(42).  Action requires connection tracking or a
+     * particular connection-tracking based feature that the datapath in use
+     * does not support.  If a kernel-based datapath is in use, the kernel
+     * module may need to be upgraded. */
+    OFPERR_NXBAC_CT_DATAPATH_SUPPORT,
 
 /* ## --------------------- ## */
 /* ## OFPET_BAD_INSTRUCTION ## */
@@ -352,8 +378,8 @@ enum ofperr {
      * field. */
     OFPERR_OFPBMC_BAD_VALUE,
 
-    /* NX1.0-1.1(1,259), OF1.2+(4,8).  Unsupported mask specified in the match,
-     * field is not dl-address or nw-address. */
+    /* NX1.0-1.1(1,259), OF1.2+(4,8).  Unsupported mask specified in the
+     * match. */
     OFPERR_OFPBMC_BAD_MASK,
 
     /* NX1.0-1.1(1,260), OF1.2+(4,9).  A prerequisite was not met. */
@@ -364,6 +390,12 @@ enum ofperr {
 
     /* OF1.2+(4,11).  Permissions error. */
     OFPERR_OFPBMC_EPERM,
+
+    /* NX1.0-1.1(1,264), NX1.2+(43).  Flow match requires connection tracking
+     * or a particular connection-tracking based feature that the datapath in
+     * use does not support.  If a kernel-based datapath is in use, the kernel
+     * module may need to be upgraded. */
+    OFPERR_NXBMC_CT_DATAPATH_SUPPORT,
 
 /* ## --------------------- ## */
 /* ## OFPET_FLOW_MOD_FAILED ## */
@@ -398,6 +430,15 @@ enum ofperr {
     /* NX1.0(3,258), NX1.1(5,258), OF1.2+(5,7).  Unsupported or unknown
      * flags. */
     OFPERR_OFPFMFC_BAD_FLAGS,
+
+    /* OF1.4+(5,8).  Problem in table synchronization. */
+    OFPERR_OFPFMFC_CANT_SYNC,
+
+    /* ONF1.3(2360), OF1.4+(5,9).  Unsupported priority value. */
+    OFPERR_OFPFMFC_BAD_PRIORITY,
+
+    /* OF1.4+(5,10).  Synchronized flow entry is read only. */
+    OFPERR_OFPFMFC_IS_SYNC,
 
     /* OF1.0(3,5).  Unsupported action list - cannot process in the order
      * specified. */
@@ -553,6 +594,12 @@ enum ofperr {
     /* NX1.0-1.1(1,513), OF1.2+(11,2).  Invalid role. */
     OFPERR_OFPRRFC_BAD_ROLE,
 
+    /* OF1.5+(11,3).  Switch doesn't support changing ID. */
+    OFPERR_OFPRRFC_ID_UNSUP,
+
+    /* OF1.5+(11,4).  Requested ID is in use. */
+    OFPERR_OFPRRFC_ID_IN_USE,
+
 /* ## ---------------------- ## */
 /* ## OFPET_METER_MOD_FAILED ## */
 /* ## ---------------------- ## */
@@ -564,11 +611,12 @@ enum ofperr {
      * replace an existing Meter. */
     OFPERR_OFPMMFC_METER_EXISTS,
 
-    /* OF1.3+(12,2).  Meter not added because Meter specified is invalid. */
+    /* OF1.3+(12,2).  Meter not added because meter specified is invalid, or
+     * invalid meter in meter action. */
     OFPERR_OFPMMFC_INVALID_METER,
 
     /* OF1.3+(12,3).  Meter not modified because a Meter MODIFY attempted
-     * to modify a non-existent Meter. */
+     * to modify a non-existent meter, or bad meter in meter action. */
     OFPERR_OFPMMFC_UNKNOWN_METER,
 
     /* OF1.3+(12,4).  Unsupported or unknown command. */
@@ -609,12 +657,28 @@ enum ofperr {
     /* OF1.3+(13,5).  Permissions error. */
     OFPERR_OFPTFFC_EPERM,
 
+    /* OF1.5+(13,6).  Invalid capability field. */
+    OFPERR_OFPTFFC_BAD_CAPA,
+
+    /* OF1.5+(13,7).  Invalid max_entries field. */
+    OFPERR_OFPTFFC_BAD_MAX_ENT,
+
+    /* OF1.5+(13,8).  Invalid features field. */
+    OFPERR_OFPTFFC_BAD_FEATURES,
+
+    /* OF1.5+(13,9).  Invalid command. */
+    OFPERR_OFPTFFC_BAD_COMMAND,
+
+    /* OF1.5+(13,10).  Can't handle this many flow tables. */
+    OFPERR_OFPTFFC_TOO_MANY,
+
+
 /* ## ------------------ ## */
 /* ## OFPET_BAD_PROPERTY ## */
 /* ## ------------------ ## */
 
-    /* NX1.0-1.1(13,2), NX1.2(25), OF1.3(13,2), OF1.4+(14,0).  Unknown property
-     * type.
+    /* NX1.0-1.1(13,2), NX1.2(25), OF1.3(13,2), OF1.4+(14,0).  Unknown or
+     * unsupported property type.
      *
      * [Known as OFPTFFC_BAD_TYPE in OF1.3.] */
     OFPERR_OFPBPC_BAD_TYPE,
@@ -659,13 +723,13 @@ enum ofperr {
 /* ## OFPET_ASYNC_CONFIG_FAILED  ## */
 /* ## -------------------------- ## */
 
-    /* OF1.4+(15,0).  One mask is invalid. */
+    /* ONF1.3(2370), OF1.4+(15,0).  One mask is invalid. */
     OFPERR_OFPACFC_INVALID,
 
-    /* OF1.4+(15,1).  Requested configuration not supported. */
+    /* ONF1.3(2371), OF1.4+(15,1).  Requested configuration not supported. */
     OFPERR_OFPACFC_UNSUPPORTED,
 
-    /* OF1.4+(15,2).  Permissions error. */
+    /* ONF1.3(2372), OF1.4+(15,2).  Permissions error. */
     OFPERR_OFPACFC_EPERM,
 
 /* ## -------------------- ## */
@@ -723,6 +787,16 @@ enum ofperr {
 
     /* ONF1.3(2315), OF1.4+(17,15).  Bundle is locking the resource. */
     OFPERR_OFPBFC_BUNDLE_IN_PROGRESS,
+
+    /* OF1.5+(17,16).  Scheduled commit was received and scheduling is not
+     * supported. */
+    OFPERR_OFPBFC_SCHED_NOT_SUPPORTED,
+
+    /* OF1.5+(17,17).  Scheduled commit time exceeds upper bound. */
+    OFPERR_OFPBFC_SCHED_FUTURE,
+
+    /* OF1.5+(17,18).  Scheduled commit time exceeds lower bound. */
+    OFPERR_OFPBFC_SCHED_PAST,
 
     /* NX1.4-1.5(22), OF1.6+(17,19).  In an OFPT_BUNDLE_ADD_MESSAGE, the
      * OpenFlow version in the inner and outer messages differ. */
@@ -826,6 +900,10 @@ enum ofperr ofperr_decode_msg(const struct ofp_header *,
 struct ofpbuf *ofperr_encode_reply(enum ofperr, const struct ofp_header *);
 struct ofpbuf *ofperr_encode_hello(enum ofperr, enum ofp_version ofp_version,
                                    const char *);
+void ofperr_msg_format(struct ds *, enum ofperr, const struct ofpbuf *payload,
+                  const struct ofputil_port_map *,
+                  const struct ofputil_table_map *);
+
 int ofperr_get_vendor(enum ofperr, enum ofp_version);
 int ofperr_get_type(enum ofperr, enum ofp_version);
 int ofperr_get_code(enum ofperr, enum ofp_version);

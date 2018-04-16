@@ -75,7 +75,7 @@ BuildRequires: python3-devel
 BuildRequires: desktop-file-utils
 BuildRequires: groff graphviz
 BuildRequires: checkpolicy, selinux-policy-devel
-BuildRequires: python-sphinx
+BuildRequires: %{_py2}-sphinx
 # make check dependencies
 BuildRequires: %{_py2}-twisted%{?rhel:-core} %{_py2}-zope-interface %{_py2}-six
 BuildRequires: procps-ng
@@ -229,7 +229,7 @@ Docker network plugins for OVN.
 	--enable-ssl \
 	--with-pkidir=%{_sharedstatedir}/openvswitch/pki
 
-/usr/bin/perl build-aux/dpdkstrip.pl \
+build-aux/dpdkstrip.py \
 %if %{with dpdk}
 	--dpdk \
 %else
@@ -239,9 +239,7 @@ Docker network plugins for OVN.
 	> rhel/usr_lib_systemd_system_ovs-vswitchd.service
 
 make %{?_smp_mflags}
-make selinux/openvswitch-custom.te
-cd selinux
-make -f %{_datadir}/selinux/devel/Makefile
+make selinux-policy
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -259,7 +257,7 @@ install -p -D -m 0644 rhel/usr_lib_udev_rules.d_91-vfio.rules \
 install -p -D -m 0644 \
         rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
         $RPM_BUILD_ROOT/%{_sysconfdir}/sysconfig/openvswitch
-for service in openvswitch ovsdb-server ovs-vswitchd \
+for service in openvswitch ovsdb-server ovs-vswitchd ovs-delete-transient-ports \
 		ovn-controller ovn-controller-vtep ovn-northd; do
 	install -p -D -m 0644 \
 			rhel/usr_lib_systemd_system_${service}.service \
@@ -313,6 +311,10 @@ install -p -m 0644 rhel/usr_lib_firewalld_services_ovn-host-firewall-service.xml
 install -d -m 0755 $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn
 ln -s %{_datadir}/openvswitch/scripts/ovndb-servers.ocf \
       $RPM_BUILD_ROOT%{_prefix}/lib/ocf/resource.d/ovn/ovndb-servers
+
+install -p -D -m 0755 \
+        rhel/usr_share_openvswitch_scripts_ovs-systemd-reload \
+        $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/ovs-systemd-reload
 
 # remove unpackaged files
 rm -f $RPM_BUILD_ROOT%{_bindir}/ovs-parse-backtrace \
@@ -515,19 +517,21 @@ fi
 %{_includedir}/ovn/*
 
 %files
-%defattr(-,root,root)
-%{_sysconfdir}/bash_completion.d/ovs-appctl-bashcomp.bash
-%{_sysconfdir}/bash_completion.d/ovs-vsctl-bashcomp.bash
+%defattr(-,openvswitch,openvswitch)
 %dir %{_sysconfdir}/openvswitch
 %{_sysconfdir}/openvswitch/default.conf
 %config %ghost %{_sysconfdir}/openvswitch/conf.db
 %ghost %{_sysconfdir}/openvswitch/.conf.db.~lock~
 %config %ghost %{_sysconfdir}/openvswitch/system-id.conf
 %config(noreplace) %{_sysconfdir}/sysconfig/openvswitch
+%defattr(-,root,root)
+%{_sysconfdir}/bash_completion.d/ovs-appctl-bashcomp.bash
+%{_sysconfdir}/bash_completion.d/ovs-vsctl-bashcomp.bash
 %config(noreplace) %{_sysconfdir}/logrotate.d/openvswitch
 %{_unitdir}/openvswitch.service
 %{_unitdir}/ovsdb-server.service
 %{_unitdir}/ovs-vswitchd.service
+%{_unitdir}/ovs-delete-transient-ports.service
 %{_datadir}/openvswitch/scripts/openvswitch.init
 %{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
 %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
@@ -538,6 +542,7 @@ fi
 %{_datadir}/openvswitch/scripts/ovs-save
 %{_datadir}/openvswitch/scripts/ovs-vtep
 %{_datadir}/openvswitch/scripts/ovs-ctl
+%{_datadir}/openvswitch/scripts/ovs-systemd-reload
 %config %{_datadir}/openvswitch/vswitch.ovsschema
 %config %{_datadir}/openvswitch/vtep.ovsschema
 %{_bindir}/ovs-appctl
@@ -557,9 +562,13 @@ fi
 %{_mandir}/man1/ovsdb-client.1*
 %{_mandir}/man1/ovsdb-server.1*
 %{_mandir}/man1/ovsdb-tool.1*
+%{_mandir}/man5/ovsdb-server.5*
 %{_mandir}/man5/ovs-vswitchd.conf.db.5*
+%{_mandir}/man5/ovsdb.5*
 %{_mandir}/man5/vtep.5*
 %{_mandir}/man7/ovs-fields.7*
+%{_mandir}/man7/ovsdb.7*
+%{_mandir}/man7/ovsdb-server.7*
 %{_mandir}/man8/vtep-ctl.8*
 %{_mandir}/man8/ovs-appctl.8*
 %{_mandir}/man8/ovs-bugtool.8*
@@ -577,7 +586,7 @@ fi
 %endif
 %doc COPYING NOTICE README.rst NEWS rhel/README.RHEL.rst
 /var/lib/openvswitch
-/var/log/openvswitch
+%attr(755,-,-) /var/log/openvswitch
 %ghost %attr(755,root,root) %{_rundir}/openvswitch
 
 %files ovn-docker

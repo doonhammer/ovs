@@ -35,7 +35,7 @@
 #include "ovs-atomic.h"
 #include "packets.h"
 #include "pcap-file.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "openvswitch/shash.h"
 #include "sset.h"
 #include "stream.h"
@@ -46,12 +46,14 @@
 
 VLOG_DEFINE_THIS_MODULE(netdev_dummy);
 
+#define C_STATS_SIZE 2
+
 struct reconnect;
 
 struct dummy_packet_stream {
     struct stream *stream;
-    struct dp_packet rxbuf;
     struct ovs_list txq;
+    struct dp_packet rxbuf;
 };
 
 enum dummy_packet_conn_type {
@@ -109,6 +111,7 @@ struct netdev_dummy {
     struct eth_addr hwaddr OVS_GUARDED;
     int mtu OVS_GUARDED;
     struct netdev_stats stats OVS_GUARDED;
+    struct netdev_custom_counter custom_stats[C_STATS_SIZE] OVS_GUARDED;
     enum netdev_flags flags OVS_GUARDED;
     int ifindex OVS_GUARDED;
     int numa_id OVS_GUARDED;
@@ -686,6 +689,13 @@ netdev_dummy_construct(struct netdev *netdev_)
     netdev->requested_n_txq = netdev_->n_txq;
     netdev->numa_id = 0;
 
+    memset(&netdev->custom_stats, 0, sizeof(netdev->custom_stats));
+
+    ovs_strlcpy(netdev->custom_stats[0].name,
+                "rx_custom_packets_1", NETDEV_CUSTOM_STATS_NAME_SIZE);
+    ovs_strlcpy(netdev->custom_stats[1].name,
+                "rx_custom_packets_2", NETDEV_CUSTOM_STATS_NAME_SIZE);
+
     dummy_packet_conn_init(&netdev->conn);
 
     ovs_list_init(&netdev->rxes);
@@ -1021,6 +1031,8 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
     ovs_mutex_lock(&netdev->mutex);
     netdev->stats.rx_packets++;
     netdev->stats.rx_bytes += dp_packet_size(packet);
+    netdev->custom_stats[0].value++;
+    netdev->custom_stats[1].value++;
     ovs_mutex_unlock(&netdev->mutex);
 
     batch->packets[0] = packet;
@@ -1062,16 +1074,16 @@ netdev_dummy_rxq_drain(struct netdev_rxq *rxq_)
 
 static int
 netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
-                  struct dp_packet_batch *batch, bool may_steal,
+                  struct dp_packet_batch *batch,
                   bool concurrent_txq OVS_UNUSED)
 {
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
     int error = 0;
 
     struct dp_packet *packet;
-    DP_PACKET_BATCH_FOR_EACH(packet, batch) {
+    DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
         const void *buffer = dp_packet_data(packet);
-        size_t size = dp_packet_get_send_len(packet);
+        size_t size = dp_packet_size(packet);
 
         if (batch->packets[i]->packet_type != htonl(PT_ETH)) {
             error = EPFNOSUPPORT;
@@ -1132,7 +1144,7 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
         ovs_mutex_unlock(&dev->mutex);
     }
 
-    dp_packet_delete_batch(batch, may_steal);
+    dp_packet_delete_batch(batch, true);
 
     return error;
 }
@@ -1209,6 +1221,31 @@ netdev_dummy_get_stats(const struct netdev *netdev, struct netdev_stats *stats)
     stats->tx_bytes = dev->stats.tx_bytes;
     stats->rx_packets = dev->stats.rx_packets;
     stats->rx_bytes = dev->stats.rx_bytes;
+    ovs_mutex_unlock(&dev->mutex);
+
+    return 0;
+}
+
+static int
+netdev_dummy_get_custom_stats(const struct netdev *netdev,
+                             struct netdev_custom_stats *custom_stats)
+{
+    int i;
+
+    struct netdev_dummy *dev = netdev_dummy_cast(netdev);
+
+    custom_stats->size = 2;
+    custom_stats->counters =
+            (struct netdev_custom_counter *) xcalloc(C_STATS_SIZE,
+                    sizeof(struct netdev_custom_counter));
+
+    ovs_mutex_lock(&dev->mutex);
+    for (i = 0 ; i < C_STATS_SIZE ; i++) {
+        custom_stats->counters[i].value = dev->custom_stats[i].value;
+        ovs_strlcpy(custom_stats->counters[i].name,
+                    dev->custom_stats[i].name,
+                    NETDEV_CUSTOM_STATS_NAME_SIZE);
+    }
     ovs_mutex_unlock(&dev->mutex);
 
     return 0;
@@ -1383,6 +1420,7 @@ netdev_dummy_update_flags(struct netdev *netdev_,
     NULL,                       /* get_carrier_resets */        \
     NULL,                       /* get_miimon */                \
     netdev_dummy_get_stats,                                     \
+    netdev_dummy_get_custom_stats,                              \
                                                                 \
     NULL,                       /* get_features */              \
     NULL,                       /* set_advertisements */        \
@@ -1482,10 +1520,17 @@ eth_from_flow(const char *s, size_t packet_size)
     }
 
     packet = dp_packet_new(0);
-    if (!flow_compose(packet, &flow, packet_size)) {
-        dp_packet_delete(packet);
-        packet = NULL;
-    };
+    if (packet_size) {
+        flow_compose(packet, &flow, NULL, 0);
+        if (dp_packet_size(packet) < packet_size) {
+            packet_expand(packet, &flow, packet_size);
+        } else if (dp_packet_size(packet) > packet_size){
+            dp_packet_delete(packet);
+            packet = NULL;
+        }
+    } else {
+        flow_compose(packet, &flow, NULL, 64);
+    }
 
     ofpbuf_uninit(&odp_key);
     return packet;
@@ -1764,7 +1809,6 @@ netdev_dummy_ip6addr(struct unixctl_conn *conn, int argc OVS_UNUSED,
             unixctl_command_reply_error(conn, error);
             free(error);
         }
-        netdev_close(netdev);
     } else {
         unixctl_command_reply_error(conn, "Unknown Dummy Interface");
     }

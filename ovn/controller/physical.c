@@ -21,7 +21,7 @@
 #include "lflow.h"
 #include "lport.h"
 #include "lib/bundle.h"
-#include "lib/poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "lib/uuid.h"
 #include "ofctrl.h"
 #include "openvswitch/list.h"
@@ -466,6 +466,17 @@ consider_port_binding(struct controller_ctx *ctx,
     } else {
         ofport = u16_to_ofp(simap_get(&localvif_to_ofport,
                                       binding->logical_port));
+        const char *requested_chassis = smap_get(&binding->options,
+                                                 "requested-chassis");
+        if (ofport && requested_chassis && requested_chassis[0] &&
+            strcmp(requested_chassis, chassis->name) &&
+            strcmp(requested_chassis, chassis->hostname)) {
+            /* Even though there is an ofport for this port_binding, it is
+             * requested on a different chassis. So ignore this ofport.
+             */
+            ofport = 0;
+        }
+
         if ((!strcmp(binding->type, "localnet")
             || !strcmp(binding->type, "l2gateway"))
             && ofport && binding->tag) {
@@ -995,6 +1006,21 @@ physical_run(struct controller_ctx *ctx, enum mf_field_id mff_ovn_geneve,
     struct ofpbuf remote_ofpacts;
     ofpbuf_init(&remote_ofpacts, 0);
     SBREC_MULTICAST_GROUP_FOR_EACH (mc, ctx->ovnsb_idl) {
+        /* Table 32, priority 150.
+         * =======================
+         *
+         * Multicast packets that should not be sent to other hypervisors.
+         */
+        struct match match = MATCH_CATCHALL_INITIALIZER;
+        match_set_metadata(&match, htonll(mc->datapath->tunnel_key));
+        match_set_reg(&match, MFF_LOG_OUTPORT - MFF_REG0, mc->tunnel_key);
+        match_set_reg_masked(&match, MFF_LOG_FLAGS - MFF_REG0,
+                             MLF_LOCAL_ONLY, MLF_LOCAL_ONLY);
+        ofpbuf_clear(&ofpacts);
+        put_resubmit(OFTABLE_LOCAL_OUTPUT, &ofpacts);
+        ofctrl_add_flow(flow_table, OFTABLE_REMOTE_OUTPUT, 150, 0, &match,
+                        &ofpacts);
+
         consider_mc_group(mff_ovn_geneve, ct_zones, local_datapaths, chassis,
                           mc, &ofpacts, &remote_ofpacts, flow_table);
     }

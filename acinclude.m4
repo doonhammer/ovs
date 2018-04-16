@@ -32,7 +32,15 @@ AC_DEFUN([OVS_ENABLE_WERROR],
    else
      FLAKE8_WERROR=-
    fi
-   AC_SUBST([FLAKE8_WERROR])])
+   AC_SUBST([FLAKE8_WERROR])
+
+   # If --enable-Werror is specified, fail the build on sparse warnings.
+   if test "X$enable_Werror" = Xyes; then
+     SPARSE_WERROR=-Wsparse-error
+   else
+     SPARSE_WERROR=
+   fi
+   AC_SUBST([SPARSE_WERROR])])
 
 dnl OVS_CHECK_LINUX
 dnl
@@ -143,10 +151,10 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 4; then
-       if test "$version" = 4 && test "$patchlevel" -le 13; then
+       if test "$version" = 4 && test "$patchlevel" -le 15; then
           : # Linux 4.x
        else
-          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.13.x is not supported (please refer to the FAQ for advice)])
+          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 4.15.x is not supported (please refer to the FAQ for advice)])
        fi
     elif test "$version" = 3 && test "$patchlevel" -ge 10; then
        : # Linux 3.x
@@ -170,10 +178,10 @@ dnl Configure Linux tc compat.
 AC_DEFUN([OVS_CHECK_LINUX_TC], [
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/pkt_cls.h>], [
-        int x = TCA_FLOWER_KEY_IP_TTL_MASK;
+        int x = TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST;
     ])],
-    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_IP_TTL_MASK], [1],
-               [Define to 1 if TCA_FLOWER_KEY_IP_TTL_MASK is avaiable.])])
+    [AC_DEFINE([HAVE_TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST], [1],
+               [Define to 1 if TCA_FLOWER_KEY_FLAGS_FRAG_IS_FIRST is avaiable.])])
 
   AC_COMPILE_IFELSE([
     AC_LANG_PROGRAM([#include <linux/tc_act/tc_vlan.h>], [
@@ -188,6 +196,13 @@ AC_DEFUN([OVS_CHECK_LINUX_TC], [
     ])],
     [AC_DEFINE([HAVE_TCA_TUNNEL_KEY_ENC_DST_PORT], [1],
                [Define to 1 if TCA_TUNNEL_KEY_ENC_DST_PORT is avaiable.])])
+
+  AC_COMPILE_IFELSE([
+    AC_LANG_PROGRAM([#include <linux/tc_act/tc_pedit.h>], [
+        int x = TCA_PEDIT_KEY_EX_HDR_TYPE_UDP;
+    ])],
+    [AC_DEFINE([HAVE_TCA_PEDIT_KEY_EX_HDR_TYPE_UDP], [1],
+               [Define to 1 if TCA_PEDIT_KEY_EX_HDR_TYPE_UDP is avaiable.])])
 ])
 
 dnl OVS_CHECK_DPDK
@@ -528,6 +543,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_get_by_index_rcu])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [dev_recursion_level])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [__skb_gso_segment])
+  OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [skb_gso_error_unwind])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [can_checksum_protocol])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [ndo_get_iflink])
   OVS_GREP_IFELSE([$KSRC/include/linux/netdevice.h], [ndo_features_check],
@@ -768,7 +784,7 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_GREP_IFELSE([$KSRC/include/net/netfilter/nf_conntrack_helper.h],
                   [nf_conntrack_helper_put],
                   [OVS_DEFINE(HAVE_NF_CONNTRACK_HELPER_PUT)])
-  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],[SKB_GSO_UDP],
+  OVS_GREP_IFELSE([$KSRC/include/linux/skbuff.h],[[[[:space:]]]SKB_GSO_UDP[[[:space:]]]],
                   [OVS_DEFINE([HAVE_SKB_GSO_UDP])])
   OVS_GREP_IFELSE([$KSRC/include/net/dst.h],[DST_NOCACHE],
                   [OVS_DEFINE([HAVE_DST_NOCACHE])])
@@ -778,6 +794,27 @@ AC_DEFUN([OVS_CHECK_LINUX_COMPAT], [
   OVS_FIND_FIELD_IFELSE([$KSRC/include/linux/netfilter.h], [nf_hook_ops],
                         [list],
                         [OVS_DEFINE([HAVE_LIST_IN_NF_HOOK_OPS])])
+  OVS_GREP_IFELSE([$KSRC/include/uapi/linux/netfilter/nf_conntrack_common.h],
+                  [IP_CT_UNTRACKED])
+  OVS_FIND_PARAM_IFELSE([$KSRC/include/linux/netdevice.h],
+                        [netdev_master_upper_dev_link], [extack],
+                        [OVS_DEFINE([HAVE_UPPER_DEV_LINK_EXTACK])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/compiler_types.h],
+                  [__LINUX_COMPILER_TYPES_H],
+                  [OVS_DEFINE([HAVE_LINUX_COMPILER_TYPES_H])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/timekeeping.h],
+                  [ktime_get_ts64],
+                  [OVS_DEFINE([HAVE_KTIME_GET_TS64])])
+  OVS_GREP_IFELSE([$KSRC/include/net/net_namespace.h],
+                  [EXPORT_SYMBOL_GPL(peernet2id_alloc)],
+                  [OVS_DEFINE([HAVE_PEERNET2ID_ALLOC])])
+  OVS_GREP_IFELSE([$KSRC/include/linux/timekeeping.h],
+                  [ktime_get_ns],
+                  [OVS_DEFINE([HAVE_KTIME_GET_NS])])
+  OVS_GREP_IFELSE([$KSRC/include/net/inet_frag.h],
+                  frag_percpu_counter_batch[],
+                  [OVS_DEFINE([HAVE_FRAG_PERCPU_COUNTER_BATCH])])
+
 
   if cmp -s datapath/linux/kcompat.h.new \
             datapath/linux/kcompat.h >/dev/null 2>&1; then
@@ -990,7 +1027,13 @@ AC_DEFUN([OVS_ENABLE_SPARSE],
    : ${SPARSE=sparse}
    AC_SUBST([SPARSE])
    AC_CONFIG_COMMANDS_PRE(
-     [CC='$(if $(C),env REAL_CC="'"$CC"'" CHECK="$(SPARSE) -I $(top_srcdir)/include/sparse $(SPARSEFLAGS) $(SPARSE_EXTRA_INCLUDES) " cgcc $(CGCCFLAGS),'"$CC"')'])])
+     [CC='$(if $(C:0=),env REAL_CC="'"$CC"'" CHECK="$(SPARSE) $(SPARSE_WERROR) -I $(top_srcdir)/include/sparse $(SPARSEFLAGS) $(SPARSE_EXTRA_INCLUDES) " cgcc $(CGCCFLAGS),'"$CC"')'])
+
+   AC_ARG_ENABLE(
+     [sparse],
+     [AC_HELP_STRING([--enable-sparse], [Run "sparse" by default])],
+     [], [enable_sparse=no])
+   AM_CONDITIONAL([ENABLE_SPARSE_BY_DEFAULT], [test $enable_sparse = yes])])
 
 dnl OVS_CTAGS_IDENTIFIERS
 dnl

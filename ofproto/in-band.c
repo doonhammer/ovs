@@ -15,6 +15,8 @@
  */
 
 #include <config.h>
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -36,7 +38,7 @@
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "timeval.h"
 
 VLOG_DEFINE_THIS_MODULE(in_band);
@@ -426,7 +428,7 @@ in_band_create(struct ofproto *ofproto, const char *local_name,
     struct in_band *in_band;
     struct netdev *local_netdev;
     int error;
-    const char *type = ofproto_port_open_type(ofproto->type, "internal");
+    const char *type = ofproto_port_open_type(ofproto, "internal");
 
     *in_bandp = NULL;
     error = netdev_open(local_name, type, &local_netdev);

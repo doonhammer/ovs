@@ -18,6 +18,8 @@
 #include <config.h>
 #undef NDEBUG
 #include "netflow.h"
+#include <sys/types.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
@@ -31,7 +33,7 @@
 #include "openvswitch/ofpbuf.h"
 #include "ovstest.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "socket-util.h"
 #include "unixctl.h"
 #include "util.h"

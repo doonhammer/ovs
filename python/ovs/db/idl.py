@@ -425,10 +425,11 @@ class Idl(object):
                         (table.name in self.readonly) and
                         (column not in self.readonly[table.name])):
                     columns.append(column)
-            monitor_requests[table.name] = {"columns": columns}
+            monitor_request = {"columns": columns}
             if method == "monitor_cond" and table.condition != [True]:
-                monitor_requests[table.name]["where"] = table.condition
+                monitor_request["where"] = table.condition
                 table.cond_change = False
+            monitor_requests[table.name] = [monitor_request]
 
         msg = ovs.jsonrpc.Message.create_request(
             method, [self._db.name, str(self.uuid), monitor_requests])
@@ -518,10 +519,8 @@ class Idl(object):
             if not row:
                 raise error.Error('Modify non-existing row')
 
-            old_row_diff_json = self.__apply_diff(table, row,
-                                                  row_update['modify'])
-            self.notify(ROW_UPDATE, row,
-                        Row.from_json(self, table, uuid, old_row_diff_json))
+            old_row = self.__apply_diff(table, row, row_update['modify'])
+            self.notify(ROW_UPDATE, row, Row(self, table, uuid, old_row))
             changed = True
         else:
             raise error.Error('<row-update> unknown operation',
@@ -584,7 +583,7 @@ class Idl(object):
                         row_update[column.name] = self.__column_name(column)
 
     def __apply_diff(self, table, row, row_diff):
-        old_row_diff_json = {}
+        old_row = {}
         for column_name, datum_diff_json in six.iteritems(row_diff):
             column = table.columns.get(column_name)
             if not column:
@@ -601,12 +600,12 @@ class Idl(object):
                           % (column_name, table.name, e))
                 continue
 
-            old_row_diff_json[column_name] = row._data[column_name].to_json()
+            old_row[column_name] = row._data[column_name].copy()
             datum = row._data[column_name].diff(datum_diff)
             if datum != row._data[column_name]:
                 row._data[column_name] = datum
 
-        return old_row_diff_json
+        return old_row
 
     def __row_update(self, table, row, row_json):
         changed = False
@@ -776,7 +775,11 @@ class Row(object):
         assert self._changes is not None
         assert self._mutations is not None
 
-        column = self._table.columns[column_name]
+        try:
+            column = self._table.columns[column_name]
+        except KeyError:
+            raise AttributeError("%s instance has no attribute '%s'" %
+                                 (self.__class__.__name__, column_name))
         datum = self._changes.get(column_name)
         inserts = None
         if '_inserts' in self._mutations.keys():

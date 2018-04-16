@@ -26,6 +26,7 @@
 #include "ofproto.h"
 #include "stp.h"
 #include "ovs-lldp.h"
+#include "uuid.h"
 
 struct bfd;
 struct bond;
@@ -162,6 +163,9 @@ struct xlate_in {
     /* ofproto/trace maintains this queue to trace flows that require
      * recirculation. */
     struct ovs_list *recirc_queue;
+
+    /* UUID of first non-patch port packet was received on.*/
+    struct uuid xport_uuid;
 };
 
 void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
@@ -211,6 +215,7 @@ enum xlate_error {
     XLATE_RECIRCULATION_CONFLICT,
     XLATE_TOO_MANY_MPLS_LABELS,
     XLATE_INVALID_TUNNEL_METADATA,
+    XLATE_UNSUPPORTED_PACKET_TYPE,
 };
 
 const char *xlate_strerror(enum xlate_error error);

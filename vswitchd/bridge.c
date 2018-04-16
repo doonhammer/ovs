@@ -45,13 +45,12 @@
 #include "openvswitch/list.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-print.h"
-#include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
 #include "ovs-lldp.h"
 #include "ovs-numa.h"
 #include "packets.h"
-#include "poll-loop.h"
+#include "openvswitch/poll-loop.h"
 #include "seq.h"
 #include "sflow_api.h"
 #include "sha1.h"
@@ -89,7 +88,6 @@ struct iface {
 
     /* These members are valid only within bridge_reconfigure(). */
     const char *type;           /* Usually same as cfg->type. */
-    const char *netdev_type;    /* type that should be used for netdev_open. */
     const struct ovsrec_interface *cfg;
 };
 
@@ -823,7 +821,9 @@ bridge_delete_or_reconfigure_ports(struct bridge *br)
             goto delete;
         }
 
-        if (strcmp(ofproto_port.type, iface->netdev_type)
+        const char *netdev_type = ofproto_port_open_type(br->ofproto,
+                                                         iface->type);
+        if (strcmp(ofproto_port.type, netdev_type)
             || netdev_set_config(iface->netdev, &iface->cfg->options, NULL)) {
             /* The interface is the wrong type or can't be configured.
              * Delete it. */
@@ -1046,7 +1046,7 @@ port_configure(struct port *port)
     }
 
     /* Protected port mode */
-    s.protected = cfg->protected;
+    s.protected = cfg->protected_;
 
     /* Register. */
     ofproto_bundle_register(port->bridge->ofproto, port, &s);
@@ -1779,7 +1779,7 @@ iface_do_create(const struct bridge *br,
         goto error;
     }
 
-    type = ofproto_port_open_type(br->cfg->datapath_type,
+    type = ofproto_port_open_type(br->ofproto,
                                   iface_get_type(iface_cfg, br->cfg));
     error = netdev_open(iface_cfg->name, type, &netdev);
     if (error) {
@@ -1857,8 +1857,6 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
     iface->ofp_port = ofp_port;
     iface->netdev = netdev;
     iface->type = iface_get_type(iface_cfg, br->cfg);
-    iface->netdev_type = ofproto_port_open_type(br->cfg->datapath_type,
-                                                iface->type);
     iface->cfg = iface_cfg;
     hmap_insert(&br->ifaces, &iface->ofp_port_node,
                 hash_ofp_port(ofp_port));
@@ -2347,6 +2345,11 @@ iface_refresh_cfm_stats(struct iface *iface)
 static void
 iface_refresh_stats(struct iface *iface)
 {
+    struct netdev_custom_stats custom_stats;
+    struct netdev_stats stats;
+    int n;
+    uint32_t i, counters_size;
+
 #define IFACE_STATS                             \
     IFACE_STAT(rx_packets,              "rx_packets")               \
     IFACE_STAT(tx_packets,              "tx_packets")               \
@@ -2385,15 +2388,16 @@ iface_refresh_stats(struct iface *iface)
 #define IFACE_STAT(MEMBER, NAME) + 1
     enum { N_IFACE_STATS = IFACE_STATS };
 #undef IFACE_STAT
-    int64_t values[N_IFACE_STATS];
-    const char *keys[N_IFACE_STATS];
-    int n;
-
-    struct netdev_stats stats;
 
     if (iface_is_synthetic(iface)) {
         return;
     }
+
+    netdev_get_custom_stats(iface->netdev, &custom_stats);
+
+    counters_size = custom_stats.size + N_IFACE_STATS;
+    int64_t *values = xmalloc(counters_size * sizeof(int64_t));
+    const char **keys = xmalloc(counters_size * sizeof(char *));
 
     /* Intentionally ignore return value, since errors will set 'stats' to
      * all-1s, and we will deal with that correctly below. */
@@ -2409,10 +2413,24 @@ iface_refresh_stats(struct iface *iface)
     }
     IFACE_STATS;
 #undef IFACE_STAT
-    ovs_assert(n <= N_IFACE_STATS);
+
+    /* Copy custom statistics into keys[] and values[]. */
+    if (custom_stats.size && custom_stats.counters) {
+        for (i = 0 ; i < custom_stats.size ; i++) {
+            values[n] = custom_stats.counters[i].value;
+            keys[n] = custom_stats.counters[i].name;
+            n++;
+        }
+    }
+
+    ovs_assert(n <= counters_size);
 
     ovsrec_interface_set_statistics(iface->cfg, keys, values, n);
 #undef IFACE_STATS
+
+    free(values);
+    free(keys);
+    netdev_free_custom_stats_counters(&custom_stats);
 }
 
 static void
@@ -3426,18 +3444,10 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
             const struct ovsrec_interface *cfg = port_rec->interfaces[i];
             struct iface *iface = iface_lookup(br, cfg->name);
             const char *type = iface_get_type(cfg, br->cfg);
-            const char *dp_type = br->cfg->datapath_type;
-            const char *netdev_type = ofproto_port_open_type(dp_type, type);
 
             if (iface) {
                 iface->cfg = cfg;
                 iface->type = type;
-                iface->netdev_type = netdev_type;
-            } else if (!strcmp(type, "null")) {
-                VLOG_WARN_ONCE("%s: The null interface type is deprecated and"
-                               " may be removed in February 2013. Please email"
-                               " dev@openvswitch.org with concerns.",
-                               cfg->name);
             } else {
                 /* We will add new interfaces later. */
             }
@@ -4059,11 +4069,7 @@ port_del_ifaces(struct port *port)
     /* Collect list of new interfaces. */
     sset_init(&new_ifaces);
     for (i = 0; i < port->cfg->n_interfaces; i++) {
-        const char *name = port->cfg->interfaces[i]->name;
-        const char *type = port->cfg->interfaces[i]->type;
-        if (strcmp(type, "null")) {
-            sset_add(&new_ifaces, name);
-        }
+        sset_add(&new_ifaces, port->cfg->interfaces[i]->name);
     }
 
     /* Get rid of deleted interfaces. */

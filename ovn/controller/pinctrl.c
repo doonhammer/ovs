@@ -31,7 +31,9 @@
 #include "lib/sset.h"
 #include "openvswitch/ofp-actions.h"
 #include "openvswitch/ofp-msgs.h"
+#include "openvswitch/ofp-packet.h"
 #include "openvswitch/ofp-print.h"
+#include "openvswitch/ofp-switch.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/vlog.h"
 
@@ -41,13 +43,14 @@
 #include "ovn/lex.h"
 #include "ovn/lib/acl-log.h"
 #include "ovn/lib/logical-fields.h"
-#include "ovn/lib/ovn-dhcp.h"
+#include "ovn/lib/ovn-l7.h"
 #include "ovn/lib/ovn-util.h"
-#include "poll-loop.h"
-#include "rconn.h"
+#include "openvswitch/poll-loop.h"
+#include "openvswitch/rconn.h"
 #include "socket-util.h"
 #include "timeval.h"
 #include "vswitch-idl.h"
+#include "lflow.h"
 
 VLOG_DEFINE_THIS_MODULE(pinctrl);
 
@@ -81,6 +84,18 @@ static void pinctrl_handle_nd_na(const struct flow *ip_flow,
                                  struct ofpbuf *userdata);
 static void reload_metadata(struct ofpbuf *ofpacts,
                             const struct match *md);
+static void pinctrl_handle_put_nd_ra_opts(
+    const struct flow *ip_flow, struct dp_packet *pkt_in,
+    struct ofputil_packet_in *pin, struct ofpbuf *userdata,
+    struct ofpbuf *continuation);
+static void pinctrl_handle_nd_ns(const struct flow *ip_flow,
+                                 const struct match *md,
+                                 struct ofpbuf *userdata);
+static void init_ipv6_ras(void);
+static void destroy_ipv6_ras(void);
+static void ipv6_ra_wait(void);
+static void send_ipv6_ras(const struct controller_ctx *,
+                          struct hmap *local_datapaths);
 
 COVERAGE_DEFINE(pinctrl_drop_put_mac_binding);
 
@@ -91,6 +106,7 @@ pinctrl_init(void)
     conn_seq_no = 0;
     init_put_mac_bindings();
     init_send_garps();
+    init_ipv6_ras();
 }
 
 static ovs_be32
@@ -103,9 +119,9 @@ queue_msg(struct ofpbuf *msg)
     return xid;
 }
 
-/* Sets up 'swconn', a newly (re)connected connection to a switch. */
+/* Sets up global 'swconn', a newly (re)connected connection to a switch. */
 static void
-pinctrl_setup(struct rconn *swconn)
+pinctrl_setup(void)
 {
     /* Fetch the switch configuration.  The response later will allow us to
      * change the miss_send_len to UINT16_MAX, so that we can enable
@@ -114,17 +130,54 @@ pinctrl_setup(struct rconn *swconn)
                            rconn_get_version(swconn), 0));
 
     /* Set a packet-in format that supports userdata.  */
-    queue_msg(ofputil_make_set_packet_in_format(rconn_get_version(swconn),
-                                                NXPIF_NXT_PACKET_IN2));
+    queue_msg(ofputil_encode_set_packet_in_format(rconn_get_version(swconn),
+                                                  OFPUTIL_PACKET_IN_NXT2));
 }
 
 static void
-set_switch_config(struct rconn *swconn,
+set_switch_config(struct rconn *swconn_,
                   const struct ofputil_switch_config *config)
 {
-    enum ofp_version version = rconn_get_version(swconn);
+    enum ofp_version version = rconn_get_version(swconn_);
     struct ofpbuf *request = ofputil_encode_set_config(config, version);
     queue_msg(request);
+}
+
+static void
+set_actions_and_enqueue_msg(const struct dp_packet *packet,
+                           const struct match *md,
+                           struct ofpbuf *userdata)
+{
+    /* Copy metadata from 'md' into the packet-out via "set_field"
+     * actions, then add actions from 'userdata'.
+     */
+    uint64_t ofpacts_stub[4096 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+    enum ofp_version version = rconn_get_version(swconn);
+
+    reload_metadata(&ofpacts, md);
+    enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
+                                                      version, NULL, NULL,
+                                                      &ofpacts);
+    if (error) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "failed to parse actions from userdata (%s)",
+                     ofperr_to_string(error));
+        ofpbuf_uninit(&ofpacts);
+        return;
+    }
+
+    struct ofputil_packet_out po = {
+        .packet = dp_packet_data(packet),
+        .packet_len = dp_packet_size(packet),
+        .buffer_id = UINT32_MAX,
+        .ofpacts = ofpacts.data,
+        .ofpacts_len = ofpacts.size,
+    };
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    queue_msg(ofputil_encode_packet_out(&po, proto));
+    ofpbuf_uninit(&ofpacts);
 }
 
 static void
@@ -162,40 +215,159 @@ pinctrl_handle_arp(const struct flow *ip_flow, const struct match *md,
                       ip_flow->vlans[0].tci);
     }
 
-    /* Compose actions.
-     *
-     * First, copy metadata from 'md' into the packet-out via "set_field"
-     * actions, then add actions from 'userdata'.
-     */
-    uint64_t ofpacts_stub[4096 / 8];
-    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
-    enum ofp_version version = rconn_get_version(swconn);
+    set_actions_and_enqueue_msg(&packet, md, userdata);
+    dp_packet_uninit(&packet);
+}
 
-    reload_metadata(&ofpacts, md);
-    enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, NULL,
-                                                      &ofpacts);
-    if (error) {
+static void
+pinctrl_handle_icmp(const struct flow *ip_flow, struct dp_packet *pkt_in,
+                    const struct match *md, struct ofpbuf *userdata)
+{
+    /* This action only works for IP packets, and the switch should only send
+     * us IP packets this way, but check here just to be sure. */
+    if (ip_flow->dl_type != htons(ETH_TYPE_IP) &&
+        ip_flow->dl_type != htons(ETH_TYPE_IPV6)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "failed to parse arp actions (%s)",
-                     ofperr_to_string(error));
-        goto exit;
+        VLOG_WARN_RL(&rl,
+                     "ICMP action on non-IP packet (eth_type 0x%"PRIx16")",
+                     ntohs(ip_flow->dl_type));
+        return;
     }
 
-    struct ofputil_packet_out po = {
-        .packet = dp_packet_data(&packet),
-        .packet_len = dp_packet_size(&packet),
-        .buffer_id = UINT32_MAX,
-        .ofpacts = ofpacts.data,
-        .ofpacts_len = ofpacts.size,
-    };
-    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
-    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-    queue_msg(ofputil_encode_packet_out(&po, proto));
+    uint64_t packet_stub[128 / 8];
+    struct dp_packet packet;
 
-exit:
+    dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+    dp_packet_clear(&packet);
+    packet.packet_type = htonl(PT_ETH);
+
+    struct eth_header *eh = dp_packet_put_zeros(&packet, sizeof *eh);
+    eh->eth_dst = ip_flow->dl_dst;
+    eh->eth_src = ip_flow->dl_src;
+
+    if (get_dl_type(ip_flow) == htons(ETH_TYPE_IP)) {
+        struct ip_header *nh = dp_packet_put_zeros(&packet, sizeof *nh);
+
+        eh->eth_type = htons(ETH_TYPE_IP);
+        dp_packet_set_l3(&packet, nh);
+        nh->ip_ihl_ver = IP_IHL_VER(5, 4);
+        nh->ip_tot_len = htons(sizeof(struct ip_header) +
+                               sizeof(struct icmp_header));
+        nh->ip_proto = IPPROTO_ICMP;
+        nh->ip_frag_off = htons(IP_DF);
+        packet_set_ipv4(&packet, ip_flow->nw_src, ip_flow->nw_dst,
+                        ip_flow->nw_tos, 255);
+
+        struct icmp_header *ih = dp_packet_put_zeros(&packet, sizeof *ih);
+        dp_packet_set_l4(&packet, ih);
+        packet_set_icmp(&packet, ICMP4_DST_UNREACH, 1);
+    } else {
+        struct ip6_hdr *nh = dp_packet_put_zeros(&packet, sizeof *nh);
+        struct icmp6_error_header *ih;
+        uint32_t icmpv6_csum;
+
+        eh->eth_type = htons(ETH_TYPE_IPV6);
+        dp_packet_set_l3(&packet, nh);
+        nh->ip6_vfc = 0x60;
+        nh->ip6_nxt = IPPROTO_ICMPV6;
+        nh->ip6_plen = htons(sizeof(*nh) + ICMP6_ERROR_HEADER_LEN);
+        packet_set_ipv6(&packet, &ip_flow->ipv6_src, &ip_flow->ipv6_dst,
+                        ip_flow->nw_tos, ip_flow->ipv6_label, 255);
+
+        ih = dp_packet_put_zeros(&packet, sizeof *ih);
+        dp_packet_set_l4(&packet, ih);
+        ih->icmp6_base.icmp6_type = ICMP6_DST_UNREACH;
+        ih->icmp6_base.icmp6_code = 1;
+        ih->icmp6_base.icmp6_cksum = 0;
+
+        uint8_t *data = dp_packet_put_zeros(&packet, sizeof *nh);
+        memcpy(data, dp_packet_l3(pkt_in), sizeof(*nh));
+
+        icmpv6_csum = packet_csum_pseudoheader6(dp_packet_l3(&packet));
+        ih->icmp6_base.icmp6_cksum = csum_finish(
+            csum_continue(icmpv6_csum, ih,
+                          sizeof(*nh) + ICMP6_ERROR_HEADER_LEN));
+    }
+
+    if (ip_flow->vlans[0].tci & htons(VLAN_CFI)) {
+        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN_8021Q),
+                      ip_flow->vlans[0].tci);
+    }
+
+    set_actions_and_enqueue_msg(&packet, md, userdata);
     dp_packet_uninit(&packet);
-    ofpbuf_uninit(&ofpacts);
+}
+
+static void
+pinctrl_handle_tcp_reset(const struct flow *ip_flow, struct dp_packet *pkt_in,
+                         const struct match *md, struct ofpbuf *userdata)
+{
+    /* This action only works for TCP segments, and the switch should only send
+     * us TCP segments this way, but check here just to be sure. */
+    if (ip_flow->nw_proto != IPPROTO_TCP) {
+        static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        VLOG_WARN_RL(&rl, "TCP_RESET action on non-TCP packet");
+        return;
+    }
+
+    uint64_t packet_stub[128 / 8];
+    struct dp_packet packet;
+
+    dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+    dp_packet_clear(&packet);
+    packet.packet_type = htonl(PT_ETH);
+
+    struct eth_header *eh = dp_packet_put_zeros(&packet, sizeof *eh);
+    eh->eth_dst = ip_flow->dl_dst;
+    eh->eth_src = ip_flow->dl_src;
+
+    if (get_dl_type(ip_flow) == htons(ETH_TYPE_IPV6)) {
+        struct ip6_hdr *nh = dp_packet_put_zeros(&packet, sizeof *nh);
+
+        eh->eth_type = htons(ETH_TYPE_IPV6);
+        dp_packet_set_l3(&packet, nh);
+        nh->ip6_vfc = 0x60;
+        nh->ip6_nxt = IPPROTO_TCP;
+        nh->ip6_plen = htons(TCP_HEADER_LEN);
+        packet_set_ipv6(&packet, &ip_flow->ipv6_src, &ip_flow->ipv6_dst,
+                        ip_flow->nw_tos, ip_flow->ipv6_label, 255);
+    } else {
+        struct ip_header *nh = dp_packet_put_zeros(&packet, sizeof *nh);
+
+        eh->eth_type = htons(ETH_TYPE_IP);
+        dp_packet_set_l3(&packet, nh);
+        nh->ip_ihl_ver = IP_IHL_VER(5, 4);
+        nh->ip_tot_len = htons(IP_HEADER_LEN + TCP_HEADER_LEN);
+        nh->ip_proto = IPPROTO_TCP;
+        nh->ip_frag_off = htons(IP_DF);
+        packet_set_ipv4(&packet, ip_flow->nw_src, ip_flow->nw_dst,
+                        ip_flow->nw_tos, 255);
+    }
+
+    struct tcp_header *th = dp_packet_put_zeros(&packet, sizeof *th);
+    struct tcp_header *tcp_in = dp_packet_l4(pkt_in);
+    dp_packet_set_l4(&packet, th);
+    th->tcp_ctl = TCP_CTL(TCP_RST, 5);
+    if (ip_flow->tcp_flags & htons(TCP_ACK)) {
+        th->tcp_seq = tcp_in->tcp_ack;
+    } else {
+        uint32_t tcp_seq, ack_seq, tcp_len;
+
+        tcp_seq = ntohl(get_16aligned_be32(&tcp_in->tcp_seq));
+        tcp_len = TCP_OFFSET(tcp_in->tcp_ctl) * 4;
+        ack_seq = tcp_seq + dp_packet_l4_size(pkt_in) - tcp_len;
+        put_16aligned_be32(&th->tcp_ack, htonl(ack_seq));
+        put_16aligned_be32(&th->tcp_seq, 0);
+    }
+    packet_set_tcp_port(&packet, ip_flow->tp_dst, ip_flow->tp_src);
+
+    if (ip_flow->vlans[0].tci & htons(VLAN_CFI)) {
+        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN_8021Q),
+                      ip_flow->vlans[0].tci);
+    }
+
+    set_actions_and_enqueue_msg(&packet, md, userdata);
+    dp_packet_uninit(&packet);
 }
 
 static void
@@ -897,11 +1069,29 @@ pinctrl_handle_dns_lookup(
     out_udp->udp_len = htons(new_l4_size);
     out_udp->udp_csum = 0;
 
-    struct ip_header *out_ip = dp_packet_l3(&pkt_out);
-    out_ip->ip_tot_len = htons(pkt_out.l4_ofs - pkt_out.l3_ofs + new_l4_size);
-    /* Checksum needs to be initialized to zero. */
-    out_ip->ip_csum = 0;
-    out_ip->ip_csum = csum(out_ip, sizeof *out_ip);
+    struct eth_header *eth = dp_packet_data(&pkt_out);
+    if (eth->eth_type == htons(ETH_TYPE_IP)) {
+        struct ip_header *out_ip = dp_packet_l3(&pkt_out);
+        out_ip->ip_tot_len = htons(pkt_out.l4_ofs - pkt_out.l3_ofs
+                                   + new_l4_size);
+        /* Checksum needs to be initialized to zero. */
+        out_ip->ip_csum = 0;
+        out_ip->ip_csum = csum(out_ip, sizeof *out_ip);
+    } else {
+        struct ovs_16aligned_ip6_hdr *nh = dp_packet_l3(&pkt_out);
+        nh->ip6_plen = htons(new_l4_size);
+
+        /* IPv6 needs UDP checksum calculated */
+        uint32_t csum;
+        csum = packet_csum_pseudoheader6(nh);
+        csum = csum_continue(csum, out_udp, dp_packet_size(&pkt_out) -
+                             ((const unsigned char *)out_udp -
+                             (const unsigned char *)eth));
+        out_udp->udp_csum = csum_finish(csum);
+        if (!out_udp->udp_csum) {
+            out_udp->udp_csum = htons(0xffff);
+        }
+    }
 
     pin->packet = dp_packet_data(&pkt_out);
     pin->packet_len = dp_packet_size(&pkt_out);
@@ -985,6 +1175,25 @@ process_packet_in(const struct ofp_header *msg, struct controller_ctx *ctx)
         handle_acl_log(&headers, &userdata);
         break;
 
+    case ACTION_OPCODE_PUT_ND_RA_OPTS:
+        pinctrl_handle_put_nd_ra_opts(&headers, &packet, &pin, &userdata,
+                                      &continuation);
+        break;
+
+    case ACTION_OPCODE_ND_NS:
+        pinctrl_handle_nd_ns(&headers, &pin.flow_metadata, &userdata);
+        break;
+
+    case ACTION_OPCODE_ICMP:
+        pinctrl_handle_icmp(&headers, &packet, &pin.flow_metadata,
+                            &userdata);
+        break;
+
+    case ACTION_OPCODE_TCP_RESET:
+        pinctrl_handle_tcp_reset(&headers, &packet, &pin.flow_metadata,
+                                 &userdata);
+        break;
+
     default:
         VLOG_WARN_RL(&rl, "unrecognized packet-in opcode %"PRIu32,
                      ntohl(ah->opcode));
@@ -997,7 +1206,7 @@ pinctrl_recv(const struct ofp_header *oh, enum ofptype type,
              struct controller_ctx *ctx)
 {
     if (type == OFPTYPE_ECHO_REQUEST) {
-        queue_msg(make_echo_reply(oh));
+        queue_msg(ofputil_encode_echo_reply(oh));
     } else if (type == OFPTYPE_GET_CONFIG_REPLY) {
         /* Enable asynchronous messages */
         struct ofputil_switch_config config;
@@ -1011,7 +1220,7 @@ pinctrl_recv(const struct ofp_header *oh, enum ofptype type,
         if (VLOG_IS_DBG_ENABLED()) {
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(30, 300);
 
-            char *s = ofp_to_string(oh, ntohs(oh->length), NULL, 2);
+            char *s = ofp_to_string(oh, ntohs(oh->length), NULL, NULL, 2);
 
             VLOG_DBG_RL(&rl, "OpenFlow packet ignored: %s", s);
             free(s);
@@ -1036,32 +1245,326 @@ pinctrl_run(struct controller_ctx *ctx,
 
     rconn_run(swconn);
 
-    if (rconn_is_connected(swconn)) {
-        if (conn_seq_no != rconn_get_connection_seqno(swconn)) {
-            pinctrl_setup(swconn);
-            conn_seq_no = rconn_get_connection_seqno(swconn);
-            flush_put_mac_bindings();
+    if (!rconn_is_connected(swconn)) {
+        return;
+    }
+
+    if (conn_seq_no != rconn_get_connection_seqno(swconn)) {
+        pinctrl_setup();
+        conn_seq_no = rconn_get_connection_seqno(swconn);
+        flush_put_mac_bindings();
+    }
+
+    /* Process a limited number of messages per call. */
+    for (int i = 0; i < 50; i++) {
+        struct ofpbuf *msg = rconn_recv(swconn);
+        if (!msg) {
+            break;
         }
 
-        /* Process a limited number of messages per call. */
-        for (int i = 0; i < 50; i++) {
-            struct ofpbuf *msg = rconn_recv(swconn);
-            if (!msg) {
-                break;
-            }
+        const struct ofp_header *oh = msg->data;
+        enum ofptype type;
 
-            const struct ofp_header *oh = msg->data;
-            enum ofptype type;
-
-            ofptype_decode(&type, oh);
-            pinctrl_recv(oh, type, ctx);
-            ofpbuf_delete(msg);
-        }
+        ofptype_decode(&type, oh);
+        pinctrl_recv(oh, type, ctx);
+        ofpbuf_delete(msg);
     }
 
     run_put_mac_bindings(ctx);
     send_garp_run(ctx, br_int, chassis, chassis_index, local_datapaths,
                   active_tunnels);
+    send_ipv6_ras(ctx, local_datapaths);
+}
+
+/* Table of ipv6_ra_state structures, keyed on logical port name */
+static struct shash ipv6_ras;
+
+/* Next IPV6 RA in seconds. */
+static long long int send_ipv6_ra_time;
+
+struct ipv6_ra_config {
+    time_t min_interval;
+    time_t max_interval;
+    struct eth_addr eth_src;
+    struct eth_addr eth_dst;
+    struct in6_addr ipv6_src;
+    struct in6_addr ipv6_dst;
+    int32_t mtu;
+    uint8_t mo_flags; /* Managed/Other flags for RAs */
+    uint8_t la_flags; /* On-link/autonomous flags for address prefixes */
+    struct lport_addresses prefixes;
+};
+
+struct ipv6_ra_state {
+    long long int next_announce;
+    struct ipv6_ra_config *config;
+    int64_t port_key;
+    int64_t metadata;
+    bool delete_me;
+};
+
+static void
+init_ipv6_ras(void)
+{
+    shash_init(&ipv6_ras);
+    send_ipv6_ra_time = LLONG_MAX;
+}
+
+static void
+ipv6_ra_config_delete(struct ipv6_ra_config *config)
+{
+    if (config) {
+        destroy_lport_addresses(&config->prefixes);
+        free(config);
+    }
+}
+
+static void
+ipv6_ra_delete(struct ipv6_ra_state *ra)
+{
+    if (ra) {
+        ipv6_ra_config_delete(ra->config);
+        free(ra);
+    }
+}
+
+static void
+destroy_ipv6_ras(void)
+{
+    struct shash_node *iter, *next;
+    SHASH_FOR_EACH_SAFE (iter, next, &ipv6_ras) {
+        struct ipv6_ra_state *ra = iter->data;
+        ipv6_ra_delete(ra);
+        shash_delete(&ipv6_ras, iter);
+    }
+    shash_destroy(&ipv6_ras);
+}
+
+static struct ipv6_ra_config *
+ipv6_ra_update_config(const struct sbrec_port_binding *pb)
+{
+    struct ipv6_ra_config *config;
+
+    config = xzalloc(sizeof *config);
+
+    config->max_interval = smap_get_int(&pb->options, "ipv6_ra_max_interval",
+            ND_RA_MAX_INTERVAL_DEFAULT);
+    config->min_interval = smap_get_int(&pb->options, "ipv6_ra_min_interval",
+            nd_ra_min_interval_default(config->max_interval));
+    config->mtu = smap_get_int(&pb->options, "ipv6_ra_mtu", ND_MTU_DEFAULT);
+    config->la_flags = ND_PREFIX_ON_LINK;
+
+    const char *address_mode = smap_get(&pb->options, "ipv6_ra_address_mode");
+    if (!address_mode) {
+        VLOG_WARN("No address mode specified");
+        goto fail;
+    }
+    if (!strcmp(address_mode, "dhcpv6_stateless")) {
+        config->mo_flags = IPV6_ND_RA_FLAG_OTHER_ADDR_CONFIG;
+    } else if (!strcmp(address_mode, "dhcpv6_stateful")) {
+        config->mo_flags = IPV6_ND_RA_FLAG_MANAGED_ADDR_CONFIG;
+    } else if (!strcmp(address_mode, "slaac")) {
+        config->la_flags |= ND_PREFIX_AUTONOMOUS_ADDRESS;
+    } else {
+        VLOG_WARN("Invalid address mode %s", address_mode);
+        goto fail;
+    }
+
+    const char *prefixes = smap_get(&pb->options, "ipv6_ra_prefixes");
+    if (prefixes && !extract_ip_addresses(prefixes, &config->prefixes)) {
+        VLOG_WARN("Invalid IPv6 prefixes: %s", prefixes);
+        goto fail;
+    }
+
+    /* All nodes multicast addresses */
+    config->eth_dst = (struct eth_addr) ETH_ADDR_C(33,33,00,00,00,01);
+    ipv6_parse("ff02::1", &config->ipv6_dst);
+
+    const char *eth_addr = smap_get(&pb->options, "ipv6_ra_src_eth");
+    if (!eth_addr || !eth_addr_from_string(eth_addr, &config->eth_src)) {
+        VLOG_WARN("Invalid ethernet source %s", eth_addr);
+        goto fail;
+    }
+    const char *ip_addr = smap_get(&pb->options, "ipv6_ra_src_addr");
+    if (!ip_addr || !ipv6_parse(ip_addr, &config->ipv6_src)) {
+        VLOG_WARN("Invalid IP source %s", ip_addr);
+        goto fail;
+    }
+
+    return config;
+
+fail:
+    ipv6_ra_config_delete(config);
+    return NULL;
+}
+
+static long long int
+ipv6_ra_calc_next_announce(time_t min_interval, time_t max_interval)
+{
+    long long int min_interval_ms = min_interval * 1000LL;
+    long long int max_interval_ms = max_interval * 1000LL;
+
+    return time_msec() + min_interval_ms +
+        random_range(max_interval_ms - min_interval_ms);
+}
+
+static void
+put_load(uint64_t value, enum mf_field_id dst, int ofs, int n_bits,
+         struct ofpbuf *ofpacts)
+{
+    struct ofpact_set_field *sf = ofpact_put_set_field(ofpacts,
+                                                       mf_from_id(dst), NULL,
+                                                       NULL);
+    ovs_be64 n_value = htonll(value);
+    bitwise_copy(&n_value, 8, 0, sf->value, sf->field->n_bytes, ofs, n_bits);
+    bitwise_one(ofpact_set_field_mask(sf), sf->field->n_bytes, ofs, n_bits);
+}
+
+static long long int
+ipv6_ra_send(struct ipv6_ra_state *ra)
+{
+    if (time_msec() < ra->next_announce) {
+        return ra->next_announce;
+    }
+
+    uint64_t packet_stub[128 / 8];
+    struct dp_packet packet;
+    dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+    compose_nd_ra(&packet, ra->config->eth_src, ra->config->eth_dst,
+            &ra->config->ipv6_src, &ra->config->ipv6_dst,
+            255, ra->config->mo_flags, 0, 0, 0, ra->config->mtu);
+
+    for (int i = 0; i < ra->config->prefixes.n_ipv6_addrs; i++) {
+        ovs_be128 addr;
+        memcpy(&addr, &ra->config->prefixes.ipv6_addrs[i].addr, sizeof addr);
+        packet_put_ra_prefix_opt(&packet,
+            ra->config->prefixes.ipv6_addrs[i].plen,
+            ra->config->la_flags, htonl(IPV6_ND_RA_OPT_PREFIX_VALID_LIFETIME),
+            htonl(IPV6_ND_RA_OPT_PREFIX_PREFERRED_LIFETIME), addr);
+    }
+
+    uint64_t ofpacts_stub[4096 / 8];
+    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
+
+    /* Set MFF_LOG_DATAPATH and MFF_LOG_INPORT. */
+    uint32_t dp_key = ra->metadata;
+    uint32_t port_key = ra->port_key;
+    put_load(dp_key, MFF_LOG_DATAPATH, 0, 64, &ofpacts);
+    put_load(port_key, MFF_LOG_INPORT, 0, 32, &ofpacts);
+    put_load(1, MFF_LOG_FLAGS, MLF_LOCAL_ONLY_BIT, 1, &ofpacts);
+    struct ofpact_resubmit *resubmit = ofpact_put_RESUBMIT(&ofpacts);
+    resubmit->in_port = OFPP_CONTROLLER;
+    resubmit->table_id = OFTABLE_LOG_INGRESS_PIPELINE;
+
+    struct ofputil_packet_out po = {
+        .packet = dp_packet_data(&packet),
+        .packet_len = dp_packet_size(&packet),
+        .buffer_id = UINT32_MAX,
+        .ofpacts = ofpacts.data,
+        .ofpacts_len = ofpacts.size,
+    };
+
+    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+    enum ofp_version version = rconn_get_version(swconn);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    queue_msg(ofputil_encode_packet_out(&po, proto));
+    dp_packet_uninit(&packet);
+    ofpbuf_uninit(&ofpacts);
+
+    ra->next_announce = ipv6_ra_calc_next_announce(ra->config->min_interval,
+            ra->config->max_interval);
+
+    return ra->next_announce;
+}
+
+static void
+ipv6_ra_wait(void)
+{
+    poll_timer_wait_until(send_ipv6_ra_time);
+}
+
+static void
+send_ipv6_ras(const struct controller_ctx *ctx, struct hmap *local_datapaths)
+{
+    struct shash_node *iter, *iter_next;
+
+    send_ipv6_ra_time = LLONG_MAX;
+
+    SHASH_FOR_EACH (iter, &ipv6_ras) {
+        struct ipv6_ra_state *ra = iter->data;
+        ra->delete_me = true;
+    }
+
+    const struct local_datapath *ld;
+    HMAP_FOR_EACH (ld, hmap_node, local_datapaths) {
+        struct sbrec_port_binding *lpval;
+        const struct sbrec_port_binding *pb;
+        struct ovsdb_idl_index_cursor cursor;
+
+        lpval = sbrec_port_binding_index_init_row(ctx->ovnsb_idl,
+                                                  &sbrec_table_port_binding);
+        sbrec_port_binding_index_set_datapath(lpval, ld->datapath);
+        ovsdb_idl_initialize_cursor(ctx->ovnsb_idl, &sbrec_table_port_binding,
+                                    "lport-by-datapath", &cursor);
+        SBREC_PORT_BINDING_FOR_EACH_EQUAL (pb, &cursor, lpval) {
+            if (!smap_get_bool(&pb->options, "ipv6_ra_send_periodic", false)) {
+                continue;
+            }
+
+            const char *peer_s = smap_get(&pb->options, "peer");
+            if (!peer_s) {
+                continue;
+            }
+
+            const struct sbrec_port_binding *peer
+                = lport_lookup_by_name(ctx->ovnsb_idl, peer_s);
+            if (!peer) {
+                continue;
+            }
+
+            struct ipv6_ra_config *config = ipv6_ra_update_config(pb);
+            if (!config) {
+                continue;
+            }
+
+            struct ipv6_ra_state *ra
+                = shash_find_data(&ipv6_ras, pb->logical_port);
+            if (!ra) {
+                ra = xzalloc(sizeof *ra);
+                ra->config = config;
+                ra->next_announce = ipv6_ra_calc_next_announce(
+                    ra->config->min_interval,
+                    ra->config->max_interval);
+                shash_add(&ipv6_ras, pb->logical_port, ra);
+            } else {
+                ipv6_ra_config_delete(ra->config);
+                ra->config = config;
+            }
+
+            /* Peer is the logical switch port that the logical
+             * router port is connected to. The RA is injected
+             * into that logical switch port.
+             */
+            ra->port_key = peer->tunnel_key;
+            ra->metadata = peer->datapath->tunnel_key;
+            ra->delete_me = false;
+
+            long long int next_ra = ipv6_ra_send(ra);
+            if (send_ipv6_ra_time > next_ra) {
+                send_ipv6_ra_time = next_ra;
+            }
+        }
+        sbrec_port_binding_index_destroy_row(lpval);
+    }
+
+    /* Remove those that are no longer in the SB database */
+    SHASH_FOR_EACH_SAFE (iter, iter_next, &ipv6_ras) {
+        struct ipv6_ra_state *ra = iter->data;
+        if (ra->delete_me) {
+            shash_delete(&ipv6_ras, iter);
+            ipv6_ra_delete(ra);
+        }
+    }
 }
 
 void
@@ -1071,6 +1574,7 @@ pinctrl_wait(struct controller_ctx *ctx)
     rconn_run_wait(swconn);
     rconn_recv_wait(swconn);
     send_garp_wait();
+    ipv6_ra_wait();
 }
 
 void
@@ -1079,6 +1583,7 @@ pinctrl_destroy(void)
     rconn_destroy(swconn);
     destroy_put_mac_bindings();
     destroy_send_garps();
+    destroy_ipv6_ras();
 }
 
 /* Implementation of the "put_arp" and "put_nd" OVN actions.  These
@@ -1264,6 +1769,7 @@ struct garp_data {
     long long int announce_time; /* Next announcement in ms. */
     int backoff;                 /* Backoff for the next announcement. */
     ofp_port_t ofport;           /* ofport used to output this GARP. */
+    int tag;                     /* VLAN tag of this GARP packet, or -1. */
 };
 
 /* Contains GARPs to be sent. */
@@ -1286,7 +1792,7 @@ destroy_send_garps(void)
 }
 
 static void
-add_garp(const char *name, ofp_port_t ofport,
+add_garp(const char *name, ofp_port_t ofport, int tag,
          const struct eth_addr ea, ovs_be32 ip)
 {
     struct garp_data *garp = xmalloc(sizeof *garp);
@@ -1295,6 +1801,7 @@ add_garp(const char *name, ofp_port_t ofport,
     garp->announce_time = time_msec() + 1000;
     garp->backoff = 1;
     garp->ofport = ofport;
+    garp->tag = tag;
     shash_add(&send_garp_data, name, garp);
 }
 
@@ -1313,6 +1820,7 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
     }
     ofp_port_t ofport = u16_to_ofp(simap_get(localnet_ofports,
                                              ld->localnet_port->logical_port));
+    int tag = ld->localnet_port->n_tag ? *ld->localnet_port->tag : -1;
 
     volatile struct garp_data *garp = NULL;
     /* Update GARP for NAT IP if it exists.  Consider port bindings with type
@@ -1331,8 +1839,9 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
                 garp = shash_find_data(&send_garp_data, name);
                 if (garp) {
                     garp->ofport = ofport;
+                    garp->tag = tag;
                 } else {
-                    add_garp(name, ofport, laddrs->ea,
+                    add_garp(name, ofport, tag, laddrs->ea,
                              laddrs->ipv4_addrs[i].addr);
                 }
                 free(name);
@@ -1359,7 +1868,7 @@ send_garp_update(const struct sbrec_port_binding *binding_rec,
             continue;
         }
 
-        add_garp(binding_rec->logical_port, ofport,
+        add_garp(binding_rec->logical_port, ofport, tag,
                  laddrs.ea, laddrs.ipv4_addrs[0].addr);
 
         destroy_lport_addresses(&laddrs);
@@ -1388,6 +1897,11 @@ send_garp(struct garp_data *garp, long long int current_time)
     dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
     compose_arp(&packet, ARP_OP_REQUEST, garp->ea, eth_addr_zero,
                 true, garp->ipv4, garp->ipv4);
+
+    /* Compose a GARP request packet's vlan if exist. */
+    if (garp->tag >= 0) {
+        eth_push_vlan(&packet, htons(ETH_TYPE_VLAN), htons(garp->tag));
+    }
 
     /* Compose actions.  The garp request is output on localnet ofport. */
     uint64_t ofpacts_stub[4096 / 8];
@@ -1803,9 +2317,6 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
         return;
     }
 
-    enum ofp_version version = rconn_get_version(swconn);
-    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
-
     uint64_t packet_stub[128 / 8];
     struct dp_packet packet;
     dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
@@ -1818,33 +2329,117 @@ pinctrl_handle_nd_na(const struct flow *ip_flow, const struct match *md,
                   &ip_flow->nd_target, &ip_flow->ipv6_src,
                   htonl(ND_RSO_SOLICITED | ND_RSO_OVERRIDE));
 
-    /* Reload previous packet metadata. */
-    uint64_t ofpacts_stub[4096 / 8];
-    struct ofpbuf ofpacts = OFPBUF_STUB_INITIALIZER(ofpacts_stub);
-    reload_metadata(&ofpacts, md);
+    /* Reload previous packet metadata and set actions from userdata. */
+    set_actions_and_enqueue_msg(&packet, md, userdata);
+    dp_packet_uninit(&packet);
+}
 
-    enum ofperr error = ofpacts_pull_openflow_actions(userdata, userdata->size,
-                                                      version, NULL, NULL,
-                                                      &ofpacts);
-    if (error) {
+static void
+pinctrl_handle_nd_ns(const struct flow *ip_flow, const struct match *md,
+                     struct ofpbuf *userdata)
+{
+    /* This action only works for IPv6 packets. */
+    if (get_dl_type(ip_flow) != htons(ETH_TYPE_IPV6)) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
-        VLOG_WARN_RL(&rl, "failed to parse actions for 'na' (%s)",
-                     ofperr_to_string(error));
+        VLOG_WARN_RL(&rl, "NS action on non-IPv6 packet");
+        return;
+    }
+
+    uint64_t packet_stub[128 / 8];
+    struct dp_packet packet;
+    dp_packet_use_stub(&packet, packet_stub, sizeof packet_stub);
+
+    compose_nd_ns(&packet, ip_flow->dl_src, &ip_flow->ipv6_src,
+                  &ip_flow->ipv6_dst);
+
+    /* Reload previous packet metadata and set actions from userdata. */
+    set_actions_and_enqueue_msg(&packet, md, userdata);
+    dp_packet_uninit(&packet);
+}
+
+static void
+pinctrl_handle_put_nd_ra_opts(
+    const struct flow *in_flow, struct dp_packet *pkt_in,
+    struct ofputil_packet_in *pin, struct ofpbuf *userdata,
+    struct ofpbuf *continuation)
+{
+    static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+    enum ofp_version version = rconn_get_version(swconn);
+    enum ofputil_protocol proto = ofputil_protocol_from_ofp_version(version);
+    struct dp_packet *pkt_out_ptr = NULL;
+    uint32_t success = 0;
+
+    /* Parse result field. */
+    const struct mf_field *f;
+    enum ofperr ofperr = nx_pull_header(userdata, NULL, &f, NULL);
+    if (ofperr) {
+       VLOG_WARN_RL(&rl, "bad result OXM (%s)", ofperr_to_string(ofperr));
+       goto exit;
+    }
+
+    /* Parse result offset. */
+    ovs_be32 *ofsp = ofpbuf_try_pull(userdata, sizeof *ofsp);
+    if (!ofsp) {
+        VLOG_WARN_RL(&rl, "offset not present in the userdata");
         goto exit;
     }
 
-    struct ofputil_packet_out po = {
-        .packet = dp_packet_data(&packet),
-        .packet_len = dp_packet_size(&packet),
-        .buffer_id = UINT32_MAX,
-        .ofpacts = ofpacts.data,
-        .ofpacts_len = ofpacts.size,
-    };
-    match_set_in_port(&po.flow_metadata, OFPP_CONTROLLER);
+    /* Check that the result is valid and writable. */
+    struct mf_subfield dst = { .field = f, .ofs = ntohl(*ofsp), .n_bits = 1 };
+    ofperr = mf_check_dst(&dst, NULL);
+    if (ofperr) {
+        VLOG_WARN_RL(&rl, "bad result bit (%s)", ofperr_to_string(ofperr));
+        goto exit;
+    }
 
-    queue_msg(ofputil_encode_packet_out(&po, proto));
+    if (!userdata->size) {
+        VLOG_WARN_RL(&rl, "IPv6 ND RA options not present in the userdata");
+        goto exit;
+    }
+
+    if (!is_icmpv6(in_flow, NULL) || in_flow->tp_dst != htons(0) ||
+        in_flow->tp_src != htons(ND_ROUTER_SOLICIT)) {
+        VLOG_WARN_RL(&rl, "put_nd_ra action on invalid or unsupported packet");
+        goto exit;
+    }
+
+    size_t new_packet_size = pkt_in->l4_ofs + userdata->size;
+    struct dp_packet pkt_out;
+    dp_packet_init(&pkt_out, new_packet_size);
+    dp_packet_clear(&pkt_out);
+    dp_packet_prealloc_tailroom(&pkt_out, new_packet_size);
+    pkt_out_ptr = &pkt_out;
+
+    /* Copy L2 and L3 headers from pkt_in. */
+    dp_packet_put(&pkt_out, dp_packet_pull(pkt_in, pkt_in->l4_ofs),
+                  pkt_in->l4_ofs);
+
+    pkt_out.l2_5_ofs = pkt_in->l2_5_ofs;
+    pkt_out.l2_pad_size = pkt_in->l2_pad_size;
+    pkt_out.l3_ofs = pkt_in->l3_ofs;
+    pkt_out.l4_ofs = pkt_in->l4_ofs;
+
+    /* Copy the ICMPv6 Router Advertisement data from 'userdata' field. */
+    dp_packet_put(&pkt_out, userdata->data, userdata->size);
+
+    /* Set the IPv6 payload length and calculate the ICMPv6 checksum. */
+    struct ovs_16aligned_ip6_hdr *nh = dp_packet_l3(&pkt_out);
+    nh->ip6_plen = htons(userdata->size);
+    struct ovs_ra_msg *ra = dp_packet_l4(&pkt_out);
+    ra->icmph.icmp6_cksum = 0;
+    uint32_t icmp_csum = packet_csum_pseudoheader6(nh);
+    ra->icmph.icmp6_cksum = csum_finish(csum_continue(
+        icmp_csum, ra, userdata->size));
+    pin->packet = dp_packet_data(&pkt_out);
+    pin->packet_len = dp_packet_size(&pkt_out);
+    success = 1;
 
 exit:
-    dp_packet_uninit(&packet);
-    ofpbuf_uninit(&ofpacts);
+    if (!ofperr) {
+        union mf_subvalue sv;
+        sv.u8_val = success;
+        mf_write_subfield(&dst, &sv, &pin->flow_metadata);
+    }
+    queue_msg(ofputil_encode_resume(pin, continuation, proto));
+    dp_packet_uninit(pkt_out_ptr);
 }

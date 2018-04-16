@@ -17,6 +17,7 @@
 #ifndef OPENVSWITCH_PACKETS_H
 #define OPENVSWITCH_PACKETS_H 1
 
+#include <sys/types.h>
 #include <netinet/in.h>
 #include "openvswitch/tun-metadata.h"
 
@@ -73,18 +74,13 @@ union flow_vlan_hdr {
     };
 };
 
-#ifdef __cplusplus
-}
-#endif
-
-/* Network Service Header keys */
-struct flow_nsh {
+struct ovs_key_nsh {
     uint8_t flags;
+    uint8_t ttl;
     uint8_t mdtype;
     uint8_t np;
-    uint8_t si;
-    ovs_be32 spi;
-    ovs_be32 c[4];
+    ovs_be32 path_hdr;
+    ovs_be32 context[4];
 };
 
 /* NSH flags */
@@ -92,5 +88,9 @@ struct flow_nsh {
 #define FLOW_NSH_F_CTX (1 << 1)
 
 #define FLOW_NSH_F_MASK ((1 << 2) - 1)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* packets.h */

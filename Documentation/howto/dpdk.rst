@@ -48,6 +48,18 @@ number of dpdk devices found in the log file::
     $ ovs-vsctl add-port br0 dpdk-p1 -- set Interface dpdk-p1 type=dpdk \
         options:dpdk-devargs=0000:01:00.1
 
+Some NICs (i.e. Mellanox ConnectX-3) have only one PCI address associated
+with multiple ports. Using a PCI device like above won't work. Instead, below
+usage is suggested::
+
+    $ ovs-vsctl add-port br0 dpdk-p0 -- set Interface dpdk-p0 type=dpdk \
+        options:dpdk-devargs="class=eth,mac=00:11:22:33:44:55:01"
+    $ ovs-vsctl add-port br0 dpdk-p1 -- set Interface dpdk-p1 type=dpdk \
+        options:dpdk-devargs="class=eth,mac=00:11:22:33:44:55:02"
+
+Note: such syntax won't support hotplug. The hotplug is supposed to work with
+future DPDK release, v18.05.
+
 After the DPDK ports get added to switch, a polling thread continuously polls
 DPDK devices and consumes 100% of the core, as can be checked from ``top`` and
 ``ps`` commands::
@@ -138,6 +150,17 @@ The rxqs will be assigned to cores 3,7,8 in the following order:
 Core 3: Q1 (80%) |
 Core 7: Q4 (70%) | Q5 (10%)
 core 8: Q3 (60%) | Q0 (30%)
+
+To see the current measured usage history of pmd core cycles for each rxq::
+
+    $ ovs-appctl dpif-netdev/pmd-rxq-show
+
+.. note::
+
+  A history of one minute is recorded and shown for each rxq to allow for
+  traffic pattern spikes. An rxq's pmd core cycles usage changes due to traffic
+  pattern or reconfig changes will take one minute before they are fully
+  reflected in the stats.
 
 Rxq to pmds assignment takes place whenever there are configuration changes
 or can be triggered by using::
@@ -311,12 +334,16 @@ performance of non-tunnel traffic, specifically for smaller size packet.
 
 .. _extended-statistics:
 
-Extended Statistics
--------------------
+Extended & Custom Statistics
+----------------------------
 
-DPDK Extended Statistics API allows PMD to expose unique set of statistics.
-The Extended statistics are implemented and supported only for DPDK physical
-and vHost ports.
+DPDK Extended Statistics API allows PMD to expose a unique set of statistics.
+The Extended Statistics are implemented and supported only for DPDK physical
+and vHost ports. Custom statistics are a dynamic set of counters which can
+vary depending on the driver. Those statistics are implemented
+for DPDK physical ports and contain all "dropped", "error" and "management"
+counters from XSTATS. XSTATS counters list can be found here:
+<https://wiki.opnfv.org/display/fastpath/Collectd+Metrics+and+Events>`__.
 
 To enable statistics, you have to enable OpenFlow 1.4 support for OVS.
 Configure bridge br0 to support OpenFlow version 1.4::
@@ -333,8 +360,9 @@ Query the port statistics by explicitly specifying -O OpenFlow14 option::
 
     $ ovs-ofctl -O OpenFlow14 dump-ports br0
 
-Note: vHost ports supports only partial statistics. RX packet size based
-counter are only supported and doesn't include TX packet size counters.
+Note about "Extended Statistics": vHost ports supports only partial
+statistics. RX packet size based counter are only supported and
+doesn't include TX packet size counters.
 
 .. _port-hotplug:
 
@@ -480,7 +508,7 @@ Add a userspace bridge and two ``dpdk`` (PHY) ports::
     $ ovs-vsctl add-port br0 phy1 -- set Interface phy1 type=dpdk
           options:dpdk-devargs=0000:01:00.1 ofport_request=2
 
-Add test flows to forward packets betwen DPDK port 0 and port 1::
+Add test flows to forward packets between DPDK port 0 and port 1::
 
     # Clear current flows
     $ ovs-ofctl del-flows br0
@@ -515,7 +543,7 @@ ports::
     $ ovs-vsctl add-port br0 dpdkvhostuser1 \
         -- set Interface dpdkvhostuser1 type=dpdkvhostuser ofport_request=4
 
-Add test flows to forward packets betwen DPDK devices and VM ports::
+Add test flows to forward packets between DPDK devices and VM ports::
 
     # Clear current flows
     $ ovs-ofctl del-flows br0
@@ -531,16 +559,18 @@ Add test flows to forward packets betwen DPDK devices and VM ports::
 
 Create a VM using the following configuration:
 
-+----------------------+--------+-----------------+
-| configuration        | values | comments        |
-+----------------------+--------+-----------------+
-| qemu version         | 2.2.0  | n/a             |
-| qemu thread affinity | core 5 | taskset 0x20    |
-| memory               | 4GB    | n/a             |
-| cores                | 2      | n/a             |
-| Qcow2 image          | CentOS7| n/a             |
-| mrg_rxbuf            | off    | n/a             |
-+----------------------+--------+-----------------+
+.. table::
+
+    ===================== ======== ============
+        Configuration      Values    Comments
+    ===================== ======== ============
+    QEMU version          2.2.0    n/a
+    QEMU thread affinity  core 5   taskset 0x20
+    Memory                4GB      n/a
+    Cores                 2        n/a
+    Qcow2 image           CentOS7  n/a
+    mrg_rxbuf             off      n/a
+    ===================== ======== ============
 
 You can do this directly with QEMU via the ``qemu-system-x86_64`` application::
 

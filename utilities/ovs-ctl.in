@@ -30,17 +30,9 @@ done
 ## start ##
 ## ----- ##
 
-# Keep track of removed vports so we can reload them if needed
-removed_vports=""
-
 insert_mods () {
     # Try loading openvswitch again.
     action "Inserting openvswitch module" modprobe openvswitch
-
-    for vport in $removed_vports; do
-        # Don't treat failures to load vports as fatal error
-        action "Inserting $vport module" modprobe $vport || true
-    done
 }
 
 insert_mod_if_required () {
@@ -71,10 +63,6 @@ insert_mod_if_required () {
     insert_mods
 }
 
-ovs_vsctl () {
-    ovs-vsctl --no-wait "$@"
-}
-
 set_hostname () {
     # 'hostname -f' needs network connectivity to work.  So we should
     # call this only after ovs-vswitchd is running.
@@ -84,7 +72,7 @@ set_hostname () {
 set_system_ids () {
     set ovs_vsctl set Open_vSwitch .
 
-    OVS_VERSION=`ovs-vswitchd --version | sed 's/.*) //;1q'`
+    OVS_VERSION=`ovs-vswitchd --version | awk '/Open vSwitch/{print $NF}'`
     set "$@" ovs-version="$OVS_VERSION"
 
     case $SYSTEM_ID in
@@ -278,178 +266,6 @@ stop_forwarding () {
     fi
 }
 
-## ----------------- ##
-## force-reload-kmod ##
-## ----------------- ##
-
-internal_interfaces () {
-    # Outputs a list of internal interfaces:
-    #
-    #   - There is an internal interface for every bridge, whether it
-    #     has an Interface record or not and whether the Interface
-    #     record's 'type' is properly set or not.
-    #
-    #   - There is an internal interface for each Interface record whose
-    #     'type' is 'internal'.
-    #
-    # But ignore interfaces that don't really exist.
-    for d in `(ovs_vsctl --bare \
-                -- --columns=name find Interface type=internal \
-		    -- list-br) | sort -u`
-    do
-        if test -e "/sys/class/net/$d"; then
-	        printf "%s " "$d"
-	    fi
-    done
-}
-
-ovs_save () {
-    bridges=`ovs_vsctl -- --real list-br`
-    if [ -n "${bridges}" ] && \
-        "$datadir/scripts/ovs-save" "$1" ${bridges} > "$2"; then
-        chmod +x "$2"
-        return 0
-    fi
-    [ -z "${bridges}" ] && return 0
-}
-
-save_flows_if_required () {
-    if test X"$DELETE_BRIDGES" != Xyes; then
-        action "Saving flows" ovs_save save-flows "${script_flows}"
-    fi
-}
-
-save_interfaces () {
-    "$datadir/scripts/ovs-save" save-interfaces ${ifaces} \
-        > "${script_interfaces}"
-}
-
-flow_restore_wait () {
-    if test X"$OVS_VSWITCHD" = Xyes; then
-        ovs_vsctl set open_vswitch . other_config:flow-restore-wait="true"
-    fi
-}
-
-flow_restore_complete () {
-    if test X"$OVS_VSWITCHD" = Xyes; then
-        ovs_vsctl --if-exists remove open_vswitch . other_config \
-                  flow-restore-wait="true"
-    fi
-}
-
-restore_flows () {
-    [ -x "${script_flows}" ] && \
-        action "Restoring saved flows" "${script_flows}"
-}
-
-restore_interfaces () {
-    [ ! -x "${script_interfaces}" ] && return 0
-    action "Restoring interface configuration" "${script_interfaces}"
-    rc=$?
-    if test $rc = 0; then
-        level=debug
-    else
-        level=err
-    fi
-    log="logger -p daemon.$level -t ovs-save"
-    $log "interface restore script exited with status $rc:"
-    $log -f "$script_interfaces"
-}
-
-init_restore_scripts () {
-    script_interfaces=`mktemp`
-    script_flows=`mktemp`
-    trap 'rm -f "${script_interfaces}" "${script_flows}"' 0
-}
-
-force_reload_kmod () {
-
-    if test X"$OVS_VSWITCHD" != Xyes; then
-        log_failure_msg "Reloading of kmod without ovs-vswitchd is an error"
-        exit 1
-    fi
-
-    ifaces=`internal_interfaces`
-    action "Detected internal interfaces: $ifaces" true
-
-    init_restore_scripts
-    save_flows_if_required
-
-    # Restart the database first, since a large database may take a
-    # while to load, and we want to minimize forwarding disruption.
-    stop_ovsdb
-    start_ovsdb || return 1
-
-    stop_forwarding
-
-    if action "Saving interface configuration" save_interfaces; then
-        :
-    else
-        log_warning_msg "Failed to save configuration, not replacing kernel module"
-        start_forwarding
-        add_managers
-        exit 1
-    fi
-    chmod +x "$script_interfaces"
-
-    for dp in `ovs-dpctl dump-dps`; do
-        action "Removing datapath: $dp" ovs-dpctl del-dp "$dp"
-    done
-
-    for vport in `awk '/^vport_/ { print $1 }' /proc/modules`; do
-        action "Removing $vport module" rmmod $vport
-        if ! grep -q $vport /proc/modules; then
-            removed_vports="$removed_vports $vport"
-        fi
-    done
-
-    if test -e /sys/module/openvswitch; then
-        action "Removing openvswitch module" rmmod openvswitch
-    fi
-
-    # Start vswitchd by asking it to wait till flow restore is finished.
-    flow_restore_wait
-    start_forwarding || return 1
-
-    # Restore saved flows and inform vswitchd that we are done.
-    restore_flows
-    flow_restore_complete
-    add_managers
-
-    restore_interfaces
-
-    "$datadir/scripts/ovs-check-dead-ifs"
-}
-
-## ------- ##
-## restart ##
-## ------- ##
-
-restart () {
-    if daemon_is_running ovsdb-server && daemon_is_running ovs-vswitchd; then
-        init_restore_scripts
-        if test X"$OVS_VSWITCHD" = Xyes; then
-            save_flows_if_required
-        fi
-    fi
-
-    # Restart the database first, since a large database may take a
-    # while to load, and we want to minimize forwarding disruption.
-    stop_ovsdb
-    start_ovsdb || return 1
-
-    stop_forwarding
-
-    # Start vswitchd by asking it to wait till flow restore is finished.
-    flow_restore_wait
-    start_forwarding || return 1
-
-    # Restore saved flows and inform vswitchd that we are done.
-    restore_flows
-    flow_restore_complete
-    add_managers
-}
-
 ## --------------- ##
 ## enable-protocol ##
 ## --------------- ##
@@ -558,16 +374,17 @@ This program is intended to be invoked internally by Open vSwitch startup
 scripts.  System administrators should not normally invoke it directly.
 
 Commands:
-  start              start Open vSwitch daemons
-  stop               stop Open vSwitch daemons
-  restart            stop and start Open vSwitch daemons
-  status             check whether Open vSwitch daemons are running
-  version            print versions of Open vSwitch daemons
-  load-kmod          insert modules if not already present
-  force-reload-kmod  save OVS network device state, stop OVS, unload kernel
-                     module, reload kernel module, start OVS, restore state
-  enable-protocol    enable protocol specified in options with iptables
-  help               display this help message
+  start                   start Open vSwitch daemons
+  stop                    stop Open vSwitch daemons
+  restart                 stop and start Open vSwitch daemons
+  status                  check whether Open vSwitch daemons are running
+  version                 print versions of Open vSwitch daemons
+  load-kmod               insert modules if not already present
+  force-reload-kmod       save OVS network device state, stop OVS, unload kernel
+                          module, reload kernel module, start OVS, restore state
+  enable-protocol         enable protocol specified in options with iptables
+  delete-transient-ports  delete transient (other_config:transient=true) ports
+  help                    display this help message
 
 One of the following options is required for "start", "restart" and "force-reload-kmod":
   --system-id=UUID   set specific ID to uniquely identify this system
@@ -729,6 +546,9 @@ case $command in
         ;;
     enable-protocol)
         enable_protocol
+        ;;
+    delete-transient-ports)
+        del_transient_ports
         ;;
     help)
         usage

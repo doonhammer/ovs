@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -46,6 +46,7 @@ int check_connection_completion(int fd);
 void drain_fd(int fd, size_t n_packets);
 ovs_be32 guess_netmask(ovs_be32 ip);
 
+char *inet_parse_token(char **);
 bool inet_parse_active(const char *target, uint16_t default_port,
                        struct sockaddr_storage *ssp);
 int inet_open_active(int style, const char *target, uint16_t default_port,
@@ -137,7 +138,7 @@ static inline int make_unix_socket(int style, bool nonblock,
 static inline int rpl_setsockopt(int sock, int level, int optname,
                                  const void *optval, socklen_t optlen)
 {
-    return (setsockopt)(sock, level, optname, optval, optlen);
+    return (setsockopt)(sock, level, optname, (const char *)optval, optlen);
 }
 
 #define getsockopt(sock, level, optname, optval, optlen) \
@@ -145,7 +146,7 @@ static inline int rpl_setsockopt(int sock, int level, int optname,
 static inline int rpl_getsockopt(int sock, int level, int optname,
                                  void *optval, socklen_t *optlen)
 {
-    return (getsockopt)(sock, level, optname, optval, optlen);
+    return (getsockopt)(sock, level, optname, (char *)optval, optlen);
 }
 #endif
 

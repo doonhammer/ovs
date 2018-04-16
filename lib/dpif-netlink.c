@@ -33,31 +33,33 @@
 #include <unistd.h>
 
 #include "bitmap.h"
-#include "dpif-provider.h"
 #include "dpif-netlink-rtnl.h"
-#include "openvswitch/dynamic-string.h"
-#include "flow.h"
+#include "dpif-provider.h"
 #include "fat-rwlock.h"
-#include "netdev.h"
-#include "netdev-provider.h"
+#include "flow.h"
 #include "netdev-linux.h"
+#include "netdev-provider.h"
 #include "netdev-vport.h"
+#include "netdev.h"
 #include "netlink-conntrack.h"
 #include "netlink-notifier.h"
 #include "netlink-socket.h"
 #include "netlink.h"
+#include "netnsid.h"
 #include "odp-util.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/flow.h"
+#include "openvswitch/match.h"
 #include "openvswitch/ofpbuf.h"
-#include "packets.h"
-#include "poll-loop.h"
-#include "random.h"
+#include "openvswitch/poll-loop.h"
 #include "openvswitch/shash.h"
+#include "openvswitch/vlog.h"
+#include "packets.h"
+#include "random.h"
 #include "sset.h"
 #include "timeval.h"
 #include "unaligned.h"
 #include "util.h"
-#include "openvswitch/vlog.h"
-#include "openvswitch/flow.h"
 
 VLOG_DEFINE_THIS_MODULE(dpif_netlink);
 #ifdef _WIN32
@@ -1287,7 +1289,7 @@ dpif_netlink_port_poll(const struct dpif *dpif_, char **devnamep)
         int error;
 
         ofpbuf_use_stub(&buf, buf_stub, sizeof buf_stub);
-        error = nl_sock_recv(dpif->port_notifier, &buf, false);
+        error = nl_sock_recv(dpif->port_notifier, &buf, NULL, false);
         if (!error) {
             struct dpif_netlink_vport vport;
 
@@ -2079,7 +2081,6 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
     odp_port_t in_port;
     const struct nlattr *nla;
     size_t left;
-    int outputs = 0;
     struct netdev *dev;
     struct offload_info info;
     ovs_be16 dst_port = 0;
@@ -2106,19 +2107,12 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
         return EOPNOTSUPP;
     }
 
-    /* Get tunnel dst port and count outputs */
+    /* Get tunnel dst port */
     NL_ATTR_FOR_EACH(nla, left, put->actions, put->actions_len) {
         if (nl_attr_type(nla) == OVS_ACTION_ATTR_OUTPUT) {
             const struct netdev_tunnel_config *tnl_cfg;
             struct netdev *outdev;
             odp_port_t out_port;
-
-            outputs++;
-            if (outputs > 1) {
-                VLOG_DBG_RL(&rl, "offloading multiple ports isn't supported");
-                err = EOPNOTSUPP;
-                goto out;
-            }
 
             out_port = nl_attr_get_odp_port(nla);
             outdev = netdev_ports_get(out_port, dpif_class);
@@ -2621,7 +2615,7 @@ dpif_netlink_recv_windows(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(sock_pool[i].nl_sock, buf, false);
+            error = nl_sock_recv(sock_pool[i].nl_sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -2696,7 +2690,7 @@ dpif_netlink_recv__(struct dpif_netlink *dpif, uint32_t handler_id,
                 return EAGAIN;
             }
 
-            error = nl_sock_recv(ch->sock, buf, false);
+            error = nl_sock_recv(ch->sock, buf, NULL, false);
             if (error == ENOBUFS) {
                 /* ENOBUFS typically means that we've received so many
                  * packets that the buffer overflowed.  Try again
@@ -2892,9 +2886,12 @@ dpif_netlink_ct_dump_done(struct dpif *dpif OVS_UNUSED,
 }
 
 static int
-dpif_netlink_ct_flush(struct dpif *dpif OVS_UNUSED, const uint16_t *zone)
+dpif_netlink_ct_flush(struct dpif *dpif OVS_UNUSED, const uint16_t *zone,
+                      const struct ct_dpif_tuple *tuple)
 {
-    if (zone) {
+    if (tuple) {
+        return nl_ct_flush_tuple(tuple, zone ? *zone : 0);
+    } else if (zone) {
         return nl_ct_flush_zone(*zone);
     } else {
         return nl_ct_flush();
@@ -2986,6 +2983,9 @@ const struct dpif_class dpif_netlink_class = {
     dpif_netlink_ct_dump_next,
     dpif_netlink_ct_dump_done,
     dpif_netlink_ct_flush,
+    NULL,                       /* ct_set_maxconns */
+    NULL,                       /* ct_get_maxconns */
+    NULL,                       /* ct_get_nconns */
     dpif_netlink_meter_get_features,
     dpif_netlink_meter_set,
     dpif_netlink_meter_get,
@@ -3002,7 +3002,7 @@ dpif_netlink_init(void)
         error = nl_lookup_genl_family(OVS_DATAPATH_FAMILY,
                                       &ovs_datapath_family);
         if (error) {
-            VLOG_WARN("Generic Netlink family '%s' does not exist. "
+            VLOG_INFO("Generic Netlink family '%s' does not exist. "
                       "The Open vSwitch kernel module is probably not loaded.",
                       OVS_DATAPATH_FAMILY);
         }
@@ -3065,6 +3065,7 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
         [OVS_VPORT_ATTR_STATS] = { NL_POLICY_FOR(struct ovs_vport_stats),
                                    .optional = true },
         [OVS_VPORT_ATTR_OPTIONS] = { .type = NL_A_NESTED, .optional = true },
+        [OVS_VPORT_ATTR_NETNSID] = { .type = NL_A_U32, .optional = true },
     };
 
     dpif_netlink_vport_init(vport);
@@ -3099,6 +3100,12 @@ dpif_netlink_vport_from_ofpbuf(struct dpif_netlink_vport *vport,
     if (a[OVS_VPORT_ATTR_OPTIONS]) {
         vport->options = nl_attr_get(a[OVS_VPORT_ATTR_OPTIONS]);
         vport->options_len = nl_attr_get_size(a[OVS_VPORT_ATTR_OPTIONS]);
+    }
+    if (a[OVS_VPORT_ATTR_NETNSID]) {
+        netnsid_set(&vport->netnsid,
+                    nl_attr_get_u32(a[OVS_VPORT_ATTR_NETNSID]));
+    } else {
+        netnsid_set_local(&vport->netnsid);
     }
     return 0;
 }
