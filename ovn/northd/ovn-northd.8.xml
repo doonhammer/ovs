@@ -289,11 +289,6 @@
         connections.
       </li>
       <li>
-        <code>sfc</code> ACLs work as entry points for service function
-        chaining, also known as SFC classifiers. Further attributes such
-        as what chain to be used are provided via the options column.
-      </li>
-      <li>
         Other ACLs translate to <code>drop;</code> for new or untracked
         connections and <code>ct_commit(ct_label=1/1);</code> for known
         connections.  Setting <code>ct_label</code> marks a connection
@@ -362,23 +357,39 @@
 
     <ul>
       <li>
-        For every port-chain a set of rules will be added to direct traffic 
-        through the chain of port pairs defined in the port-chain. A port chain
-        is composed of an ordered set of port-pair-groups that contain one or 
-        more port-pairs. Traffic is directed into the port-chain by setting 
-        ACL rules with the action 'sfc'.
-   
-        Service insertion is implemented by adding 4 new flow rules into the 
-        OVN northbound database for each VNF inserted. The service 
-        insertion rules have a higher priority than the standard forwarding 
-        rules. This means that they override the existing forwarding rules. 
-        There are four new rules added for each insertion. Two ingress and two 
-        egress, The first ingress rule sends all traffic destined for the 
-        application into the VNF ingress port and the second rule takes all 
-        traffic destined to the application from the VNF egress port to the 
-        application, the priorities are such that the second rule is always 
-        checked first. In the egress direction the rules are similar if the 
-        traffic is from the application it is sent to the VNF egress port 
+        For every port-chain a set of rules will be added to direct traffic
+        through the port pairs defined in the port-chain. A port chain
+        is composed of an ordered set of port-pair-groups that contain one or
+        more port-pairs. Traffic is directed into the port-chain by creating a
+        port-chain-classifier. A port-chain can be reused by different
+        port-chain-classifier instances allowing a port chain to be
+        applied to multiple traffic paths and application traffic types.
+
+        The port-chain-classifier defines a starting port or ending port and
+        a direction for the traffic, either uni-directional or bi-directional.
+        In addition a match expression can be defined to further filter
+        traffic.
+
+        Service insertion is implemented by adding 4 new flow rules into the
+        OVN northbound database for each VNF inserted. The service
+        insertion rules have a higher priority than the standard forwarding
+        rules. This means that they override the existing forwarding rules.
+        There are four new rules added for each insertion. Two ingress and two
+        egress, The first ingress rule sends all traffic destined for the
+        application into the VNF ingress port and the second rule takes all
+        traffic destined to the application from the VNF egress port to the
+        application, the priorities are such that the second rule is always
+        checked first.
+
+        The final rule in a chain re-circulates the packet back to the original
+        entry point to the chain. This ensures that the packet exiting to a
+        physcal network always enters the physical network from the appropriate
+        location preserving correct operation of upstream L2 learning. Within
+        the chain the OVN Geneve tunnel between hypervisors ensures that the
+        inner packet is not seen by physical networking devices.
+
+        In the egress direction the rules are similar if the
+        traffic is from the application it is sent to the VNF egress port
         and if if is from the application and is from the VNF ingress port it
         is delivered to the destination. Additional VNFs can be chained
         together to create a sequence of operations.
@@ -782,8 +793,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 14 DNS Lookup</h3>
-
+    <h3>Ingress Table 13 DNS Lookup</h3>
     <p>
       This table looks up and resolves the DNS names to the corresponding
       configured IP address(es).
@@ -846,8 +856,7 @@ output;
       </li>
     </ul>
 
-    <h3>Ingress Table 16 Destination Lookup</h3>
-
+    <h3>Ingress Table 15 Destination Lookup</h3>
     <p>
       This table implements switching behavior.  It contains these logical
       flows:

@@ -382,12 +382,18 @@
     </li>
 
     <li>
-      <dfn>Logical port chains</dfn> are logical references to virtual network 
+      <dfn>Logical port chains</dfn> are logical references to virtual network
       functions (VNF). Adding a logical port chain requires adding one or more
-      VNFs to a port chain and tehn steering traffic into the port chain by
-      setting an ACL classification with the action 'sfc'. 
+      VNFs to a port chain and then steering traffic into the port chain by
+      adding the port chain to a port chain classifier. The port chain
+      classifier defines the flows to direct into the port chain, the
+      direction to apply to the flows on ( to or from a logical port) and
+      whether to apply the port chain in one direction (uni-directional) or
+      both directions, (bi-directional). This separation enables the port
+      chain to be defined once and used in several classifiers.
       See <code>Life Cycle of an inserted VNF</code>, below, for details.
     </li>
+
     <li>
       <p>
         <dfn>Logical ports</dfn> represent the points of connectivity in and
@@ -590,78 +596,77 @@
  <h2>Life Cycle of an Inserted Virtual Network Function (VNF)</h2>
 
  <p>
-   OVN provides an abstraction to enable the insertion of an arbitrary virtual 
-   network function (VNF) into the path of traffic to and from an application. 
-   A VNF is different from an application VM in that it acts on traffic between 
-   applications, and in most cases does not terminate a flow. Proxy functions 
-   are an exception as they terminate the flow from the source and create a 
-   new flow to the destination. Examples of VNFs are security functions
-   (e.g. intrusion detection systems), load balancers, and traffic enhancement 
-   services.
+   OVN provides an abstraction to enable the insertion of an arbitrary virtual
+   network function (VNF) into the path of traffic to or from an application.
+   A VNF is different from an application VM in that it acts on traffic
+   between applications, and in most cases does not terminate a flow. Proxy
+   functions are an exception as they terminate the flow from the source and
+   create a new flow to the destination. Examples of VNFs are security
+   functions (e.g. intrusion detection systems, firewalls), load balancers,
+   and traffic enhancement services.
  </p>
  <p>
-   The requirements on the VNF to be inserted are minimal: it must act as a 
-   <code>bump in the wire (BITW)</code> and can have one or two virtual network
-   ports for traffic. If it has two network ports, it accepts traffic on one 
-   port and transmits it out the other; if it has only one port, that port 
-   serves both purposes. The requirement for the VNF to act as a BITW removes 
-   the need for the VNF to participate in L2/L3 networking, which provides
-   improved agility and reduces the coupling between OVN and the VNF.
+   The requirements on the VNF to be inserted here are minimal: it must act as
+   a <code>bump in the wire (BITW)</code> and can have one or two virtual
+   network ports for traffic. If it has two network ports, it accepts traffic
+   on one port and transmits it out the other; if it has only one port, that
+   port serves both purposes. The requirement for the VNF to act as a BITW
+   removes the need for the VNF to participate in L2/L3 networking, which
+   provides improved agility and reduces the coupling between OVN and the VNF.
+   Not havign the VNF participate in L2/L3 networking makes scale up/down
+   scenarios easier to implement.
  </p>
  <p>
-   The steps in this example refer to the details of the OVN Northbound 
-   database schema. There is a new table in the OVN Northbound database to 
-   support service insertion called <code>Services</code>, which contains the 
-   required information for each new service inserted. The same service can be 
-   used for multiple applications, as there is typically an N:1 relationship 
-   between applications and VNFs. A single VNF may be part of several service 
-   insertions, but each one is logically separate.
+   The steps in this example refer to the details of the OVN Northbound
+   database schema. There is a new table in the OVN Northbound database to
+   direct traffic to VNFs called <code>port_chain_classifiers</code>, which
+   contains the required information to direct traffic. This table takes as
+   input a port chain which defines an ordered list of VNFs, and
+   classification parameters to define the traffic to send to the port chain.
+   The same port chain can be used for multiple applications, as there is
+   typically an N:1 relationship between applications and VNFs. A single
+   VNF may be part of several service insertions, but each one is logically
+   separate.
  </p>
  <p>
-   The following steps are an overview to inserting a new VNF into the traffic 
+   The following steps are an overview to inserting a new VNF into the traffic
    path. The sections below go into each step in more detail.
  </p>
  <ol>
    <li>
-     The CMS administrator creates a new
-     virtual network function <code>(VNF)</code>, using the CMS user interface 
-     or API. The CMS administrator creates the logical ports (ingress and 
-     egress) for the VNF. If the CMS is OpenStack, this creates a reusable 
-     port-pair defining the interface to the VNF. The administrator also 
-     typically creates a separate management port for the VNF, but that is not 
-     relevant to the service insertion workflow. A single VNF can participate 
-     with several applications, either as a security VM, protecting multiple
-     applications, or as a load balancer VM, distributing load across multiple 
-     applications.
+     The CMS administrator creates a new virtual network function
+     <code>(VNF)</code>, using the CMS user interface or API. The CMS
+     administrator creates the logical ports (ingress and egress) for the VNF.
+     If the CMS is OpenStack, this creates a reusable port-pair defining the
+     interface to the VNF. The administrator also typically creates a separate
+     management port for the VNF, but that is not relevant to the service
+     insertion workflow. A single VNF can participate with several
+     applications, either as a security VM, protecting multiple applications,
+     or as a load balancer VM, distributing load across multiple applications.
    </li>
 
    <li>
-     The CMS administrator creates a new application with a VIF using the CMS
-     user interface or API (or chooses a running application) and adds it to an
-     OVN logical switch.
-   </li>
-
-   <li>
-     The CMS administrator attaches the VNF port pair to the VIF by defining
-     the logical port in the service function classifier.  To do so, the CMS
-     inserts a row into the <code>ACL</code> table in the OVN northbound
-     database.  The ACL's <code>type</code> is <code>sfc</code> and its
-     <code>options:sfc-port-chain</code> designates the VNF.  This directs
-     traffic to the VIF to go through the VNF, applying the rules discussed
-     earlier.
+    <p>
+     The CMS administrator attaches the VNF port pair to a port pair group.
+     The purpose o fthe port pair group is to enable load balancing across
+     multiple port-pairs. The port-pair-group is added to an ordered list of
+     port-pair-groups contained in a port chain. At this point the port-chain
+     is just a logicial set of operations with no flows attached.
+     </p>
+     <p> Creating a port-chain-classifier, defining the flow classification
+     parameters and the chain to operate on flows inserts a row into the
+     <code>port-chain-classifier</code> table in the OVN northbound
+     database. This directs traffic to go through the VNF chain, applying
+     the operations defined in the port chain.
+   </p>
    </li>
 
    <li>
      <p>
        Eventually, the application VM shuts down and the CMS removes the
-       <code>sfc</code> ACL.  (However, it is harmless if it remains, since no
-       traffic will be sent to the application.)
-     </p>
-
-     <p>
-       Alternatively, eventually the CMS administrator detaches the VIF from
-       the VNF.  The CMS deletes the <code>sfc</code> ACL row, and traffic
-       reverts to the pre-VNF traffic paths.
+       <code>port-chain-classifier</code>.  (However, it is harmless if it
+       remains, since no traffic will be sent to the port-chain unless it is
+       included in a port-chain-classifier.
      </p>
   </li>
 </ol>
